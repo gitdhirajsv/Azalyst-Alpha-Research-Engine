@@ -284,8 +284,6 @@ MIT — free to use, modify, and build on with attribution.
 
 <div align="center">
 
-**Built by [gitdhirajsv](https://github.com/gitdhirajsv) &nbsp;|&nbsp; Azalyst &nbsp;|&nbsp; Azalyst Quant Research**
-
-*"Research first. Signal second. Trade third."*
+**Built by Azalyst ([gitdhirajsv](https://github.com/gitdhirajsv)) &nbsp;|&nbsp; Azalyst Quant Research**
 
 </div>
