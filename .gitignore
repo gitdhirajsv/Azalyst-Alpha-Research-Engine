@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Data and output directories
+data/
+feature_cache/
+models/
+pipeline_checkpoints/
+azalyst_output/
+
+# Logs
+*.log
+*.sqlite
+*.sqlite3
+
+# Environment
+.env
+.venv
+venv/
+ENV/
+env/
+.idea/
+.vscode/
