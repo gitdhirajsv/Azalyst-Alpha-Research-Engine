@@ -145,5 +145,5 @@ This is a **personal research and learning project.** Azalyst is not a financial
 
 ---
 <div align="center">
-Built by [Azalyst](https://github.com/gitdhirajsv)
+Built by Azalyst (https://github.com/gitdhirajsv)
 </div>
