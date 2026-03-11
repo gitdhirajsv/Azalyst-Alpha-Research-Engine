@@ -8,20 +8,16 @@
 ![Python](https://img.shields.io/badge/Python-3.10+-blue?style=flat-square&logo=python)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
 ![Status](https://img.shields.io/badge/Status-Active%20Research-brightgreen?style=flat-square)
-![ML](https://img.shields.io/badge/ML-LightGBM%20%2B%20CUDA-blueviolet?style=flat-square)
 ![Factors](https://img.shields.io/badge/Factors-35%20Crypto--Native-red?style=flat-square)
+![ML](https://img.shields.io/badge/ML-LightGBM%20%2B%20CUDA%20v4.0-blueviolet?style=flat-square)
 
 ---
 
 ## What Is This?
 
-The Azalyst Alpha Research Engine is a high-performance quantitative pipeline designed to bridge the gap between retail trading and institutional-grade research. It processes 3+ years of Binance 5-minute OHLCV data across 400+ coins through a rigorous, multi-stage alpha discovery process.
+Most people look at crypto charts and guess. This project tries to do something different — **study the market like a professional quant researcher would.**
 
-### Core Pillars
-- **Extended Factor Research (v2)**: A library of 35 cross-sectional quantitative signals tested for predictive power using Spearman rank IC/ICIR methodology.
-- **Institutional Validation**: Advanced statistical verification including Style Neutralization (partialing out BTC beta, size, and liquidity) and Fama-MacBeth regressions with Newey-West corrected t-statistics.
-- **High-Performance ML**: Optimized LightGBM models with NVIDIA CUDA support, featuring purged time-series cross-validation to prevent lookahead bias.
-- **Regime-Adaptive Fusion**: A dynamic signal combiner that adjusts alpha weights based on detected market regimes (Bull, Bear, High Volatility, Quiet).
+The Azalyst Alpha Research Engine takes 3 years of Binance 5-minute OHLCV data across 400+ coins and runs it through a full institutional-style research pipeline. It identifies persistent signals, validates them against systematic risk, and fuses them into a single ranked alpha signal per coin.
 
 ---
 
@@ -61,41 +57,65 @@ The Azalyst Alpha Research Engine is a high-performance quantitative pipeline de
 
 ---
 
-## Key Modules — Updated Logic
+## How It Works — Step by Step
 
-### 1. Extended Factor Library (v35)
-Now computes 35 crypto-native factors across 7 categories. All signals are cross-sectionally ranked (0→1) at each timestamp.
-*   **Momentum**: 1H to 30D (with skip-1D academic standard), Overnight gaps, Close-to-Open.
-*   **Reversal**: 1H, 4H, and 1D (liquidity provider alpha).
-*   **Volatility**: Downside semi-deviation (Adrian et al. 2019), Vol-of-Vol.
-*   **Microstructure**: Cambridge CTREND (t-stat 4.22), VWAP Deviation, Idiosyncratic Momentum.
+### Step 1 — Data Loading
+**Technically:** Parallel parquet ingestion via `ProcessPoolExecutor`. Builds wide close/volume panels using Polars lazy scanning and DuckDB for cross-sectional SQL queries. Handles timestamp normalization and optional resampling (5min → 1H).
 
-### 2. Statistical Validation (Citadel/Two Sigma-grade)
-Raw IC is noise. This module provides the proof:
-*   **Style Neutralization**: Removes BTC-beta, Market-Cap (Size), and Liquidity tiers to find TRUE idiosyncratic alpha.
-*   **Fama-MacBeth**: Industry-standard cross-sectional regressions.
-*   **Newey-West Correction**: HAC t-stats to account for autocorrelation in multi-day horizons.
-*   **Benjamini-Hochberg**: Multiple-testing correction to control False Discovery Rate.
+**In Plain English:** It reads all your Binance price files and organizes them into a giant table — every coin, every 5-minute candle, for 3 years. It does this in parallel for speed.
 
-### 3. Machine Learning v4.0
-*   **LightGBM + CUDA**: Migrated from RandomForest to LightGBM. Training time reduced from 4 hours to ~15 minutes (or 5 minutes on GPU).
-*   **Purged CV**: Strict embargo periods between training and validation folds to eliminate leakage.
-*   **Pump/Dump Detector**: Detects pre-pump signatures (+25% rise with 50% retrace labels).
+### Step 2 — Factor Research (The v2 Library: 35 Signals)
+**Technically:** `FactorEngineV2` computes 35 cross-sectional quantitative factors. The `CrossSectionalAnalyser` computes Spearman rank IC between each factor and forward returns (1H, 4H, 1D, 3D, 1W) with ICIR, Newey-West corrected t-stats, and decay curves.
+
+**In Plain English:** It tests 35 different signals — things like "did coins that went up strongly yesterday keep going up?" or "did unusual volume predict a big move?" Only signals that pass statistical significance tests are trusted.
+
+| Category | Factors | What It Looks For |
+|---|---|---|
+| **Momentum** | MOM_1H → MOM_30D, OVERNIGHT | Coins continuing in the same direction |
+| **Reversal** | REV_1H, REV_4H, REV_1D | Coins bouncing back after sharp moves |
+| **Volatility** | DOWNVOL_1W, RVOL_1D, VOL_OF_VOL | Risk premiums and downside deviation |
+| **Liquidity** | AMIHUD, CORWIN_SCHULTZ, TURNOVER | Ease of trading and taker pressure |
+| **Microstructure**| MAX_RET, SKEW_1W, KURT_1W, BTC_BETA | Hidden patterns and systematic risk |
+| **Technical** | TREND_48, BB_POS, RSI_RANK, MA_SLOPE | Classic patterns, ranked cross-sectionally |
+
+### Step 3 — Institutional Validation
+**Technically:** `FactorValidator` performs Style Neutralization to remove BTC-beta, Size (Market Cap), and Liquidity tiers from returns. It then runs Fama-MacBeth regressions and applies Benjamini-Hochberg correction to control the False Discovery Rate.
+
+**In Plain English:** Raw signals are often just BTC in disguise. This step strips away the market "noise" to find the TRUE unique alpha of a coin. It's the standard used by top quant hedge funds to avoid overfitting.
+
+### Step 4 — Statistical Arbitrage (Pairs Trading)
+**Technically:** Engle-Granger two-step cointegration test across all symbol pairs. Validated with Hurst exponent and half-life of mean reversion. Live z-scores are computed for mean-reverting spreads.
+
+**In Plain English:** It finds coins that are linked — when one goes up, the other usually follows. When they diverge, the engine flags a trade for the gap to close, which is a market-neutral strategy.
+
+### Step 5 — Machine Learning v4.0 (Fast Training)
+**Technically:** Migrated to LightGBM with NVIDIA CUDA support. Features purged time-series cross-validation (Purged CV) to eliminate lookahead bias.
+*   **PumpDumpDetector**: AUC-optimized model to flag coins with pre-pump signatures.
+*   **ReturnPredictor**: Predicts 4H forward return direction.
+*   **RegimeDetector**: 4-component GMM on BTC and market breadth to classify Bull, Bear, High Vol, or Quiet markets.
+
+**In Plain English:** High-speed models (trained in ~5-15 mins) learn the "fingerprints" of price moves. The engine automatically shifts its strategy based on the market regime it detects.
+
+### Step 6 — Walk-Forward Simulation (The Time Machine Test)
+**Technically:** Rolling window walk-forward with retraining every 30 days. Scaler fitted exclusively on training rows. Entries simulated at next bar's open with 0.1% taker fees applied.
+
+**In Plain English:** This is a backtest that replays history. It learns on one year of data, predicts the next 30 days, and then "slides" forward to repeat the process, just as it would in real life.
 
 ---
 
 ## Module Reference
 
-| File | Role |
+| File | Description |
 |---|---|
-| `azalyst_orchestrator.py` | Master entry point. Chains Stage 1–8 into a single pipeline. |
-| `azalyst_validator.py` | **[NEW]** Statistical validation framework (Fama-MacBeth, Style Neut). |
-| `azalyst_factors_v2.py` | **[UPDATED]** The core 35-factor library with OHLCV support. |
-| `azalyst_ml.py` | **[FAST]** LightGBM models with CUDA/GPU acceleration. |
-| `azalyst_engine.py` | Data ingestion, IC research, and core backtesting logic. |
-| `azalyst_data.py` | Polars and DuckDB analytics layer for massive OHLCV panels. |
-| `azalyst_statarb.py` | Engle-Granger cointegration scanner for pairs trading. |
-| `walkforward_simulator.py`| Rolling retrain simulator (historical time-machine test). |
+| `azalyst_orchestrator.py` | Master pipeline — chains all 8 stages end to end. |
+| `azalyst_validator.py` | **Institutional Validation** (Style Neut, Fama-MacBeth, BH Correction). |
+| `azalyst_factors_v2.py` | **Factor Library v2** with 35 crypto-native alpha signals. |
+| `azalyst_ml.py` | **Fast ML Module** (LightGBM + CUDA) and Regime Detection. |
+| `azalyst_engine.py` | DataLoader, IC Research, and core Backtest Engine. |
+| `azalyst_data.py` | Polars/DuckDB analytics layer for high-performance data processing. |
+| `azalyst_statarb.py` | Engle-Granger Cointegration scanner for statistical arbitrage. |
+| `azalyst_risk.py` | MVO, HRP, and Black-Litterman portfolio optimization. |
+| `azalyst_output/` | Signals, IC results, paper trades, and performance reports. |
 
 ---
 
@@ -105,27 +125,25 @@ Raw IC is noise. This module provides the proof:
 ```bash
 pip install pandas numpy scipy scikit-learn lightgbm statsmodels polars duckdb pyarrow
 ```
-*Note: For GPU acceleration, ensure `lightgbm` is built with CUDA support.*
+*Note: For maximum speed, ensure your LightGBM installation has CUDA/GPU support.*
 
-### 2. Prepare Data
-Place your Binance 5m parquet files in `./data/`.
+### 2. Add Your Data
+Place your Binance 5m parquet files in the `data/` folder.
 Schema: `timestamp | open | high | low | close | volume`
 
-### 3. Run Pipeline
+### 3. Run the Pipeline
+**Windows:** Double-click `RUN_AZALYST.bat`
+**Command Line:**
 ```bash
-# Windows
-Double-click RUN_AZALYST.bat
-
-# CLI
 python azalyst_orchestrator.py --data-dir ./data --out-dir ./azalyst_output
 ```
 
 ---
 
 ## Disclaimer
-This is a **personal research project.** It is not financial advice. Past performance in simulation is not indicative of future results. Use at your own risk.
+This is a **personal research and learning project.** Azalyst is not a financial service. Nothing here is financial advice. Use entirely at your own risk.
 
 ---
 <div align="center">
-Built by [gitdhirajsv](https://github.com/gitdhirajsv) | Azalyst Quant Research
+Built by [Azalyst](https://github.com/gitdhirajsv)
 </div>
