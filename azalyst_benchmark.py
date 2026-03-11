@@ -82,7 +82,14 @@ class BenchmarkSuite:
 
     @staticmethod
     def _find_btc(close: pd.DataFrame) -> Optional[str]:
-        """Find the BTC column by name pattern."""
+        """Find the BTC column by name pattern (handles BTCUSDT, BTC/USDT, BTC-USDT, etc.)."""
+        # Prefer exact common formats first
+        preferred = ["BTCUSDT", "BTC/USDT", "BTC-USDT", "BTCUSD", "BTC/USD", "BTC"]
+        col_upper = {str(c).upper(): c for c in close.columns}
+        for name in preferred:
+            if name.upper() in col_upper:
+                return col_upper[name.upper()]
+        # Fallback: any column containing BTC
         for col in close.columns:
             if "BTC" in str(col).upper():
                 return col
@@ -135,11 +142,19 @@ class BenchmarkSuite:
         If you don't beat BTC, you should just buy BTC.
 
         Returns: pd.Series of per-period log returns (aligned to close index).
+        Returns empty Series (with warning) if BTC column not found.
         """
         if self.btc_col is None or self.btc_col not in self.close.columns:
-            raise ValueError(
-                f"BTC not found in close panel. Columns: {list(self.close.columns[:5])}..."
+            import warnings
+            warnings.warn(
+                f"[Benchmark] BTC column not found in close panel. "
+                f"Available columns (first 10): {list(self.close.columns[:10])}. "
+                f"Skipping BTC benchmark. "
+                f"Tip: ensure your data file is named BTCUSDT.csv or similar.",
+                UserWarning,
+                stacklevel=2,
             )
+            return pd.Series(dtype=float, name="BTC_BuyHold")
         return self._log_ret[self.btc_col].rename("BTC_BuyHold")
 
     def equal_weight(self) -> pd.Series:
@@ -223,7 +238,7 @@ class BenchmarkSuite:
         if len(common) == 0:
             # Strategy rebalances less frequently than benchmark daily return.
             # Resample benchmark to match strategy frequency.
-            bm = (1 + benchmark_ret).resample("1D").prod() - 1
+            bm = (1 + benchmark_ret).resample("1d").prod() - 1
             common = strategy_ret.index.intersection(bm.index)
             bm_aligned = bm.reindex(common).fillna(0)
         else:
@@ -314,7 +329,7 @@ class BenchmarkSuite:
         try:
             btc_ret = self.btc_buyhold()
             # Resample BTC to match strategy rebalancing frequency
-            btc_rebal = btc_ret.resample("1D").sum().reindex(strat_ret.index, method="nearest")
+            btc_rebal = btc_ret.resample("1d").sum().reindex(strat_ret.index, method="nearest")
             rows.append(self._perf_stats(btc_rebal, label="BTC Buy & Hold", periods_per_year=ppy))
 
             # Excess vs BTC
@@ -379,12 +394,21 @@ def main():
         print(f"[Saved] Benchmark comparison → {out}")
     else:
         # Just print BTC and EW stats
-        btc_ret = bm.btc_buyhold()
-        eq_ret  = bm.equal_weight()
-        print("\n  BTC Buy & Hold:")
-        print(pd.Series(bm._perf_stats(btc_ret, "BTC")).to_string())
-        print("\n  Equal-Weight Universe:")
-        print(pd.Series(bm._perf_stats(eq_ret, "EqualWeight")).to_string())
+        try:
+            btc_ret = bm.btc_buyhold()
+            if not btc_ret.empty:
+                print("\n  BTC Buy & Hold:")
+                print(pd.Series(bm._perf_stats(btc_ret, "BTC")).to_string())
+            else:
+                print("\n  [Benchmark] BTC data unavailable — skipping BTC benchmark.")
+        except Exception as e:
+            print(f"\n  [Benchmark] BTC benchmark skipped: {e}")
+        try:
+            eq_ret  = bm.equal_weight()
+            print("\n  Equal-Weight Universe:")
+            print(pd.Series(bm._perf_stats(eq_ret, "EqualWeight")).to_string())
+        except Exception as e:
+            print(f"\n  [Benchmark] Equal-weight benchmark skipped: {e}")
 
 
 if __name__ == "__main__":

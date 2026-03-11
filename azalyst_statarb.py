@@ -217,7 +217,7 @@ class CointegrationScanner:
     """
 
     def __init__(self, close_panel: pd.DataFrame,
-                 resample_to: str = "1D",
+                 resample_to: str = "1d",
                  pval_threshold: float = 0.05,
                  hurst_threshold: float = 0.48,
                  min_half_life: float = 2.0,

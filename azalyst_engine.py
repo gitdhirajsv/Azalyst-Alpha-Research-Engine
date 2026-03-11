@@ -86,7 +86,7 @@ class DataLoader:
                  max_symbols: Optional[int] = None, min_rows: int = MIN_HISTORY,
                  workers: int = 4):
         self.data_dir   = Path(data_dir)
-        self.resample   = resample_to      # e.g. "15min", "1H", "4H" — None keeps 5m
+        self.resample   = resample_to      # e.g. "15min", "1h", "4h" — None keeps 5m
         self.max_symbols = max_symbols
         self.min_rows   = min_rows
         self.workers    = workers

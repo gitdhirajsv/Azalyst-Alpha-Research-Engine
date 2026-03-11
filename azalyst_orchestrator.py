@@ -157,7 +157,7 @@ class AzalystOrchestrator:
         data_dir:    str,
         out_dir:     str  = "./azalyst_output",
         model_dir:   str  = "./models",
-        resample:    str  = "1H",
+        resample: str = "1h",
         max_symbols: Optional[int] = None,
         workers:     int  = 4,
         ic_horizons: list = None,
@@ -329,6 +329,32 @@ class AzalystOrchestrator:
         else:
             logger.warning("  No IC results computed.")
 
+
+    # ── Stage 2.5: Statistical Validation ────────────────────────────────────
+
+    def stage_validation(self) -> None:
+        logger.info("=" * 60)
+        logger.info("STAGE 2.5  STATISTICAL VALIDATION (FamaMacBeth + Style Neutral)")
+        logger.info("=" * 60)
+
+        try:
+            from azalyst_validator import FactorValidator
+            if not self.factors or not self.ic_results is not None:
+                logger.warning("  Validation skipped — no factors or IC results available yet.")
+                return
+            validator = FactorValidator(
+                factors      = self.factors,
+                close_panel  = self.close_panel,
+                volume_panel = self.vol_panel,
+                ic_table     = self.ic_results if not self.ic_results.empty else None,
+                out_dir      = self.out_dir,
+                fm_horizon   = BARS_PER_DAY,
+                alpha        = 0.05,
+            )
+            validator.run(run_fm=True, run_neutral=True)
+        except Exception as e:
+            logger.warning(f"  Validation stage failed (non-fatal): {e}")
+
     # ── Stage 4: Regime Detection ─────────────────────────────────────────────
 
     def stage_regime(self) -> None:
@@ -387,7 +413,7 @@ class AzalystOrchestrator:
                 logger.info(f"  Loaded pump model from {pump_path}")
             else:
                 logger.info("  Training pump/dump model ...")
-                pump_model.train(self.data)
+                pump_model.train(self.data, max_sym=None)  # ALL loaded symbols
                 pump_model.save(pump_path)
 
             pump_scores = {}
@@ -408,7 +434,7 @@ class AzalystOrchestrator:
                 logger.info(f"  Loaded return model from {return_path}")
             else:
                 logger.info("  Training return predictor ...")
-                ret_model.train(self.data)
+                ret_model.train(self.data, max_sym=None)   # ALL loaded symbols
                 ret_model.save(return_path)
 
             return_scores = {}
@@ -506,6 +532,7 @@ class AzalystOrchestrator:
             ("data",     self.stage_data),
             ("factors",  self.stage_factors),
             ("ic",       self.stage_ic_research),
+            ("validation", self.stage_validation),
             ("regime",   self.stage_regime),
             ("ml",       self.stage_ml_scoring),
             ("statarb",  self.stage_statarb),
@@ -553,13 +580,13 @@ def main() -> None:
     parser.add_argument("--data-dir",    default="./data",            help="Parquet data directory")
     parser.add_argument("--out-dir",     default="./azalyst_output",  help="Output directory")
     parser.add_argument("--model-dir",   default="./models",          help="ML model directory")
-    parser.add_argument("--resample",    default="1H",                help="OHLCV resample (5min/15min/1H/4H)")
+    parser.add_argument("--resample",    default="1h",                help="OHLCV resample (5min/15min/1H/4H)")
     parser.add_argument("--max-symbols", type=int, default=None,      help="Limit symbols for testing")
     parser.add_argument("--workers",     type=int, default=4,         help="Parallel workers")
     parser.add_argument("--top",         type=int, default=30,        help="Top N signals to display")
     parser.add_argument(
         "--stages", nargs="+",
-        choices=["data","factors","ic","regime","ml","statarb","signals","report"],
+        choices=["data","factors","ic","validation","regime","ml","statarb","signals","report"],
         default=None,
         help="Run only specific stages (default: all)"
     )
