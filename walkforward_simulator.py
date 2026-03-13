@@ -741,8 +741,15 @@ class WalkForwardSimulator:
     # ── Internal helpers ──────────────────────────────────────────────────────
 
     def _log(self, msg: str) -> None:
-        if self.verbose:
+        if not self.verbose:
+            return
+
+        try:
             print(msg)
+        except UnicodeEncodeError:
+            encoded = msg.encode("utf-8", errors="replace") + b"\n"
+            sys.stdout.buffer.write(encoded)
+            sys.stdout.buffer.flush()
 
     def _load_btc(self) -> None:
         """Load BTC OHLCV for regime detection."""

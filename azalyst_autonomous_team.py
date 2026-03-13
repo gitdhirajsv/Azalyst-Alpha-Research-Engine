@@ -38,6 +38,7 @@ NOTE: Signal direction has already been flipped (main alpha fix).
 """
 
 import csv
+import ctypes
 import io
 import json
 import os
@@ -46,6 +47,7 @@ import shutil
 import subprocess
 import sys
 import time
+import atexit
 from datetime import datetime
 from pathlib import Path
 
@@ -63,6 +65,9 @@ MODEL        = "deepseek-r1:14b"
 OLLAMA_URL   = "http://localhost:11434/api/generate"
 LOG_FILE     = os.path.join(PROJECT_PATH, "team_log.txt")
 RESULTS_FILE = os.path.join(PROJECT_PATH, "performance_metrics.csv")
+LOCK_DIR     = os.path.join(PROJECT_PATH, ".azalyst_locks")
+TEAM_LOCK    = os.path.join(LOCK_DIR, "autonomous_team.lock")
+SIM_LOCK     = os.path.join(LOCK_DIR, "walkforward_simulator.lock")
 
 TARGETS = {
     "win_rate":      55.0,
@@ -80,6 +85,7 @@ BASELINE = {
 
 MAX_ITERATIONS = 10   # max fix→test cycles before stopping
 LLM_TIMEOUT    = 60   # seconds per LLM call before falling back to deterministic tuning
+ACTIVE_LOCKS   = set()
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  LOGGER
@@ -89,12 +95,109 @@ def log(msg: str, persona: str = "") -> None:
     ts    = datetime.now().strftime("%H:%M:%S")
     label = f"[{persona}] " if persona else ""
     line  = f"[{ts}] {label}{msg}"
-    print(line, flush=True)
+    try:
+        print(line, flush=True)
+    except (UnicodeEncodeError, OSError, ValueError):
+        try:
+            sys.stdout.buffer.write((line + "\n").encode("utf-8", errors="replace"))
+            sys.stdout.buffer.flush()
+        except Exception:
+            pass
     try:
         with open(LOG_FILE, "a", encoding="utf-8") as fh:
             fh.write(line + "\n")
     except Exception:
         pass
+
+
+def _pid_exists(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        process = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+        if process:
+            ctypes.windll.kernel32.CloseHandle(process)
+            return True
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _read_lock(lock_path: str) -> dict:
+    try:
+        with open(lock_path, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return {}
+
+
+def _write_lock(lock_path: str, payload: dict) -> None:
+    with open(lock_path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh)
+
+
+def acquire_lock(lock_path: str, label: str) -> tuple[bool, dict]:
+    os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+    payload = {
+        "pid": os.getpid(),
+        "label": label,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+    }
+
+    for _ in range(2):
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            owner = _read_lock(lock_path)
+            owner_pid = int(owner.get("pid", 0) or 0)
+            if not _pid_exists(owner_pid):
+                try:
+                    os.remove(lock_path)
+                except OSError:
+                    pass
+                continue
+            return False, owner
+        else:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(payload, fh)
+            ACTIVE_LOCKS.add(lock_path)
+            return True, payload
+
+    return False, _read_lock(lock_path)
+
+
+def update_lock(lock_path: str, payload: dict) -> None:
+    if lock_path not in ACTIVE_LOCKS:
+        return
+    try:
+        _write_lock(lock_path, payload)
+    except OSError:
+        pass
+
+
+def release_lock(lock_path: str) -> None:
+    if lock_path not in ACTIVE_LOCKS:
+        return
+    ACTIVE_LOCKS.discard(lock_path)
+    try:
+        os.remove(lock_path)
+    except OSError:
+        pass
+
+
+def release_all_locks() -> None:
+    for lock_path in list(ACTIVE_LOCKS):
+        release_lock(lock_path)
+
+
+atexit.register(release_all_locks)
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  LLM INTERFACE
@@ -262,6 +365,13 @@ class Developer:
 
     def run_simulator(self, project_path: str, coins=None, no_resume=False):
         log("Running walkforward_simulator.py...", self.name)
+        acquired, owner = acquire_lock(SIM_LOCK, "walkforward_simulator")
+        if not acquired:
+            pid = owner.get("pid", "?")
+            started = owner.get("created_at", "unknown time")
+            log(f"Simulator already running under PID {pid} (started {started}) - skipping duplicate launch.", self.name)
+            return False
+
         cmd = [sys.executable, "walkforward_simulator.py",
                "--data-dir", "./data",
                "--feature-dir", "./feature_cache"]
@@ -283,6 +393,12 @@ class Developer:
                 errors='replace',
                 env=env
             )
+            update_lock(SIM_LOCK, {
+                "pid": proc.pid,
+                "owner_pid": os.getpid(),
+                "label": "walkforward_simulator",
+                "created_at": datetime.now().isoformat(timespec="seconds"),
+            })
             start_ts = time.time()
             while True:
                 try:
@@ -319,6 +435,8 @@ class Developer:
         except Exception as e:
             log(f"Subprocess error: {e}", self.name)
             return False
+        finally:
+            release_lock(SIM_LOCK)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -425,6 +543,14 @@ def team_discussion(researcher: Researcher, metrics: dict) -> dict:
 
 def main():
     os.chdir(PROJECT_PATH)
+
+    acquired, owner = acquire_lock(TEAM_LOCK, "autonomous_team")
+    if not acquired:
+        pid = owner.get("pid", "?")
+        started = owner.get("created_at", "unknown time")
+        log(f"[WARN] Another autonomous team session is already running (PID {pid}, started {started}).")
+        log("[WARN] Close the other team window or wait for it to finish before starting a new run.")
+        return
 
     researcher = Researcher()
     developer  = Developer()
