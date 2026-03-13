@@ -1,0 +1,549 @@
+[13:39:43] ═════════════════════════════════════════════════════════════════
+[13:39:43]   AZALYST AUTONOMOUS RESEARCH TEAM
+[13:39:43]   Researcher: Olivia  |  Developer: Marcus
+[13:39:43]   Model: deepseek-r1:14b  |  Target: Win Rate >55.0%
+[13:39:43] ═════════════════════════════════════════════════════════════════
+[13:39:43]   NOTE: Signal direction flip already applied in walkforward_simulator.py
+[13:39:43]   Expected baseline win rate: 60-75%+ on first run
+[13:39:43] ═════════════════════════════════════════════════════════════════
+[13:39:45] [OK] Ollama is running
+[13:39:45] 
+[START] Win Rate: 27.5%  Sharpe: -5.270  Trades: 0
+[13:39:45] 
+[PHASE 1] First run — testing signal direction fix...
+[13:39:45] [MARCUS (Developer)] Running walkforward_simulator.py...
+[13:40:41] [MARCUS (Developer)] Simulator error (code 1)
+[13:40:41] [MARCUS (Developer)]   .py", line 721, in _log
+    print(msg)
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode characters in position 2-66: character maps to <undefined>
+
+[13:40:41] 
+[PHASE 2] Targets not met — starting 10 refinement cycles
+[13:40:41] 
+[ITERATION 1/10]
+[13:40:41] 
+[13:40:41] ══════════════════ TEAM DISCUSSION ══════════════════
+[13:40:41] [OLIVIA] Current win rate 27.5%, Sharpe -5.270
+[13:40:41] [OLIVIA] Analysing what to try next...
+[13:40:41] [OLIVIA (Researcher)] Sending 1211 char prompt...
+[13:40:43] [OLIVIA (Researcher)] Response: 0 chars
+[13:40:43] [OLIVIA] LLM gave no clear fix — falling back to standard tuning schedule
+[13:40:43] [MARCUS] I'll try tightening the threshold by 0.01
+[13:40:43] ═════════════════════════════════════════════════════
+[13:40:43] [MARCUS] (Fallback) Trying BUY_THRESHOLD = 0.62
+[13:40:43] [MARCUS (Developer)] Applying: BUY_THRESHOLD = 0.62 in walkforward_simulator.py
+[13:40:43] [MARCUS (Developer)]   Done: BUY_THRESHOLD = 0.62
+[13:40:43] [MARCUS (Developer)] Running walkforward_simulator.py...
+[13:40:47] [MARCUS (Developer)] Simulator error (code 1)
+[13:40:47] [MARCUS (Developer)]   .py", line 721, in _log
+    print(msg)
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode characters in position 2-66: character maps to <undefined>
+
+[13:40:47] 
+[ITERATION 2/10]
+[13:40:47] 
+[13:40:47] ══════════════════ TEAM DISCUSSION ══════════════════
+[13:40:47] [OLIVIA] Current win rate 27.5%, Sharpe -5.270
+[13:40:47] [OLIVIA] Analysing what to try next...
+[13:40:47] [OLIVIA (Researcher)] Sending 1211 char prompt...
+[13:40:49] [OLIVIA (Researcher)] Response: 0 chars
+[13:40:49] [OLIVIA] LLM gave no clear fix — falling back to standard tuning schedule
+[13:40:49] [MARCUS] I'll try tightening the threshold by 0.01
+[13:40:49] ═════════════════════════════════════════════════════
+[13:40:49] [MARCUS] (Fallback) Trying SELL_THRESHOLD = 0.38
+[13:40:49] [MARCUS (Developer)] Applying: SELL_THRESHOLD = 0.38 in walkforward_simulator.py
+[13:40:49] [MARCUS (Developer)]   Done: SELL_THRESHOLD = 0.38
+[13:40:49] [MARCUS (Developer)] Running walkforward_simulator.py...
+[13:40:54] [MARCUS (Developer)] Simulator error (code 1)
+[13:40:54] [MARCUS (Developer)]   .py", line 721, in _log
+    print(msg)
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode characters in position 2-66: character maps to <undefined>
+
+[13:40:54] 
+[ITERATION 3/10]
+[13:40:54] 
+[13:40:54] ══════════════════ TEAM DISCUSSION ══════════════════
+[13:40:54] [OLIVIA] Current win rate 27.5%, Sharpe -5.270
+[13:40:54] [OLIVIA] Analysing what to try next...
+[13:40:54] [OLIVIA (Researcher)] Sending 1211 char prompt...
+[13:40:56] [OLIVIA (Researcher)] Response: 0 chars
+[13:40:56] [OLIVIA] LLM gave no clear fix — falling back to standard tuning schedule
+[13:40:56] [MARCUS] I'll try tightening the threshold by 0.01
+[13:40:56] ═════════════════════════════════════════════════════
+[13:40:56] [MARCUS] (Fallback) Trying BUY_THRESHOLD = 0.65
+[13:40:56] [MARCUS (Developer)] Applying: BUY_THRESHOLD = 0.65 in walkforward_simulator.py
+[13:40:56] [MARCUS (Developer)]   Done: BUY_THRESHOLD = 0.65
+[13:40:56] [MARCUS (Developer)] Running walkforward_simulator.py...
+[13:41:00] [MARCUS (Developer)] Simulator error (code 1)
+[13:41:00] [MARCUS (Developer)]   .py", line 721, in _log
+    print(msg)
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode characters in position 2-66: character maps to <undefined>
+
+[13:41:00] 
+[ITERATION 4/10]
+[13:41:00] 
+[13:41:00] ══════════════════ TEAM DISCUSSION ══════════════════
+[13:41:00] [OLIVIA] Current win rate 27.5%, Sharpe -5.270
+[13:41:00] [OLIVIA] Analysing what to try next...
+[13:41:00] [OLIVIA (Researcher)] Sending 1211 char prompt...
+[13:41:02] [OLIVIA (Researcher)] Response: 0 chars
+[13:41:02] [OLIVIA] LLM gave no clear fix — falling back to standard tuning schedule
+[13:41:02] [MARCUS] I'll try tightening the threshold by 0.01
+[13:41:02] ═════════════════════════════════════════════════════
+[13:41:02] [MARCUS] (Fallback) Trying SELL_THRESHOLD = 0.35
+[13:41:02] [MARCUS (Developer)] Applying: SELL_THRESHOLD = 0.35 in walkforward_simulator.py
+[13:41:02] [MARCUS (Developer)]   Done: SELL_THRESHOLD = 0.35
+[13:41:02] [MARCUS (Developer)] Running walkforward_simulator.py...
+[13:41:06] [MARCUS (Developer)] Simulator error (code 1)
+[13:41:06] [MARCUS (Developer)]   .py", line 721, in _log
+    print(msg)
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode characters in position 2-66: character maps to <undefined>
+
+[13:41:06] 
+[ITERATION 5/10]
+[13:41:06] 
+[13:41:06] ══════════════════ TEAM DISCUSSION ══════════════════
+[13:41:06] [OLIVIA] Current win rate 27.5%, Sharpe -5.270
+[13:41:06] [OLIVIA] Analysing what to try next...
+[13:41:06] [OLIVIA (Researcher)] Sending 1211 char prompt...
+[13:41:08] [OLIVIA (Researcher)] Response: 0 chars
+[13:41:08] [OLIVIA] LLM gave no clear fix — falling back to standard tuning schedule
+[13:41:08] [MARCUS] I'll try tightening the threshold by 0.01
+[13:41:08] ═════════════════════════════════════════════════════
+[13:41:08] 
+[ITERATION 6/10]
+[13:41:08] 
+[13:41:08] ══════════════════ TEAM DISCUSSION ══════════════════
+[13:41:08] [OLIVIA] Current win rate 27.5%, Sharpe -5.270
+[13:41:08] [OLIVIA] Analysing what to try next...
+[13:41:08] [OLIVIA (Researcher)] Sending 1211 char prompt...
+[13:41:10] [OLIVIA (Researcher)] Response: 0 chars
+[13:41:10] [OLIVIA] LLM gave no clear fix — falling back to standard tuning schedule
+[13:41:10] [MARCUS] I'll try tightening the threshold by 0.01
+[13:41:10] ═════════════════════════════════════════════════════
+[13:41:10] 
+[ITERATION 7/10]
+[13:41:10] 
+[13:41:10] ══════════════════ TEAM DISCUSSION ══════════════════
+[13:41:10] [OLIVIA] Current win rate 27.5%, Sharpe -5.270
+[13:41:10] [OLIVIA] Analysing what to try next...
+[13:41:10] [OLIVIA (Researcher)] Sending 1211 char prompt...
+[13:41:12] [OLIVIA (Researcher)] Response: 0 chars
+[13:41:12] [OLIVIA] LLM gave no clear fix — falling back to standard tuning schedule
+[13:41:12] [MARCUS] I'll try tightening the threshold by 0.01
+[13:41:12] ═════════════════════════════════════════════════════
+[13:41:12] 
+[ITERATION 8/10]
+[13:41:12] 
+[13:41:12] ══════════════════ TEAM DISCUSSION ══════════════════
+[13:41:12] [OLIVIA] Current win rate 27.5%, Sharpe -5.270
+[13:41:12] [OLIVIA] Analysing what to try next...
+[13:41:12] [OLIVIA (Researcher)] Sending 1211 char prompt...
+[13:41:14] [OLIVIA (Researcher)] Response: 0 chars
+[13:41:14] [OLIVIA] LLM gave no clear fix — falling back to standard tuning schedule
+[13:41:14] [MARCUS] I'll try tightening the threshold by 0.01
+[13:41:14] ═════════════════════════════════════════════════════
+[13:41:14] 
+[ITERATION 9/10]
+[13:41:14] 
+[13:41:14] ══════════════════ TEAM DISCUSSION ══════════════════
+[13:41:14] [OLIVIA] Current win rate 27.5%, Sharpe -5.270
+[13:41:14] [OLIVIA] Analysing what to try next...
+[13:41:14] [OLIVIA (Researcher)] Sending 1211 char prompt...
+[13:41:16] [OLIVIA (Researcher)] Response: 0 chars
+[13:41:16] [OLIVIA] LLM gave no clear fix — falling back to standard tuning schedule
+[13:41:16] [MARCUS] I'll try tightening the threshold by 0.01
+[13:41:16] ═════════════════════════════════════════════════════
+[13:41:16] 
+[ITERATION 10/10]
+[13:41:16] 
+[13:41:16] ══════════════════ TEAM DISCUSSION ══════════════════
+[13:41:16] [OLIVIA] Current win rate 27.5%, Sharpe -5.270
+[13:41:16] [OLIVIA] Analysing what to try next...
+[13:41:16] [OLIVIA (Researcher)] Sending 1211 char prompt...
+[13:41:18] [OLIVIA (Researcher)] Response: 0 chars
+[13:41:18] [OLIVIA] LLM gave no clear fix — falling back to standard tuning schedule
+[13:41:18] [MARCUS] I'll try tightening the threshold by 0.01
+[13:41:18] ═════════════════════════════════════════════════════
+[13:41:18] 
+[OLIVIA] Current best: WR 27.5% — targets not met.
+[13:41:18] [MARCUS] Best config saved. Re-run to continue optimisation.
+[13:41:18] 
+[DONE] Log saved to: D:\Personal Files\Azalyst Alpha Research Engine\team_log.txt
+[13:57:28] ═════════════════════════════════════════════════════════════════
+[13:57:28]   AZALYST AUTONOMOUS RESEARCH TEAM
+[13:57:28]   Researcher: Olivia  |  Developer: Marcus
+[13:57:28]   Model: deepseek-r1:14b  |  Target: Win Rate >55.0%
+[13:57:28] ═════════════════════════════════════════════════════════════════
+[13:57:28]   NOTE: Signal direction flip already applied in walkforward_simulator.py
+[13:57:28]   Expected baseline win rate: 60-75%+ on first run
+[13:57:28] ═════════════════════════════════════════════════════════════════
+[13:57:31] [OK] Ollama is running
+[13:57:31] 
+[START] Win Rate: 27.5%  Sharpe: -5.270  Trades: 0
+[13:57:31] 
+[PHASE 1] First run — testing signal direction fix...
+[13:57:31] [MARCUS (Developer)] Running walkforward_simulator.py...
+[14:00:38] [MARCUS (Developer)] Simulator error (code 1)
+[14:00:38] [MARCUS (Developer)]   ount_user
+    cpu_count_affinity = _cpu_count_affinity(os_cpu_count)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\joblib\externals\loky\backend\context.py", line 192, in _cpu_count_affinity
+    p = psutil.Process()
+        ^^^^^^^^^^^^^^
+AttributeError: module 'psutil' has no attribute 'Process'
+
+[14:00:38] 
+[PHASE 2] Targets not met — starting 10 refinement cycles
+[14:00:38] 
+[ITERATION 1/10]
+[14:00:38] 
+[14:00:38] ══════════════════ TEAM DISCUSSION ══════════════════
+[14:00:38] [OLIVIA] Current win rate 27.5%, Sharpe -5.270
+[14:00:38] [OLIVIA] Analysing what to try next...
+[14:00:38] [OLIVIA (Researcher)] Sending 1211 char prompt...
+[14:04:41] [OLIVIA (Researcher)] Timeout after 240s — prompt might be too large
+[14:04:41] [OLIVIA] LLM gave no clear fix — falling back to standard tuning schedule
+[14:04:41] [MARCUS] I'll try tightening the threshold by 0.01
+[14:04:41] ═════════════════════════════════════════════════════
+[14:04:41] [MARCUS] (Fallback) Trying BUY_THRESHOLD = 0.62
+[14:04:41] [MARCUS (Developer)] Applying: BUY_THRESHOLD = 0.62 in walkforward_simulator.py
+[14:04:41] [MARCUS (Developer)]   Done: BUY_THRESHOLD = 0.62
+[14:04:41] [MARCUS (Developer)] Running walkforward_simulator.py...
+[14:07:41] [MARCUS (Developer)] Simulator error (code 1)
+[14:07:41] [MARCUS (Developer)]   ount_user
+    cpu_count_affinity = _cpu_count_affinity(os_cpu_count)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\joblib\externals\loky\backend\context.py", line 192, in _cpu_count_affinity
+    p = psutil.Process()
+        ^^^^^^^^^^^^^^
+AttributeError: module 'psutil' has no attribute 'Process'
+
+[14:07:41] 
+[ITERATION 2/10]
+[14:07:41] 
+[14:07:41] ══════════════════ TEAM DISCUSSION ══════════════════
+[14:07:41] [OLIVIA] Current win rate 27.5%, Sharpe -5.270
+[14:07:41] [OLIVIA] Analysing what to try next...
+[14:07:41] [OLIVIA (Researcher)] Sending 1211 char prompt...
+[14:11:43] [OLIVIA (Researcher)] Timeout after 240s — prompt might be too large
+[14:11:43] [OLIVIA] LLM gave no clear fix — falling back to standard tuning schedule
+[14:11:43] [MARCUS] I'll try tightening the threshold by 0.01
+[14:11:43] ═════════════════════════════════════════════════════
+[14:11:43] [MARCUS] (Fallback) Trying SELL_THRESHOLD = 0.38
+[14:11:43] [MARCUS (Developer)] Applying: SELL_THRESHOLD = 0.38 in walkforward_simulator.py
+[14:11:43] [MARCUS (Developer)]   Done: SELL_THRESHOLD = 0.38
+[14:11:43] [MARCUS (Developer)] Running walkforward_simulator.py...
+[14:14:37] [MARCUS (Developer)] Simulator error (code 1)
+[14:14:37] [MARCUS (Developer)]   ount_user
+    cpu_count_affinity = _cpu_count_affinity(os_cpu_count)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\joblib\externals\loky\backend\context.py", line 192, in _cpu_count_affinity
+    p = psutil.Process()
+        ^^^^^^^^^^^^^^
+AttributeError: module 'psutil' has no attribute 'Process'
+
+[14:14:37] 
+[ITERATION 3/10]
+[14:14:37] 
+[14:14:37] ══════════════════ TEAM DISCUSSION ══════════════════
+[14:14:37] [OLIVIA] Current win rate 27.5%, Sharpe -5.270
+[14:14:37] [OLIVIA] Analysing what to try next...
+[14:14:37] [OLIVIA (Researcher)] Sending 1211 char prompt...
+[14:18:39] [OLIVIA (Researcher)] Timeout after 240s — prompt might be too large
+[14:18:40] [OLIVIA] LLM gave no clear fix — falling back to standard tuning schedule
+[14:18:40] [MARCUS] I'll try tightening the threshold by 0.01
+[14:18:40] ═════════════════════════════════════════════════════
+[14:18:40] [MARCUS] (Fallback) Trying BUY_THRESHOLD = 0.65
+[14:18:40] [MARCUS (Developer)] Applying: BUY_THRESHOLD = 0.65 in walkforward_simulator.py
+[14:18:40] [MARCUS (Developer)]   Done: BUY_THRESHOLD = 0.65
+[14:18:40] [MARCUS (Developer)] Running walkforward_simulator.py...
+[14:21:36] [MARCUS (Developer)] Simulator error (code 1)
+[14:21:36] [MARCUS (Developer)]   ount_user
+    cpu_count_affinity = _cpu_count_affinity(os_cpu_count)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\joblib\externals\loky\backend\context.py", line 192, in _cpu_count_affinity
+    p = psutil.Process()
+        ^^^^^^^^^^^^^^
+AttributeError: module 'psutil' has no attribute 'Process'
+
+[14:21:36] 
+[ITERATION 4/10]
+[14:21:36] 
+[14:21:36] ══════════════════ TEAM DISCUSSION ══════════════════
+[14:21:36] [OLIVIA] Current win rate 27.5%, Sharpe -5.270
+[14:21:36] [OLIVIA] Analysing what to try next...
+[14:21:36] [OLIVIA (Researcher)] Sending 1211 char prompt...
+[14:25:38] [OLIVIA (Researcher)] Timeout after 240s — prompt might be too large
+[14:25:38] [OLIVIA] LLM gave no clear fix — falling back to standard tuning schedule
+[14:25:38] [MARCUS] I'll try tightening the threshold by 0.01
+[14:25:38] ═════════════════════════════════════════════════════
+[14:25:38] [MARCUS] (Fallback) Trying SELL_THRESHOLD = 0.35
+[14:25:38] [MARCUS (Developer)] Applying: SELL_THRESHOLD = 0.35 in walkforward_simulator.py
+[14:25:38] [MARCUS (Developer)]   Done: SELL_THRESHOLD = 0.35
+[14:25:38] [MARCUS (Developer)] Running walkforward_simulator.py...
+[14:28:36] [MARCUS (Developer)] Simulator error (code 1)
+[14:28:36] [MARCUS (Developer)]   ount_user
+    cpu_count_affinity = _cpu_count_affinity(os_cpu_count)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\joblib\externals\loky\backend\context.py", line 192, in _cpu_count_affinity
+    p = psutil.Process()
+        ^^^^^^^^^^^^^^
+AttributeError: module 'psutil' has no attribute 'Process'
+
+[14:28:36] 
+[ITERATION 5/10]
+[14:28:36] 
+[14:28:36] ══════════════════ TEAM DISCUSSION ══════════════════
+[14:28:36] [OLIVIA] Current win rate 27.5%, Sharpe -5.270
+[14:28:36] [OLIVIA] Analysing what to try next...
+[14:28:36] [OLIVIA (Researcher)] Sending 1211 char prompt...
+[14:32:38] [OLIVIA (Researcher)] Timeout after 240s — prompt might be too large
+[14:32:38] [OLIVIA] LLM gave no clear fix — falling back to standard tuning schedule
+[14:32:38] [MARCUS] I'll try tightening the threshold by 0.01
+[14:32:38] ═════════════════════════════════════════════════════
+[14:32:38] 
+[ITERATION 6/10]
+[14:32:38] 
+[14:32:38] ══════════════════ TEAM DISCUSSION ══════════════════
+[14:32:38] [OLIVIA] Current win rate 27.5%, Sharpe -5.270
+[14:32:38] [OLIVIA] Analysing what to try next...
+[14:32:38] [OLIVIA (Researcher)] Sending 1211 char prompt...
+[14:36:40] [OLIVIA (Researcher)] Timeout after 240s — prompt might be too large
+[14:36:40] [OLIVIA] LLM gave no clear fix — falling back to standard tuning schedule
+[14:36:40] [MARCUS] I'll try tightening the threshold by 0.01
+[14:36:40] ═════════════════════════════════════════════════════
+[14:36:40] 
+[ITERATION 7/10]
+[14:36:40] 
+[14:36:40] ══════════════════ TEAM DISCUSSION ══════════════════
+[14:36:40] [OLIVIA] Current win rate 27.5%, Sharpe -5.270
+[14:36:40] [OLIVIA] Analysing what to try next...
+[14:36:40] [OLIVIA (Researcher)] Sending 1211 char prompt...
+[14:40:42] [OLIVIA (Researcher)] Timeout after 240s — prompt might be too large
+[14:40:42] [OLIVIA] LLM gave no clear fix — falling back to standard tuning schedule
+[14:40:42] [MARCUS] I'll try tightening the threshold by 0.01
+[14:40:42] ═════════════════════════════════════════════════════
+[14:40:42] 
+[ITERATION 8/10]
+[14:40:42] 
+[14:40:42] ══════════════════ TEAM DISCUSSION ══════════════════
+[14:40:42] [OLIVIA] Current win rate 27.5%, Sharpe -5.270
+[14:40:42] [OLIVIA] Analysing what to try next...
+[14:40:42] [OLIVIA (Researcher)] Sending 1211 char prompt...
+[14:44:44] [OLIVIA (Researcher)] Timeout after 240s — prompt might be too large
+[14:44:44] [OLIVIA] LLM gave no clear fix — falling back to standard tuning schedule
+[14:44:44] [MARCUS] I'll try tightening the threshold by 0.01
+[14:44:44] ═════════════════════════════════════════════════════
+[14:44:44] 
+[ITERATION 9/10]
+[14:44:44] 
+[14:44:44] ══════════════════ TEAM DISCUSSION ══════════════════
+[14:44:44] [OLIVIA] Current win rate 27.5%, Sharpe -5.270
+[14:44:44] [OLIVIA] Analysing what to try next...
+[14:44:44] [OLIVIA (Researcher)] Sending 1211 char prompt...
+[14:48:46] [OLIVIA (Researcher)] Timeout after 240s — prompt might be too large
+[14:48:46] [OLIVIA] LLM gave no clear fix — falling back to standard tuning schedule
+[14:48:46] [MARCUS] I'll try tightening the threshold by 0.01
+[14:48:46] ═════════════════════════════════════════════════════
+[14:48:46] 
+[ITERATION 10/10]
+[14:48:46] 
+[14:48:46] ══════════════════ TEAM DISCUSSION ══════════════════
+[14:48:46] [OLIVIA] Current win rate 27.5%, Sharpe -5.270
+[14:48:46] [OLIVIA] Analysing what to try next...
+[14:48:46] [OLIVIA (Researcher)] Sending 1211 char prompt...
+[14:52:48] [OLIVIA (Researcher)] Timeout after 240s — prompt might be too large
+[14:52:48] [OLIVIA] LLM gave no clear fix — falling back to standard tuning schedule
+[14:52:48] [MARCUS] I'll try tightening the threshold by 0.01
+[14:52:48] ═════════════════════════════════════════════════════
+[14:52:48] 
+[OLIVIA] Current best: WR 27.5% — targets not met.
+[14:52:48] [MARCUS] Best config saved. Re-run to continue optimisation.
+[14:52:48] 
+[DONE] Log saved to: D:\Personal Files\Azalyst Alpha Research Engine\team_log.txt
+[15:10:41] ═════════════════════════════════════════════════════════════════
+[15:10:41]   AZALYST AUTONOMOUS RESEARCH TEAM
+[15:10:41]   Researcher: Olivia  |  Developer: Marcus
+[15:10:41]   Model: deepseek-r1:14b  |  Target: Win Rate >55.0%
+[15:10:41] ═════════════════════════════════════════════════════════════════
+[15:10:41]   NOTE: Signal direction flip already applied in walkforward_simulator.py
+[15:10:41]   Expected baseline win rate: 60-75%+ on first run
+[15:10:41] ═════════════════════════════════════════════════════════════════
+[15:10:43] [OK] Ollama is running
+[15:10:43] 
+[START] Win Rate: 27.5%  Sharpe: -5.270  Trades: 0
+[15:10:43] 
+[PHASE 1] First run — testing signal direction fix...
+[15:10:43] [MARCUS (Developer)] Running walkforward_simulator.py...
+[15:13:41] [MARCUS (Developer)] Simulator error (code 1)
+[15:13:41] [MARCUS (Developer)]   ount_user
+    cpu_count_affinity = _cpu_count_affinity(os_cpu_count)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\joblib\externals\loky\backend\context.py", line 192, in _cpu_count_affinity
+    p = psutil.Process()
+        ^^^^^^^^^^^^^^
+AttributeError: module 'psutil' has no attribute 'Process'
+
+[15:13:41] 
+[PHASE 2] Targets not met — starting 10 refinement cycles
+[15:13:41] 
+[ITERATION 1/10]
+[15:13:41] 
+[15:13:41] ══════════════════ TEAM DISCUSSION ══════════════════
+[15:13:41] [OLIVIA] Current win rate 27.5%, Sharpe -5.270
+[15:13:41] [OLIVIA] Analysing what to try next...
+[15:13:41] [OLIVIA (Researcher)] Sending 1211 char prompt...
+[15:17:43] [OLIVIA (Researcher)] Timeout after 240s — prompt might be too large
+[15:17:43] [OLIVIA] LLM gave no clear fix — falling back to standard tuning schedule
+[15:17:43] [MARCUS] I'll try tightening the threshold by 0.01
+[15:17:43] ═════════════════════════════════════════════════════
+[15:17:43] [MARCUS] (Fallback) Trying BUY_THRESHOLD = 0.62
+[15:17:43] [MARCUS (Developer)] Applying: BUY_THRESHOLD = 0.62 in walkforward_simulator.py
+[15:17:43] [MARCUS (Developer)]   Done: BUY_THRESHOLD = 0.62
+[15:17:43] [MARCUS (Developer)] Running walkforward_simulator.py...
+[15:20:54] [MARCUS (Developer)] Simulator error (code 1)
+[15:20:54] [MARCUS (Developer)]   ount_user
+    cpu_count_affinity = _cpu_count_affinity(os_cpu_count)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python311\Lib\site-packages\joblib\externals\loky\backend\context.py", line 192, in _cpu_count_affinity
+    p = psutil.Process()
+        ^^^^^^^^^^^^^^
+AttributeError: module 'psutil' has no attribute 'Process'
+
+[15:20:54] 
+[ITERATION 2/10]
+[15:20:54] 
+[15:20:54] ══════════════════ TEAM DISCUSSION ══════════════════
+[15:20:54] [OLIVIA] Current win rate 27.5%, Sharpe -5.270
+[15:20:54] [OLIVIA] Analysing what to try next...
+[15:20:54] [OLIVIA (Researcher)] Sending 1211 char prompt...
+[15:24:56] [OLIVIA (Researcher)] Timeout after 240s — prompt might be too large
+[15:24:56] [OLIVIA] LLM gave no clear fix — falling back to standard tuning schedule
+[15:24:56] [MARCUS] I'll try tightening the threshold by 0.01
+[15:24:56] ═════════════════════════════════════════════════════
+[15:24:56] [MARCUS] (Fallback) Trying SELL_THRESHOLD = 0.38
+[15:24:56] [MARCUS (Developer)] Applying: SELL_THRESHOLD = 0.38 in walkforward_simulator.py
+[15:24:56] [MARCUS (Developer)]   Done: SELL_THRESHOLD = 0.38
+[15:24:56] [MARCUS (Developer)] Running walkforward_simulator.py...
+[15:26:20] [MARCUS (Developer)] Simulator error (code 3221225786)
+[15:28:58] ═════════════════════════════════════════════════════════════════
+[15:28:58]   AZALYST AUTONOMOUS RESEARCH TEAM
+[15:28:58]   Researcher: Olivia  |  Developer: Marcus
+[15:28:58]   Model: deepseek-r1:14b  |  Target: Win Rate >55.0%
+[15:28:58] ═════════════════════════════════════════════════════════════════
+[15:28:58]   NOTE: Signal direction flip already applied in walkforward_simulator.py
+[15:28:58]   Expected baseline win rate: 60-75%+ on first run
+[15:28:58] ═════════════════════════════════════════════════════════════════
+[15:29:00] [OK] Ollama is running
+[15:29:00] 
+[START] Win Rate: 27.5%  Sharpe: -5.270  Trades: 0
+[15:29:00] 
+[PHASE 1] First run — testing signal direction fix...
+[15:29:00] [MARCUS (Developer)] Running walkforward_simulator.py...
+[17:41:37] ═════════════════════════════════════════════════════════════════
+[17:41:37]   AZALYST AUTONOMOUS RESEARCH TEAM
+[17:41:37]   Researcher: Olivia  |  Developer: Marcus
+[17:41:37]   Model: deepseek-r1:14b  |  Target: Win Rate >55.0%
+[17:41:37] ═════════════════════════════════════════════════════════════════
+[17:41:37]   NOTE: Signal direction flip already applied in walkforward_simulator.py
+[17:41:37]   Expected baseline win rate: 60-75%+ on first run
+[17:41:37] ═════════════════════════════════════════════════════════════════
+[17:41:41] 
+[17:41:41]   Ollama is NOT running. Please:
+[17:41:41]   1. Open a new CMD window
+[17:41:41]   2. Type: ollama serve
+[17:41:41]   3. Wait until it says 'Listening on...'
+[17:41:41]   4. Come back and press Enter
+[17:41:41] 
+[17:41:53] ═════════════════════════════════════════════════════════════════
+[17:41:53]   AZALYST AUTONOMOUS RESEARCH TEAM
+[17:41:53]   Researcher: Olivia  |  Developer: Marcus
+[17:41:53]   Model: deepseek-r1:14b  |  Target: Win Rate >55.0%
+[17:41:53] ═════════════════════════════════════════════════════════════════
+[17:41:53]   NOTE: Signal direction flip already applied in walkforward_simulator.py
+[17:41:53]   Expected baseline win rate: 60-75%+ on first run
+[17:41:53] ═════════════════════════════════════════════════════════════════
+[17:41:57] 
+[17:41:57]   Ollama is NOT running. Please:
+[17:41:57]   1. Open a new CMD window
+[17:41:57]   2. Type: ollama serve
+[17:41:57]   3. Wait until it says 'Listening on...'
+[17:41:57]   4. Come back and press Enter
+[17:41:57] 
+[17:42:32] ═════════════════════════════════════════════════════════════════
+[17:42:32]   AZALYST AUTONOMOUS RESEARCH TEAM
+[17:42:32]   Researcher: Olivia  |  Developer: Marcus
+[17:42:32]   Model: deepseek-r1:14b  |  Target: Win Rate >55.0%
+[17:42:32] ═════════════════════════════════════════════════════════════════
+[17:42:32]   NOTE: Signal direction flip already applied in walkforward_simulator.py
+[17:42:32]   Expected baseline win rate: 60-75%+ on first run
+[17:42:32] ═════════════════════════════════════════════════════════════════
+[17:42:34] [OK] Ollama is running
+[17:42:34] 
+[START] Win Rate: 39.1%  Sharpe: -0.442  Trades: 294
+[17:42:34] 
+[PHASE 1] First run — testing signal direction fix...
+[17:42:34] [MARCUS (Developer)] Running walkforward_simulator.py...
+[17:42:34] [MARCUS (Developer)] Using sample universe: 25 cached symbols
+[17:43:04] [MARCUS (Developer)] Simulator still running... 0m 30s elapsed
+[17:43:34] [MARCUS (Developer)] Simulator still running... 1m 00s elapsed
+[17:44:36] ═════════════════════════════════════════════════════════════════
+[17:44:36]   AZALYST AUTONOMOUS RESEARCH TEAM
+[17:44:36]   Researcher: Olivia  |  Developer: Marcus
+[17:44:36]   Model: deepseek-r1:14b  |  Target: Win Rate >55.0%
+[17:44:36] ═════════════════════════════════════════════════════════════════
+[17:44:36]   NOTE: Signal direction flip already applied in walkforward_simulator.py
+[17:44:36]   Expected baseline win rate: 60-75%+ on first run
+[17:44:36] ═════════════════════════════════════════════════════════════════
+[17:44:39] [OK] Ollama is running
+[17:44:39] 
+[START] Win Rate: 34.8%  Sharpe: -1.891  Trades: 388
+[17:44:39] 
+[PHASE 1] First run — testing signal direction fix...
+[17:44:39] [MARCUS (Developer)] Running walkforward_simulator.py...
+[17:44:39] [MARCUS (Developer)] Using sample universe: 25 cached symbols
+[17:45:09] [MARCUS (Developer)] Simulator still running... 0m 30s elapsed
+[17:45:39] [MARCUS (Developer)] Simulator still running... 1m 00s elapsed
+[17:46:09] [MARCUS (Developer)] Simulator still running... 1m 30s elapsed
+[17:46:39] [MARCUS (Developer)] Simulator still running... 2m 00s elapsed
+[17:47:09] [MARCUS (Developer)] Simulator still running... 2m 30s elapsed
+[17:47:39] [MARCUS (Developer)] Simulator still running... 3m 00s elapsed
+[17:48:09] [MARCUS (Developer)] Simulator still running... 3m 30s elapsed
+[17:48:39] [MARCUS (Developer)] Simulator still running... 4m 00s elapsed
+[17:49:09] [MARCUS (Developer)] Simulator still running... 4m 30s elapsed
+[17:49:39] [MARCUS (Developer)] Simulator still running... 5m 00s elapsed
+[17:50:09] [MARCUS (Developer)] Simulator still running... 5m 30s elapsed
+[17:50:39] [MARCUS (Developer)] Simulator still running... 6m 00s elapsed
+[17:51:09] [MARCUS (Developer)] Simulator still running... 6m 30s elapsed
+[17:51:39] [MARCUS (Developer)] Simulator still running... 7m 00s elapsed
+[17:52:09] [MARCUS (Developer)] Simulator still running... 7m 30s elapsed
+[17:52:39] [MARCUS (Developer)] Simulator still running... 8m 00s elapsed
+[17:53:09] [MARCUS (Developer)] Simulator still running... 8m 30s elapsed
+[17:53:39] [MARCUS (Developer)] Simulator still running... 9m 00s elapsed
+[17:54:09] [MARCUS (Developer)] Simulator still running... 9m 30s elapsed
+[17:54:39] [MARCUS (Developer)] Simulator still running... 10m 00s elapsed
+[17:55:09] [MARCUS (Developer)] Simulator still running... 10m 30s elapsed
+[17:55:39] [MARCUS (Developer)] Simulator still running... 11m 00s elapsed
+[17:56:09] [MARCUS (Developer)] Simulator still running... 11m 30s elapsed
+[17:56:39] [MARCUS (Developer)] Simulator still running... 12m 00s elapsed
+[17:57:09] [MARCUS (Developer)] Simulator still running... 12m 30s elapsed
+[17:57:39] [MARCUS (Developer)] Simulator still running... 13m 00s elapsed
+[17:58:09] [MARCUS (Developer)] Simulator still running... 13m 30s elapsed
+[17:58:39] [MARCUS (Developer)] Simulator still running... 14m 00s elapsed
+[17:59:09] [MARCUS (Developer)] Simulator still running... 14m 30s elapsed

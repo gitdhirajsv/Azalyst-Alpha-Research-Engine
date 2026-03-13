@@ -1,0 +1,122 @@
+╔════════════════════════════════════════════════════════════════════════════╗
+║                    AZALYST FIX — QUICK REFERENCE CARD                     ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+
+WHAT YOU DOWNLOADED
+═══════════════════════════════════════════════════════════════════════════════
+
+✅ azalyst_autonomous_team_PATCHED.py   — Your patched team runner
+✅ walkforward_simulator.py              — Your patched simulator
+✅ repair_environment.py                 — Auto-repair script
+✅ VERIFY_AND_RUN.bat                    — Verification + launch script
+
+
+WHAT TO DO NOW
+═══════════════════════════════════════════════════════════════════════════════
+
+Step 1: Replace files in your project
+──────────────────────────────────────
+  Your project folder: D:\Personal Files\Azalyst Alpha Research Engine\
+  
+  Copy these files there (overwrite originals):
+    • azalyst_autonomous_team_PATCHED.py → rename to azalyst_autonomous_team.py
+    • walkforward_simulator.py (overwrite)
+
+
+Step 2: Open Windows CMD and navigate to project
+─────────────────────────────────────────────────
+  cd D:\Personal Files\Azalyst Alpha Research Engine
+
+
+Step 3: Run repair script (once)
+────────────────────────────────
+  python repair_environment.py
+  
+  Wait for: ✓ All checks passed!
+
+
+Step 4: Open NEW CMD windows for Ollama & Team
+───────────────────────────────────────────────
+  
+  CMD Window 1 (Ollama):
+    ollama serve
+    (Wait 5 seconds for startup)
+  
+  CMD Window 2 (Team):
+    VERIFY_AND_RUN.bat
+    (This verifies everything then runs the team)
+
+
+THAT'S IT! The team will run autonomously.
+
+
+IF ANYTHING FAILS
+═══════════════════════════════════════════════════════════════════════════════
+
+psutil error?
+  pip uninstall psutil -y
+  pip install psutil==5.9.8 --break-system-packages
+
+Ollama not found?
+  Make sure Ollama is running: ollama serve
+
+deepseek-r1:14b not loaded?
+  ollama pull deepseek-r1:14b
+  (Wait for ~8.3 GB download)
+
+Still getting encoding error?
+  Make sure you replaced the files (not just downloaded them)
+  Check: grep "encoding='utf-8'" azalyst_autonomous_team.py
+  Should show: Line 271 (in subprocess.run call)
+
+
+WHAT TO MONITOR
+═══════════════════════════════════════════════════════════════════════════════
+
+While running, watch these files:
+
+  📊 performance_metrics.csv
+     └─ Win rate, Sharpe ratio, max drawdown — should improve each iteration
+
+  📋 paper_trades.csv
+     └─ Your simulated trades — new rows added each run
+
+  📝 team_log.txt
+     └─ Full transcript of Olivia + Marcus conversation
+
+
+SUCCESS INDICATORS
+═══════════════════════════════════════════════════════════════════════════════
+
+✓ Progress bar shows without garbled text
+✓ No UnicodeDecodeError
+✓ No AttributeError about psutil.Process
+✓ Simulator completes (takes 3-5 min per iteration)
+✓ team_log.txt grows with conversation
+✓ Win rate improves over iterations (goal: 55%+)
+
+
+THE FIX IN 30 SECONDS
+═══════════════════════════════════════════════════════════════════════════════
+
+PROBLEM:
+  Parent process (team runner) couldn't decode child process's UTF-8 output
+
+SOLUTION:
+  Added 2 lines to subprocess.run():
+    encoding='utf-8',
+    errors='replace',
+
+RESULT:
+  ✓ UTF-8 characters work correctly
+  ✓ Progress bars display properly
+  ✓ No more encoding crashes
+
+
+═══════════════════════════════════════════════════════════════════════════════
+
+              Questions? Check COMPLETE_FIX_GUIDE.txt
+              Need help? Run VERIFY_AND_RUN.bat (does all checks)
+
+═══════════════════════════════════════════════════════════════════════════════

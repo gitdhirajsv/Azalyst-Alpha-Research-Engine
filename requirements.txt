@@ -1,0 +1,17 @@
+numpy
+pandas
+scikit-learn
+scipy
+statsmodels
+pyarrow
+polars
+duckdb
+lightgbm
+python-binance
+python-dotenv
+pytz
+requests
+websockets
+psutil
+sortedcontainers
+alphalens-reloaded
