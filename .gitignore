@@ -12,6 +12,7 @@ pipeline_checkpoints/
 azalyst_output/
 .azalyst_locks/
 .ipynb_checkpoints/
+.spyder_azalyst/
 
 # Logs
 *.log

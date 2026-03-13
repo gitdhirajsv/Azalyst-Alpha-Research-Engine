@@ -1,6 +1,6 @@
 # Azalyst Alpha Research Engine
 
-> An institutional-style quantitative research platform for crypto markets ? built as a personal project. Not a hedge fund. Not a financial product. Just a passion for systematic research.
+> An institutional-style quantitative research platform for crypto markets - built as a personal project. Not a hedge fund. Not a financial product. Just a passion for systematic research.
 
 ---
 
@@ -15,6 +15,12 @@
 Azalyst Alpha Research Engine is research infrastructure for systematic crypto market study. It is built to evaluate cross-sectional signals, neutralize obvious risk exposures, test mean-reversion and regime effects, train predictive models, and validate the resulting process with walk-forward simulation.
 
 The project is structured as a research environment rather than a product surface. It is designed for repeatable experimentation, auditability, and transparent methodology. The emphasis is on whether an observed effect survives disciplined validation, not on maximizing narrative appeal or alert volume.
+
+## Live Research Monitor
+
+The platform includes a local monitoring layer for long-running walk-forward experiments. The Spyder view below is generated from the same run artifacts that drive the autonomous workflow.
+
+![Azalyst Spyder Monitor](docs/assets/spyder_monitor_snapshot.svg)
 
 ## Research Scope
 
@@ -110,14 +116,22 @@ This mode starts:
 - the model warm-up process, and
 - the autonomous research team around the simulator.
 
+If you want the same autonomous backend with a Spyder-first monitoring surface instead of browser or notebook tabs, use:
+
+```text
+RUN_SPYDER_SHIFT_MONITOR.bat
+```
+
 ## Local Research Operations Layer
 
 The autonomous operating layer is local-first and built to support long-running experiments.
 
 - `RUN_SHIFT_MONITOR.bat` launches the monitored workflow.
+- `RUN_SPYDER_SHIFT_MONITOR.bat` launches the Spyder-first monitored workflow.
 - `azalyst_autonomous_team.py` manages the multi-agent local research loop.
 - `monitor_dashboard.py` serves the live dashboard at `http://127.0.0.1:8080`.
 - `Azalyst_Live_Monitor.ipynb` provides a notebook-based monitoring surface.
+- `spyder_live_monitor.py` renders live charts, metrics, and log tails inside Spyder.
 - `ensure_jupyter_monitor.py` reconnects or opens the notebook monitor.
 - `cleanup_locks.py` clears stale launcher locks without deleting checkpoints.
 

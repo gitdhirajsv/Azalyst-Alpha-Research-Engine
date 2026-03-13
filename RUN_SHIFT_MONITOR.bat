@@ -8,6 +8,8 @@ cd /d "%~dp0"
 
 set "DRY_RUN=%AZALYST_DRY_RUN%"
 set "PYTHON_EXE=python"
+set "SKIP_BROWSER_MONITOR=%AZALYST_SKIP_BROWSER_MONITOR%"
+set "SKIP_NOTEBOOK_MONITOR=%AZALYST_SKIP_NOTEBOOK_MONITOR%"
 where %PYTHON_EXE% >nul 2>nul
 if errorlevel 1 (
     set "PYTHON_EXE=py"
@@ -30,22 +32,30 @@ echo  ============================================================
 echo.
 
 echo  [1/2] Starting monitor...
-if "%DRY_RUN%"=="1" (
-    echo    DRY RUN: start monitor_dashboard.py and open http://127.0.0.1:8080
+if "%SKIP_BROWSER_MONITOR%"=="1" (
+    echo    Browser monitor disabled for this launcher.
 ) else (
-    start "Azalyst Live Monitor" /min cmd /c "cd /d ""%~dp0"" && %PYTHON_EXE% monitor_dashboard.py"
-    timeout /t 2 /nobreak >nul
-    start "" "http://127.0.0.1:8080"
-)
-if exist "ensure_jupyter_monitor.py" (
-    echo    Opening Azalyst notebook monitor...
     if "%DRY_RUN%"=="1" (
-        echo    DRY RUN: %PYTHON_EXE% ensure_jupyter_monitor.py
+        echo    DRY RUN: start monitor_dashboard.py and open http://127.0.0.1:8080
     ) else (
-        %PYTHON_EXE% ensure_jupyter_monitor.py
+        start "Azalyst Live Monitor" /min cmd /c "cd /d ""%~dp0"" && %PYTHON_EXE% monitor_dashboard.py"
+        timeout /t 2 /nobreak >nul
+        start "" "http://127.0.0.1:8080"
     )
+)
+if "%SKIP_NOTEBOOK_MONITOR%"=="1" (
+    echo    Jupyter monitor disabled for this launcher.
 ) else (
-    echo    Notebook helper missing; use 127.0.0.1:8080 to view the monitor.
+    if exist "ensure_jupyter_monitor.py" (
+        echo    Opening Azalyst notebook monitor...
+        if "%DRY_RUN%"=="1" (
+            echo    DRY RUN: %PYTHON_EXE% ensure_jupyter_monitor.py
+        ) else (
+            %PYTHON_EXE% ensure_jupyter_monitor.py
+        )
+    ) else (
+        echo    Notebook helper missing; use 127.0.0.1:8080 to view the monitor.
+    )
 )
 
 echo  [2/2] Starting autonomous agent...
