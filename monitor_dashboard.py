@@ -110,19 +110,33 @@ class PipelineMonitor:
         }
 
 
-def build_dashboard_html(status: dict) -> str:
+def build_dashboard_html(
+    status: dict,
+    auto_refresh_seconds: int | None = 5,
+    context_label: str = "browser",
+) -> str:
     metrics = status["last_metrics"]
     log_text = html.escape("\n".join(status["recent_log_lines"]) or "No log output yet.")
     run_label = "RUNNING" if status["running"] else "STOPPED"
     run_class = "running" if status["running"] else "stopped"
+    refresh_meta = (
+        f'  <meta http-equiv="refresh" content="{auto_refresh_seconds}">\n'
+        if auto_refresh_seconds
+        else ""
+    )
+    refresh_message = (
+        f"Auto-refresh every {auto_refresh_seconds} seconds. Open this while the autonomous team is running."
+        if auto_refresh_seconds
+        else "Notebook-safe live view. Refresh is driven by the running cell, not by page reloads."
+    )
+    title_suffix = "Notebook" if context_label == "notebook" else "Live Monitor"
 
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="refresh" content="5">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Azalyst Live Monitor</title>
+{refresh_meta}  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Azalyst {title_suffix}</title>
   <style>
     :root {{
       --bg: #0b1220;
@@ -258,7 +272,7 @@ def build_dashboard_html(status: dict) -> str:
     <div class="hero">
       <div>
         <h1>Azalyst Live Monitor</h1>
-        <p>Auto-refresh every 5 seconds. Open this while the autonomous team is running.</p>
+        <p>{html.escape(refresh_message)}</p>
       </div>
       <div class="badge {run_class}">{run_label}</div>
     </div>
