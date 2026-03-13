@@ -132,7 +132,7 @@ Place your Binance 5m parquet files in the `data/` folder.
 Schema: `timestamp | open | high | low | close | volume`
 
 ### 3. Run the Pipeline
-**Windows:** Double-click `RUN_AZALYST.bat`
+**Windows:** Double-click `RUN_SHIFT_MONITOR.bat`
 **Command Line:**
 ```bash
 python azalyst_orchestrator.py --data-dir ./data --out-dir ./azalyst_output

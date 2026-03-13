@@ -46,8 +46,10 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import atexit
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 
@@ -372,12 +374,13 @@ class Developer:
             log(f"Simulator already running under PID {pid} (started {started}) - skipping duplicate launch.", self.name)
             return False
 
-        cmd = [sys.executable, "walkforward_simulator.py",
+        cmd = [sys.executable, "-u", "walkforward_simulator.py",
                "--data-dir", "./data",
                "--feature-dir", "./feature_cache"]
         if no_resume:
             cmd.append("--no-resume")
         env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"
         if coins:
             env["AZALYST_TEST_COINS"] = ",".join(coins)
             log(f"Using sample universe: {len(coins)} cached symbols", self.name)
@@ -387,10 +390,11 @@ class Developer:
                 cmd,
                 cwd=project_path,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
                 encoding='utf-8',
                 errors='replace',
+                bufsize=1,
                 env=env
             )
             update_lock(SIM_LOCK, {
@@ -399,38 +403,51 @@ class Developer:
                 "label": "walkforward_simulator",
                 "created_at": datetime.now().isoformat(timespec="seconds"),
             })
+            output_tail = deque(maxlen=80)
+
+            def _stream_output():
+                if proc.stdout is None:
+                    return
+                for raw_line in proc.stdout:
+                    line = raw_line.rstrip()
+                    if not line:
+                        continue
+                    output_tail.append(line)
+                    log(f"  {line}", self.name)
+
+            stream_thread = threading.Thread(target=_stream_output, daemon=True)
+            stream_thread.start()
             start_ts = time.time()
+            next_heartbeat = start_ts + 30
             while True:
-                try:
-                    stdout, stderr = proc.communicate(timeout=30)
+                if proc.poll() is not None:
                     break
-                except subprocess.TimeoutExpired:
-                    elapsed = int(time.time() - start_ts)
-                    if elapsed >= 7200:
-                        proc.kill()
-                        stdout, stderr = proc.communicate()
-                        raise subprocess.TimeoutExpired(cmd, 7200, output=stdout, stderr=stderr)
+                time.sleep(1)
+                now = time.time()
+                elapsed = int(now - start_ts)
+                if elapsed >= 7200:
+                    proc.kill()
+                    stream_thread.join(timeout=5)
+                    raise subprocess.TimeoutExpired(cmd, 7200, output="\n".join(output_tail), stderr=None)
+                if now >= next_heartbeat:
+                    next_heartbeat = now + 30
                     log(
                         f"Simulator still running... {elapsed // 60}m {elapsed % 60:02d}s elapsed",
                         self.name,
                     )
+            stream_thread.join(timeout=5)
+            stdout_tail = "\n".join(output_tail)
             if proc.returncode == 0:
                 log("Simulator finished successfully", self.name)
-                if stdout:
-                    log(f"  STDOUT tail:\n{stdout[-1200:]}", self.name)
             else:
                 log(f"Simulator error (code {proc.returncode})", self.name)
-                if stdout:
-                    log(f"  STDOUT tail:\n{stdout[-1200:]}", self.name)
-                if stderr:
-                    log(f"  STDERR tail:\n{stderr[-1200:]}", self.name)
+                if stdout_tail:
+                    log(f"  Recent output:\n{stdout_tail[-1200:]}", self.name)
             return proc.returncode == 0
         except subprocess.TimeoutExpired as e:
             log("Simulator timed out after 120 min", self.name)
             if e.output:
                 log(f"  STDOUT tail:\n{e.output[-1200:]}", self.name)
-            if e.stderr:
-                log(f"  STDERR tail:\n{e.stderr[-1200:]}", self.name)
             return False
         except Exception as e:
             log(f"Subprocess error: {e}", self.name)

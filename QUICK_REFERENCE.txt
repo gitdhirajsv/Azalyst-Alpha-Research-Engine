@@ -9,7 +9,7 @@ WHAT YOU DOWNLOADED
 ✅ azalyst_autonomous_team_PATCHED.py   — Your patched team runner
 ✅ walkforward_simulator.py              — Your patched simulator
 ✅ repair_environment.py                 — Auto-repair script
-✅ VERIFY_AND_RUN.bat                    — Verification + launch script
+✅ RUN_SHIFT_MONITOR.bat                 — One-click monitor + launch script
 
 
 WHAT TO DO NOW
@@ -36,16 +36,11 @@ Step 3: Run repair script (once)
   Wait for: ✓ All checks passed!
 
 
-Step 4: Open NEW CMD windows for Ollama & Team
+Step 4: Run the single launcher
 ───────────────────────────────────────────────
   
-  CMD Window 1 (Ollama):
-    ollama serve
-    (Wait 5 seconds for startup)
-  
-  CMD Window 2 (Team):
-    VERIFY_AND_RUN.bat
-    (This verifies everything then runs the team)
+  RUN_SHIFT_MONITOR.bat
+  (This starts the monitor, warms Ollama, and runs the team)
 
 
 THAT'S IT! The team will run autonomously.
@@ -117,6 +112,6 @@ RESULT:
 ═══════════════════════════════════════════════════════════════════════════════
 
               Questions? Check COMPLETE_FIX_GUIDE.txt
-              Need help? Run VERIFY_AND_RUN.bat (does all checks)
+              Need help? Run RUN_SHIFT_MONITOR.bat
 
 ═══════════════════════════════════════════════════════════════════════════════

@@ -41,7 +41,12 @@ from __future__ import annotations
 
 import io
 import sys
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+sys.stdout = io.TextIOWrapper(
+    sys.stdout.buffer,
+    encoding='utf-8',
+    errors='replace',
+    write_through=True,
+)
 
 import argparse
 import csv
