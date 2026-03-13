@@ -1,13 +1,17 @@
-# Module Reference (Branch3 snapshot)
+﻿# Module Reference
 
 | File | Purpose |
-|---|---|
-| `azalyst_orchestrator.py` | Master pipeline that chains together all 8 stages end-to-end. |
-| `azalyst_validator.py` | Institutional validation (style neutralization, Fama-MacBeth, BH correction). |
-| `azalyst_factors_v2.py` | Factor library v2 with 35 crypto-native alpha signals. |
-| `azalyst_ml.py` | Fast ML module (LightGBM + CUDA) plus regime detection and pump detection. |
-| `azalyst_engine.py` | Data loader, IC research, and core backtest engine. |
-| `azalyst_data.py` | Polars + DuckDB analytics helper layer for high-performance data processing. |
-| `azalyst_statarb.py` | Engle-Granger cointegration scanner for statistical arbitrage pairs. |
-| `azalyst_risk.py` | Portfolio optimization (MVO, HRP, Black-Litterman). |
+| --- | --- |
+| `azalyst_orchestrator.py` | Master pipeline that chains the core research stages end to end. |
+| `azalyst_validator.py` | Institutional validation: style neutralization, Fama-MacBeth, and BH correction. |
+| `azalyst_factors_v2.py` | Factor library with 35 crypto-native alpha signals. |
+| `azalyst_ml.py` | ML layer with LightGBM, regime detection, and predictive models. |
+| `azalyst_engine.py` | Data loading, IC research, and core backtest utilities. |
+| `azalyst_data.py` | Polars and DuckDB analytics layer for high-performance processing. |
+| `azalyst_statarb.py` | Cointegration scanner for statistical arbitrage research. |
+| `azalyst_risk.py` | Portfolio optimization modules including MVO, HRP, and Black-Litterman. |
+| `azalyst_autonomous_team.py` | Local multi-agent autonomous runner. |
+| `walkforward_simulator.py` | Rolling walk-forward simulation with checkpoint support. |
+| `monitor_dashboard.py` | Browser-based live monitor. |
+| `Azalyst_Live_Monitor.ipynb` | Jupyter notebook monitor. |
 | `azalyst_output/` | Signals, IC results, paper trades, and performance reports. |

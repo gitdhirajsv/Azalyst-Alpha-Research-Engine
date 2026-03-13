@@ -1,10 +1,17 @@
-# Branch3 Docs
+﻿# Autonomous Stack Docs
 
-This folder mirrors the documentation snapshot that lives on `branch3` of the public repo. Think of it as a distilled, narrative copy of the architecture and research flow—perfect for sharing with a peer or pointing new contributors to the branch-specific write-up.
+This directory contains the portable documentation bundle for the autonomous Azalyst stack.
 
-Main sections:
-- `Architecture.md` explains how the data, factor, validation, and ML layers connect.
-- `ResearchWorkflow.md` steps through the six-stage research pipeline with both "technically" and "plain English" explanations.
-- `ModuleIndex.md` lists the key Python entry points that power each stage.
-- `Quickstart.md` preserves the branch3 quick-start guide for setting up dependencies, dropping in data, and running the main orchestrator.
-- `Disclaimer.md` reiterates the personal-research notice from branch3.
+It complements the main repository README with shorter reference docs focused on architecture, workflow, quickstart, and operating notes for the local research environment.
+
+Contents:
+- `Architecture.md` - system layout across data, factors, validation, ML, stat-arb, and outputs.
+- `ResearchWorkflow.md` - the six-stage research process from ingestion to walk-forward simulation.
+- `ModuleIndex.md` - key Python modules and their responsibilities.
+- `Quickstart.md` - setup and launch instructions, including the monitor-driven workflow.
+- `Disclaimer.md` - personal research disclaimer.
+
+Recommended entry points:
+- Start with the repository `README.md` for the full platform overview.
+- Use `Quickstart.md` when setting up a fresh machine.
+- Use `Architecture.md` and `ResearchWorkflow.md` for contributor onboarding or technical walkthroughs.

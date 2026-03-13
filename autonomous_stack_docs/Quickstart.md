@@ -1,22 +1,51 @@
-# Quickstart (branch3 edition)
+﻿# Quickstart (Autonomous Monitor Edition)
 
-1. **Install Dependencies**
+## 1. Install Python dependencies
 
 ```bash
-pip install pandas numpy scipy scikit-learn lightgbm statsmodels polars duckdb pyarrow
+pip install -r requirements.txt
 ```
 
-> For maximum throughput, build LightGBM with CUDA support.
+## 2. Optional: enable notebook monitoring
 
-2. **Add Your Data**
+```bash
+pip install notebook ipykernel
+```
+
+## 3. Install and prepare Ollama
+
+```bash
+ollama pull deepseek-r1:14b
+```
+
+## 4. Add market data
 
 Drop Binance 5-minute parquet files into `data/`.
-Required schema: `timestamp | open | high | low | close | volume`.
 
-3. **Run the Pipeline**
+Required schema:
 
-- Windows: double-click `RUN_AZALYST.bat`.
-- Command line:
+```text
+timestamp | open | high | low | close | volume
+```
+
+## 5. Launch the platform
+
+### Windows one-click launcher
+
+Run:
+
+```text
+RUN_SHIFT_MONITOR.bat
+```
+
+This launcher:
+- starts the local dashboard,
+- opens the Jupyter notebook monitor when available,
+- reconnects to Ollama,
+- warms the model, and
+- starts the autonomous research team.
+
+### Manual pipeline
 
 ```bash
 python azalyst_orchestrator.py --data-dir ./data --out-dir ./azalyst_output

@@ -1,3 +1,3 @@
-# Disclaimer (branch3 copy)
+﻿# Disclaimer
 
-This is a personal research and learning project. Azalyst is not a financial service, and nothing documented here is financial advice. Users execute the pipeline entirely at their own risk.
+This is a personal research and learning project. Azalyst is not a financial service, not an investment product, and not financial advice. Users execute the pipeline entirely at their own risk.

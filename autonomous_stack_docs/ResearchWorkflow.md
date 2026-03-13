@@ -1,25 +1,25 @@
-# Research Workflow (Branch3 flavor)
+﻿# Research Workflow
 
-## Step 1 — Data Loading
-- **Technically:** Parquet ingestion runs in parallel via `ProcessPoolExecutor`. Polars builds wide OHLCV panels while DuckDB provides fast, cross-sectional SQL scans; timestamps are normalized and resampled (5m → 1h) as needed.
-- **In Plain English:** Reads every Binance 5-minute candle across 400+ symbols for 3 years and organizes the history into a massive, queryable table.
+## Step 1 - Data Loading
+- **Technically:** Parallel parquet ingestion runs via `ProcessPoolExecutor`. Polars builds wide OHLCV panels while DuckDB handles fast cross-sectional scans and timestamp normalization.
+- **In Plain English:** The engine turns raw Binance candles into a research-grade market panel.
 
-## Step 2 — Factor Research (35 Signals)
-- **Technically:** `FactorEngineV2` produces 35 cross-sectional factors. `CrossSectionalAnalyser` calculates Spearman ICs (1h–1w), ICIR, Newey-West t-stats, and decay curves to rank signal durability.
-- **In Plain English:** Tests momentum, reversal, volatility, liquidity, microstructure, and technical hypotheses to find signals that consistently beat randomness.
+## Step 2 - Factor Research (35 Signals)
+- **Technically:** `FactorEngineV2` produces 35 cross-sectional factors. `CrossSectionalAnalyser` evaluates Spearman IC, ICIR, Newey-West t-stats, and decay from 1 hour to 1 week.
+- **In Plain English:** The platform tests whether momentum, reversal, volatility, liquidity, and microstructure effects actually persist.
 
-## Step 3 — Institutional Validation
-- **Technically:** `FactorValidator` neutralizes BTC beta, size, and liquidity; runs Fama-MacBeth regressions and applies the Benjamini-Hochberg false discovery rate correction.
-- **In Plain English:** Strips out market noise and statistical flukes so that only truly independent alpha survives.
+## Step 3 - Institutional Validation
+- **Technically:** `FactorValidator` neutralizes BTC beta, size, and liquidity effects, then applies Fama-MacBeth regressions with Benjamini-Hochberg false discovery rate control.
+- **In Plain English:** Signals must survive after the obvious market effects are stripped away.
 
-## Step 4 — Statistical Arbitrage (Pairs Trading)
-- **Technically:** Runs Engle-Granger cointegration across symbol pairs, validating with Hurst and half-life metrics; live z-scores track mean reversion triggers.
-- **In Plain English:** Finds coin pairs that normally move together and bets on the gap getting fixed—market neutral trades ideal for risk control.
+## Step 4 - Statistical Arbitrage
+- **Technically:** Engle-Granger cointegration testing, Hurst validation, half-life estimation, and live spread z-score monitoring.
+- **In Plain English:** The engine finds pairs that should move together and watches for temporary dislocations.
 
-## Step 5 — Machine Learning v4.0
-- **Technically:** LightGBM with CUDA trains via purged time-series CV. PumpDumpDetector spots pump patterns, ReturnPredictor forecasts the next 4h direction, RegimeDetector uses a 4-state GMM on BTC/breadth.
-- **In Plain English:** Trade signals learn over time and adapt to Bull/Bear/High-Vol/Quiet regimes, all while purging lookahead bias.
+## Step 5 - Machine Learning Layer
+- **Technically:** LightGBM with optional CUDA acceleration trains with purged time-series CV. Core models include `PumpDumpDetector`, `ReturnPredictor`, and a four-state `RegimeDetector`.
+- **In Plain English:** The research stack learns changing market structure without leaking future information.
 
-## Step 6 — Walk-Forward Simulation
-- **Technically:** Rolling-window simulation retrains every 30 days; scalers fit only on train data; trades execute at the next bar’s open with 0.1% taker fees.
-- **In Plain English:** The engine replays history like a time machine—train on a year, test the next month, slide forward, repeat—mirroring live trading.
+## Step 6 - Walk-Forward Simulation
+- **Technically:** Rolling train-test windows retrain every 30 days, fit scalers only on training data, and simulate entries at the next bar open with fees and checkpoints.
+- **In Plain English:** The platform replays history in a live-like sequence rather than relying on a static backtest.

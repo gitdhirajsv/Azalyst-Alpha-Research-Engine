@@ -1,153 +1,260 @@
-# Azalyst Alpha Research Engine
+﻿# Azalyst Alpha Research Engine
 
-> **An institutional-style quantitative research platform for crypto markets — built as a personal project.**
-> Not a hedge fund. Not a financial product. Just a passion for systematic research.
+> Institutional-style quantitative research infrastructure for crypto markets.
+> Built as a personal research platform for systematic signal discovery, validation, simulation, and autonomous monitoring.
+>
+> Not a hedge fund. Not a brokerage. Not financial advice.
 
 ---
 
-![Python](https://img.shields.io/badge/Python-3.10+-blue?style=flat-square&logo=python)
+![Python](https://img.shields.io/badge/Python-3.10%2B-blue?style=flat-square&logo=python)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
 ![Status](https://img.shields.io/badge/Status-Active%20Research-brightgreen?style=flat-square)
 ![Factors](https://img.shields.io/badge/Factors-35%20Crypto--Native-red?style=flat-square)
-![ML](https://img.shields.io/badge/ML-LightGBM%20%2B%20CUDA%20v4.0-blueviolet?style=flat-square)
+![ML](https://img.shields.io/badge/ML-LightGBM%20%2B%20CUDA-blueviolet?style=flat-square)
+![Ops](https://img.shields.io/badge/Ops-Ollama%20%2B%20Jupyter-orange?style=flat-square)
 
----
+## Executive Overview
 
-## What Is This?
+Azalyst is a full-stack quantitative research environment for crypto markets. The platform ingests multi-year Binance OHLCV data, builds cross-sectional factor libraries, neutralizes systematic exposures, evaluates statistical arbitrage opportunities, trains regime-aware machine learning models, and validates everything with walk-forward simulation.
 
-Most people look at crypto charts and guess. This project tries to do something different — **study the market like a professional quant researcher would.**
+The goal is simple: treat crypto research with the discipline of an institutional quant workflow rather than chart-based intuition.
 
-The Azalyst Alpha Research Engine takes 3 years of Binance 5-minute OHLCV data across 400+ coins and runs it through a full institutional-style research pipeline. It identifies persistent signals, validates them against systematic risk, and fuses them into a single ranked alpha signal per coin.
+## What the Platform Does
 
----
+- Ingests large universes of Binance 5-minute parquet data across hundreds of symbols.
+- Builds 35 cross-sectional crypto-native factors spanning momentum, reversal, volatility, liquidity, microstructure, and technical structure.
+- Applies institutional validation, including style neutralization, Fama-MacBeth cross-sectional regressions, and false discovery rate control.
+- Scans for cointegrated pairs and mean-reversion opportunities.
+- Trains LightGBM-based predictive models with purged time-series cross-validation and regime classification.
+- Replays the strategy with rolling walk-forward simulation, checkpointing, and performance logging.
+- Provides an autonomous local operating layer powered by Ollama, a live dashboard, and a Jupyter notebook monitor.
 
-## Architecture
+## Research Architecture
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                    AZALYST ALPHA RESEARCH ENGINE                 │
-│                                                                  │
-│  ┌──────────────┐    ┌──────────────────┐    ┌───────────────┐   │
-│  │  DATA LAYER  │───▶│  FACTOR ENGINE v2│───▶│  VALIDATION   │   │
-│  │  Polars +    │    │  35 factors      │    │  Style Neut.  │   │
-│  │  DuckDB      │    │  Cross-section   │    │  Fama-MacBeth │   │
-│  └──────────────┘    └──────────────────┘    └───────────────┘   │
-│          │                                          │            │
-│          ▼                                          ▼            │
-│  ┌──────────────┐    ┌──────────────────┐    ┌───────────────┐   │
-│  │   STATARB    │    │   REGIME DETECT  │    │   ML SCORING  │   │
-│  │ Cointegration│    │   GMM + Breadth  │    │   LGBM + CUDA │   │
-│  │ Pairs Engine │    │   BTC Microstr.  │    │   Pump/Return │   │
-│  └──────────────┘    └──────────────────┘    └───────────────┘   │
-│          │                    │                       │          │
-│          └────────────────────┴───────────────────────┘          │
-│                               ▼                                  │
-│                   ┌───────────────────────┐                      │
-│                   │    SIGNAL COMBINER    │                      │
-│                   │   Regime-adaptive     │                      │
-│                   │   weighted fusion     │                      │
-│                   └───────────────────────┘                      │
-│                               ▼                                  │
-│                   ┌───────────────────────┐                      │
-│                   │      signals.csv      │                      │
-│                   │   Ranked per symbol   │                      │
-│                   └───────────────────────┘                      │
-└──────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    A["Market Data Layer\nPolars + DuckDB + Parquet"] --> B["Factor Engine v2\n35 cross-sectional factors"]
+    B --> C["Institutional Validation\nStyle neutralization + Fama-MacBeth + BH correction"]
+    A --> D["Statistical Arbitrage\nCointegration + Hurst + half-life"]
+    A --> E["Regime Detection\nBTC structure + breadth + GMM"]
+    B --> F["ML Scoring\nLightGBM + purged CV"]
+    E --> F
+    C --> G["Signal Combiner\nRegime-aware weighted fusion"]
+    D --> G
+    F --> G
+    G --> H["Research Outputs\nsignals.csv + reports + simulations"]
+    H --> I["Autonomous Ops Layer\nOllama + live dashboard + Jupyter monitor"]
 ```
 
----
+## Research Workflow
 
-## How It Works — Step by Step
+### 1. Data Loading
 
-### Step 1 — Data Loading
-**Technically:** Parallel parquet ingestion via `ProcessPoolExecutor`. Builds wide close/volume panels using Polars lazy scanning and DuckDB for cross-sectional SQL queries. Handles timestamp normalization and optional resampling (5min → 1H).
+**Technical view**
+- Parallel parquet ingestion via `ProcessPoolExecutor`.
+- Wide close and volume panels built with Polars lazy scans and DuckDB cross-sectional queries.
+- Timestamp normalization and optional resampling from 5-minute to higher intervals.
 
-**In Plain English:** It reads all your Binance price files and organizes them into a giant table — every coin, every 5-minute candle, for 3 years. It does this in parallel for speed.
+**Practical view**
+- Reads the raw Binance history and turns it into a research-ready market panel for every downstream component.
 
-### Step 2 — Factor Research (The v2 Library: 35 Signals)
-**Technically:** `FactorEngineV2` computes 35 cross-sectional quantitative factors. The `CrossSectionalAnalyser` computes Spearman rank IC between each factor and forward returns (1H, 4H, 1D, 3D, 1W) with ICIR, Newey-West corrected t-stats, and decay curves.
+### 2. Factor Research
 
-**In Plain English:** It tests 35 different signals — things like "did coins that went up strongly yesterday keep going up?" or "did unusual volume predict a big move?" Only signals that pass statistical significance tests are trusted.
+**Technical view**
+- `FactorEngineV2` computes 35 cross-sectional factors.
+- `CrossSectionalAnalyser` measures Spearman IC, ICIR, Newey-West adjusted t-stats, and decay across forward horizons from 1 hour to 1 week.
 
-| Category | Factors | What It Looks For |
-|---|---|---|
-| **Momentum** | MOM_1H → MOM_30D, OVERNIGHT | Coins continuing in the same direction |
-| **Reversal** | REV_1H, REV_4H, REV_1D | Coins bouncing back after sharp moves |
-| **Volatility** | DOWNVOL_1W, RVOL_1D, VOL_OF_VOL | Risk premiums and downside deviation |
-| **Liquidity** | AMIHUD, CORWIN_SCHULTZ, TURNOVER | Ease of trading and taker pressure |
-| **Microstructure**| MAX_RET, SKEW_1W, KURT_1W, BTC_BETA | Hidden patterns and systematic risk |
-| **Technical** | TREND_48, BB_POS, RSI_RANK, MA_SLOPE | Classic patterns, ranked cross-sectionally |
+**Practical view**
+- Tests whether ideas such as momentum persistence, mean reversion, liquidity stress, or volatility premia hold up across the full universe.
 
-### Step 3 — Institutional Validation
-**Technically:** `FactorValidator` performs Style Neutralization to remove BTC-beta, Size (Market Cap), and Liquidity tiers from returns. It then runs Fama-MacBeth regressions and applies Benjamini-Hochberg correction to control the False Discovery Rate.
+| Factor family | Examples | Research objective |
+| --- | --- | --- |
+| Momentum | `MOM_1H` to `MOM_30D`, `OVERNIGHT` | Persistence of relative strength |
+| Reversal | `REV_1H`, `REV_4H`, `REV_1D` | Short-horizon snapback behavior |
+| Volatility | `DOWNVOL_1W`, `RVOL_1D`, `VOL_OF_VOL` | Risk premia and downside asymmetry |
+| Liquidity | `AMIHUD`, `CORWIN_SCHULTZ`, `TURNOVER` | Trading frictions and participation |
+| Microstructure | `MAX_RET`, `SKEW_1W`, `KURT_1W`, `BTC_BETA` | Hidden structure and systematic dependency |
+| Technical | `TREND_48`, `BB_POS`, `RSI_RANK`, `MA_SLOPE` | Ranked classical patterns |
 
-**In Plain English:** Raw signals are often just BTC in disguise. This step strips away the market "noise" to find the TRUE unique alpha of a coin. It's the standard used by top quant hedge funds to avoid overfitting.
+### 3. Institutional Validation
 
-### Step 4 — Statistical Arbitrage (Pairs Trading)
-**Technically:** Engle-Granger two-step cointegration test across all symbol pairs. Validated with Hurst exponent and half-life of mean reversion. Live z-scores are computed for mean-reverting spreads.
+**Technical view**
+- `FactorValidator` neutralizes BTC beta, size, and liquidity exposures.
+- Cross-sectional Fama-MacBeth regressions measure whether alpha survives after de-biasing.
+- Benjamini-Hochberg correction controls the false discovery rate.
 
-**In Plain English:** It finds coins that are linked — when one goes up, the other usually follows. When they diverge, the engine flags a trade for the gap to close, which is a market-neutral strategy.
+**Practical view**
+- Filters out signals that are only disguised beta, size, or noise.
 
-### Step 5 — Machine Learning v4.0 (Fast Training)
-**Technically:** Migrated to LightGBM with NVIDIA CUDA support. Features purged time-series cross-validation (Purged CV) to eliminate lookahead bias.
-*   **PumpDumpDetector**: AUC-optimized model to flag coins with pre-pump signatures.
-*   **ReturnPredictor**: Predicts 4H forward return direction.
-*   **RegimeDetector**: 4-component GMM on BTC and market breadth to classify Bull, Bear, High Vol, or Quiet markets.
+### 4. Statistical Arbitrage
 
-**In Plain English:** High-speed models (trained in ~5-15 mins) learn the "fingerprints" of price moves. The engine automatically shifts its strategy based on the market regime it detects.
+**Technical view**
+- Engle-Granger two-step cointegration tests across symbol pairs.
+- Hurst exponent and half-life validation for mean-reverting spreads.
+- Live z-score monitoring for divergence and convergence setups.
 
-### Step 6 — Walk-Forward Simulation (The Time Machine Test)
-**Technically:** Rolling window walk-forward with retraining every 30 days. Scaler fitted exclusively on training rows. Entries simulated at next bar's open with 0.1% taker fees applied.
+**Practical view**
+- Looks for linked assets that temporarily drift apart and may revert.
 
-**In Plain English:** This is a backtest that replays history. It learns on one year of data, predicts the next 30 days, and then "slides" forward to repeat the process, just as it would in real life.
+### 5. Machine Learning Layer
 
----
+**Technical view**
+- `azalyst_ml.py` uses LightGBM with optional CUDA acceleration.
+- Purged time-series cross-validation reduces lookahead bias.
+- Core models include:
+  - `PumpDumpDetector`: classification model for pump-like preconditions.
+  - `ReturnPredictor`: directional 4-hour forward return model.
+  - `RegimeDetector`: Gaussian Mixture Model for Bull, Bear, High-Vol, and Quiet regimes.
 
-## Module Reference
+**Practical view**
+- Lets the research stack adapt to changing market structure instead of relying on a single static rule set.
 
-| File | Description |
-|---|---|
-| `azalyst_orchestrator.py` | Master pipeline — chains all 8 stages end to end. |
-| `azalyst_validator.py` | **Institutional Validation** (Style Neut, Fama-MacBeth, BH Correction). |
-| `azalyst_factors_v2.py` | **Factor Library v2** with 35 crypto-native alpha signals. |
-| `azalyst_ml.py` | **Fast ML Module** (LightGBM + CUDA) and Regime Detection. |
-| `azalyst_engine.py` | DataLoader, IC Research, and core Backtest Engine. |
-| `azalyst_data.py` | Polars/DuckDB analytics layer for high-performance data processing. |
-| `azalyst_statarb.py` | Engle-Granger Cointegration scanner for statistical arbitrage. |
-| `azalyst_risk.py` | MVO, HRP, and Black-Litterman portfolio optimization. |
-| `azalyst_output/` | Signals, IC results, paper trades, and performance reports. |
+### 6. Walk-Forward Simulation
 
----
+**Technical view**
+- Rolling train-test windows with retraining every 30 days.
+- Feature scaling fit only on training rows.
+- Entries simulated at the next bar open with taker fees and checkpoint-based resume support.
+
+**Practical view**
+- Replays the strategy as if it had been running live through history.
+
+## Autonomous Research Stack
+
+Azalyst includes a local operating layer for hands-off runs and real-time visibility.
+
+### Components
+
+- `RUN_SHIFT_MONITOR.bat`: one-click launcher for the monitor and autonomous team.
+- `azalyst_autonomous_team.py`: local multi-agent research runner with lock protection and live simulator streaming.
+- `monitor_dashboard.py`: local browser dashboard at `http://127.0.0.1:8080`.
+- `Azalyst_Live_Monitor.ipynb`: Jupyter notebook view for live monitoring.
+- `ensure_jupyter_monitor.py`: starts or reconnects to the notebook server automatically.
+- `cleanup_locks.py`: clears stale launcher locks without touching checkpoints.
+- Ollama + `deepseek-r1:14b`: local LLM runtime used by the autonomous research workflow.
+
+### What You See During a Run
+
+- Live simulator status in the main console.
+- Real ML training progress streamed from the child process.
+- Browser dashboard with process health, checkpoint state, latest metrics, and log tail.
+- Jupyter notebook monitor for shift-style viewing.
+- Resume support through `checkpoint.json` if a run is interrupted.
+
+## Repository Map
+
+| Path | Purpose |
+| --- | --- |
+| `azalyst_orchestrator.py` | End-to-end research pipeline entry point. |
+| `azalyst_data.py` | High-performance Polars and DuckDB data layer. |
+| `azalyst_factors_v2.py` | Factor library with cross-sectional crypto signals. |
+| `azalyst_validator.py` | Style neutralization and institutional validation. |
+| `azalyst_statarb.py` | Cointegration and mean-reversion research. |
+| `azalyst_ml.py` | ML models, feature engineering, and regime logic. |
+| `azalyst_signal_combiner.py` | Weighted signal fusion layer. |
+| `walkforward_simulator.py` | Rolling walk-forward backtest and checkpointing. |
+| `azalyst_autonomous_team.py` | Autonomous local research runner. |
+| `monitor_dashboard.py` | Live browser monitor server. |
+| `Azalyst_Live_Monitor.ipynb` | Notebook-based live monitor. |
+| `RUN_SHIFT_MONITOR.bat` | One-click Windows launcher. |
+| `autonomous_stack_docs/` | Supporting architecture, workflow, quickstart, and disclaimer docs. |
+| `azalyst_output/` | Signals, metrics, reports, and generated research artifacts. |
+
+## Data Requirements
+
+Place Binance 5-minute parquet files in `data/` with this schema:
+
+```text
+timestamp | open | high | low | close | volume
+```
+
+The platform is designed for large cross-sectional universes and performs best with deep historical coverage.
 
 ## Quickstart
 
-### 1. Install Dependencies
+### 1. Install Python dependencies
+
 ```bash
-pip install pandas numpy scipy scikit-learn lightgbm statsmodels polars duckdb pyarrow
+pip install -r requirements.txt
 ```
-*Note: For maximum speed, ensure your LightGBM installation has CUDA/GPU support.*
 
-### 2. Add Your Data
-Place your Binance 5m parquet files in the `data/` folder.
-Schema: `timestamp | open | high | low | close | volume`
+### 2. Optional: install notebook monitoring support
 
-### 3. Run the Pipeline
-**Windows:** Double-click `RUN_SHIFT_MONITOR.bat`
-**Command Line:**
+```bash
+pip install notebook ipykernel
+```
+
+### 3. Install and prepare Ollama
+
+Install Ollama locally, then pull the model used by the autonomous runner:
+
+```bash
+ollama pull deepseek-r1:14b
+```
+
+### 4. Add market data
+
+Drop your Binance parquet files into `data/`.
+
+### 5. Launch the platform
+
+**Windows autonomous workflow**
+
+```text
+Double-click RUN_SHIFT_MONITOR.bat
+```
+
+This will:
+- start the live dashboard,
+- open the Jupyter monitor when available,
+- start or reconnect to Ollama,
+- warm the local model, and
+- run the autonomous research team.
+
+**Manual research pipeline**
+
 ```bash
 python azalyst_orchestrator.py --data-dir ./data --out-dir ./azalyst_output
 ```
 
----
+## Key Outputs
+
+| File | Description |
+| --- | --- |
+| `signals.csv` | Ranked per-symbol signal output. |
+| `performance_metrics.csv` | Win rate, Sharpe, drawdown, and simulation metrics. |
+| `paper_trades.csv` | Simulated trade blotter. |
+| `checkpoint.json` | Resume point for interrupted walk-forward runs. |
+| `team_log.txt` | Autonomous runner transcript and simulator stream. |
+
+## Documentation Bundle
+
+The companion docs live in `autonomous_stack_docs/`:
+
+- `Architecture.md`
+- `ResearchWorkflow.md`
+- `ModuleIndex.md`
+- `Quickstart.md`
+- `Disclaimer.md`
+- `README.md`
+
+These files provide a portable narrative version of the platform design and operating flow.
+
+## Design Principles
+
+- Favor repeatable research over one-off chart opinions.
+- Separate raw signal discovery from validation and execution realism.
+- Minimize lookahead bias with purged CV and walk-forward simulation.
+- Keep the operating layer local-first using Ollama, dashboard monitoring, and Jupyter.
+- Treat outputs as research artifacts first, not product promises.
 
 ## Disclaimer
-This is a **personal research and learning project.** Azalyst is not a financial service. Nothing here is financial advice. Use entirely at your own risk.
+
+Azalyst is a personal research and learning project. It is not an investment product, not a trading service, and not financial advice. Any use of the code, models, or outputs is entirely at your own risk.
 
 ---
 
-## branch3 Documentation Snapshot
-Explore branch3 without leaving `master`: the `branch3_docs/` directory contains `Architecture.md`, `ResearchWorkflow.md`, `ModuleIndex.md`, `Quickstart.md`, and `Disclaimer.md`, all of which are portable copies of the docs that live on the branch3 branch of the public repo.
-
 <div align="center">
-Built by [Azalyst](https://github.com/gitdhirajsv)
+Built by <a href="https://github.com/gitdhirajsv">Azalyst</a>
 </div>
