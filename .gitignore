@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+*.bak
 
 # Data and output directories
 data/
@@ -9,6 +10,8 @@ feature_cache/
 models/
 pipeline_checkpoints/
 azalyst_output/
+.azalyst_locks/
+.ipynb_checkpoints/
 
 # Logs
 *.log
@@ -23,3 +26,11 @@ ENV/
 env/
 .idea/
 .vscode/
+
+# Local run artifacts
+checkpoint.json
+batch_checkpoint.json
+learning_log.csv
+paper_trades.csv
+performance_metrics.csv
+team_log.txt
