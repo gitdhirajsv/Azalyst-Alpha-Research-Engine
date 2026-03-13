@@ -547,3 +547,12 @@ AttributeError: module 'psutil' has no attribute 'Process'
 [17:58:09] [MARCUS (Developer)] Simulator still running... 13m 30s elapsed
 [17:58:39] [MARCUS (Developer)] Simulator still running... 14m 00s elapsed
 [17:59:09] [MARCUS (Developer)] Simulator still running... 14m 30s elapsed
+[17:59:39] [MARCUS (Developer)] Simulator still running... 15m 00s elapsed
+[18:00:09] [MARCUS (Developer)] Simulator still running... 15m 30s elapsed
+[18:00:39] [MARCUS (Developer)] Simulator still running... 16m 00s elapsed
+[18:01:09] [MARCUS (Developer)] Simulator still running... 16m 30s elapsed
+[18:01:39] [MARCUS (Developer)] Simulator still running... 17m 00s elapsed
+[18:02:09] [MARCUS (Developer)] Simulator still running... 17m 30s elapsed
+[18:02:39] [MARCUS (Developer)] Simulator still running... 18m 00s elapsed
+[18:03:09] [MARCUS (Developer)] Simulator still running... 18m 30s elapsed
+[18:03:39] [MARCUS (Developer)] Simulator still running... 19m 00s elapsed
