@@ -1,7 +1,7 @@
 """
 Spyder-friendly live monitor.
 
-Run this file from Spyder while `RUN_SPYDER_SHIFT_MONITOR.bat` keeps the
+Run this file from Spyder while `Azalyst_Spyder.bat` keeps the
 autonomous workflow alive in the background. It reads local artifacts only,
 so it does not interfere with the Ollama / team logic.
 """

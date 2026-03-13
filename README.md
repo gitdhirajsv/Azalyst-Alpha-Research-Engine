@@ -20,7 +20,7 @@ The project is structured as a research environment rather than a product surfac
 
 The platform includes a local monitoring layer for long-running walk-forward experiments. The Spyder view below is generated from the same run artifacts that drive the autonomous workflow.
 
-![Azalyst Spyder Monitor](docs/assets/spyder_monitor_snapshot.svg)
+![Azalyst Spyder Monitor](docs/assets/azalyst_spyder_monitor.svg)
 
 ## Research Scope
 
@@ -119,7 +119,7 @@ This mode starts:
 If you want the same autonomous backend with a Spyder-first monitoring surface instead of browser or notebook tabs, use:
 
 ```text
-RUN_SPYDER_SHIFT_MONITOR.bat
+Azalyst_Spyder.bat
 ```
 
 ## Local Research Operations Layer
@@ -127,7 +127,7 @@ RUN_SPYDER_SHIFT_MONITOR.bat
 The autonomous operating layer is local-first and built to support long-running experiments.
 
 - `RUN_SHIFT_MONITOR.bat` launches the monitored workflow.
-- `RUN_SPYDER_SHIFT_MONITOR.bat` launches the Spyder-first monitored workflow.
+- `Azalyst_Spyder.bat` launches the Spyder-first monitored workflow.
 - `azalyst_autonomous_team.py` manages the multi-agent local research loop.
 - `monitor_dashboard.py` serves the live dashboard at `http://127.0.0.1:8080`.
 - `Azalyst_Live_Monitor.ipynb` provides a notebook-based monitoring surface.
