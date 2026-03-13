@@ -35,6 +35,13 @@ echo  ============================================================
 echo.
 
 if defined SPYDER_EXE (
+    echo  [spyder] Cleaning old Azalyst Spyder monitor processes...
+    if "%DRY_RUN%"=="1" (
+        echo    DRY RUN: stop repo-bound Spyder/python/pythonw processes
+    ) else (
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "$repo = (Resolve-Path '%~dp0').Path; $targets = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and ($_.Name -in @('spyder.exe','python.exe','pythonw.exe')) -and $_.CommandLine.Contains($repo) }; foreach ($proc in $targets) { Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue }"
+        timeout /t 2 /nobreak >nul
+    )
     echo  [spyder] Opening Spyder workspace...
     if "%DRY_RUN%"=="1" (
         echo    DRY RUN: %PYTHON_EXE% prepare_spyder_profile.py
