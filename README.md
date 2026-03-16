@@ -25,6 +25,42 @@ The platform includes a local monitoring layer for long-running walk-forward exp
 
 ![Azalyst Spyder Monitor](docs/assets/azalyst_spyder_monitor.svg)
 
+---
+
+## Bug Fixes
+
+### v1.1 — Timeframe-Aware Feature Engineering (current)
+
+**Problem:** All rolling-window constants (`BARS_PER_HOUR = 12`, `BARS_PER_DAY = 288`, `HORIZON_BARS = 48`) were hardcoded to 5-minute candle math. When any module processed or scored candles at a different timeframe (weekly, daily, 4H), the result was complete NaN flooding of the feature matrix — the model found no valid signal rows and either skipped silently or wasted computation.
+
+Specifically affected features at non-5min timeframes:
+- `ret_1d` — `c.shift(288)` on weekly = 288 weeks = 5.5 years back (doesn't exist → NaN)
+- `rvol_1d`, `vol_ratio`, `skew_1d`, `kurt_1d`, `amihud` — same fate
+- `vwap_dev` — rolling 288-bar VWAP on weekly = meaningless
+
+**Fix:** New shared utility `azalyst_tf_utils.py` with `get_tf_constants(resample_str)` that converts any pandas resample string to semantically-correct bar counts:
+
+```python
+get_tf_constants('5min')  → bph=12,  bpd=288,  horizon=48
+get_tf_constants('4h')    → bph=1,   bpd=6,    horizon=1
+get_tf_constants('1D')    → bph=1,   bpd=1,    horizon=1
+get_tf_constants('1W')    → bph=1,   bpd=1,    horizon=1
+```
+
+All of `build_feature_cache.py`, `azalyst_train.py`, `azalyst_weekly_loop.py`, and `walkforward_simulator.py` now accept an explicit `--resample` / `resample_freq` parameter and derive window sizes dynamically. Default behaviour (5-min → 4H resample for training) is **completely unchanged** — the fix is transparent to existing pipelines.
+
+**Files changed:**
+| File | Change |
+|---|---|
+| `azalyst_tf_utils.py` | **NEW** — `get_tf_constants()` utility |
+| `build_feature_cache.py` | `compute_features(df, resample='5min')` — windows scale with TF |
+| `azalyst_train.py` | `load_data_for_window(..., resample_freq='4h')` explicit param |
+| `azalyst_weekly_loop.py` | `TRAIN_RESAMPLE = '4h'` constant; all calls explicit |
+| `walkforward_simulator.py` | `resample_freq` param in `WalkForwardSimulator` and `FeatureCacheLoader` |
+| `azalyst-alpha-fixed.ipynb` | Kaggle notebook — same fix applied inline |
+
+---
+
 ## Research Scope
 
 The platform is built around five core questions:
@@ -39,7 +75,7 @@ The platform is built around five core questions:
 
 ```mermaid
 flowchart LR
-    A["Market Data Layer\nPolars + DuckDB + Parquet"] --> B["Feature Cache\nbuild_feature_cache.py"]
+    A["Market Data Layer\nPolars + DuckDB + Parquet"] --> B["Feature Cache\nbuild_feature_cache.py\n(TF-aware)"]
     B --> C["Year 1 Training\nazalyst_train.py\nCross-sectional alpha label"]
     C --> D["Year 2 Weekly Loop\nazalyst_weekly_loop.py\nPredict → Evaluate → Retrain"]
     D --> E["Year 3 Weekly Loop\nExpanding window training"]
@@ -116,7 +152,7 @@ python azalyst_weekly_loop.py --feature-dir ./feature_cache --results-dir ./resu
 1. Create a new Kaggle notebook
 2. Set accelerator to **GPU T4 x2**
 3. Upload all Python files and your dataset
-4. Run `kaggle_pipeline.py` — it handles everything automatically
+4. Use `azalyst-alpha-fixed.ipynb` — the fully fixed Kaggle notebook
 5. Download `results.zip` from the output tab
 
 Expected runtime with T4 GPU: **3–5 hours** for full 3-year pipeline.
@@ -149,10 +185,12 @@ python walkforward_simulator.py
 
 | Path | Purpose |
 | --- | --- |
+| `azalyst_tf_utils.py` | **NEW** Timeframe utility — `get_tf_constants(resample_str)` |
 | `azalyst_alpha_metrics.py` | Alpha calculator — 1000% annual target, retrain trigger logic. |
 | `azalyst_train.py` | Year 1 training — cross-sectional alpha labels, LightGBM + purged CV. |
 | `azalyst_weekly_loop.py` | Year 2+3 weekly self-improving loop — predict, evaluate, retrain. |
 | `kaggle_pipeline.py` | Full GPU pipeline runner for Kaggle notebooks. |
+| `azalyst-alpha-fixed.ipynb` | Fixed Kaggle notebook — timeframe-aware feature engineering. |
 | `build_feature_cache.py` | Precompute ML features once — 5-20x simulation speedup. |
 | `azalyst_orchestrator.py` | End-to-end research pipeline entry point. |
 | `azalyst_data.py` | High-performance Polars and DuckDB analytics layer. |

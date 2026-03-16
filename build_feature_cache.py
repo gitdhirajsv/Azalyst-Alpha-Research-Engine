@@ -3,27 +3,12 @@
          AZALYST ALPHA RESEARCH ENGINE    FEATURE CACHE BUILDER
 ║        Precompute ML features once  |  5-20x simulation speedup            ║
 ║        Parallel  |  Streaming  |  Lookahead-Safe  |  pyarrow parquet       ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║  FIX (timeframe-aware):                                                    ║
+║    All rolling windows now derived via get_tf_constants(resample_str).     ║
+║    Previously hardcoded to 5-min (bph=12, bpd=288) — any other candle     ║
+║    size caused complete NaN flooding of features.                          ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
-
-Purpose
-───────
-Pre-computes all ML features and future-return targets for every symbol in
-data/, and saves them as individual parquet files in feature_cache/.
-
-This means the walk-forward simulator can load pre-computed features rather
-than recomputing indicators on every training window — 5-20x faster.
-
-Lookahead-safe design
-─────────────────────
-• All input features are shifted +1 bar so they only use information from
-  bars that have ALREADY CLOSED by the time the prediction is made.
-• Future-return targets (future_ret_4h, future_ret_1d) use close.shift(-N)
-  meaning they represent what happens AFTER the current bar — used only as
-  training labels, never as model inputs.
-
-Output schema (per symbol parquet)
-───────────────────────────────────
-timestamp | symbol | ret_1bar | ret_1h | … (27 features) | future_ret_4h | future_ret_1d
 
 Usage
 ─────
@@ -49,31 +34,15 @@ import pandas as pd
 warnings.filterwarnings("ignore")
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  CONSTANTS
+#  TIMEFRAME CONSTANTS  (FIX: derived dynamically, not hardcoded)
 # ─────────────────────────────────────────────────────────────────────────────
-BARS_PER_HOUR = 12    # 5-min bars per hour
-BARS_PER_DAY  = 288   # 5-min bars per day
-BARS_PER_WEEK = 2016  # 5-min bars per week
+# Default 5-min constants — kept as module-level globals for backwards compat
+# but compute_features() now overrides them via get_tf_constants().
+BARS_PER_HOUR = 12
+BARS_PER_DAY  = 288
+BARS_PER_WEEK = 2016
 
-HORIZON_4H  = BARS_PER_HOUR * 4   # 48 bars  — short-term prediction
-HORIZON_1D  = BARS_PER_DAY        # 288 bars — medium-term prediction
-
-MIN_ROWS_REQUIRED = BARS_PER_WEEK  # at least 1 week of data
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  RSI HELPER
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _rsi(s: pd.Series, n: int) -> pd.Series:
-    d = s.diff()
-    g  = d.clip(lower=0).ewm(alpha=1 / n, adjust=False).mean()
-    ls = (-d).clip(lower=0).ewm(alpha=1 / n, adjust=False).mean()
-    return 100 - 100 / (1 + g / ls.replace(0, np.nan))
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  FEATURE BUILDER  (27 features, all shifted +1 bar — no lookahead)
-# ─────────────────────────────────────────────────────────────────────────────
+MIN_ROWS_REQUIRED = BARS_PER_WEEK   # at least 1 week of 5-min data
 
 FEATURE_COLS = [
     "ret_1bar", "ret_1h", "ret_4h", "ret_1d",
@@ -86,18 +55,65 @@ FEATURE_COLS = [
 ]
 
 
-def compute_features(df: pd.DataFrame) -> pd.DataFrame:
+def get_tf_constants(resample_str: str) -> tuple[int, int, int]:
+    """
+    Convert pandas resample string → (bars_per_hour, bars_per_day, horizon_bars).
+    horizon_bars = 4h equivalent, floored at 1.
+    """
+    import re
+    s = resample_str.lower().strip()
+    _map = {
+        '1min': 1, '1t': 1, '3min': 3, '3t': 3, '5min': 5, '5t': 5,
+        '15min': 15, '15t': 15, '30min': 30, '30t': 30,
+        '1h': 60, '60min': 60, '60t': 60, '2h': 120, '4h': 240,
+        '6h': 360, '8h': 480, '12h': 720,
+        '1d': 1440, '1b': 1440, 'd': 1440,
+        '1w': 10080, 'w': 10080, 'w-mon': 10080, '1w-mon': 10080,
+    }
+    mins = _map.get(s)
+    if mins is None:
+        m = re.match(r'^(\d+)([a-z]+)', s)
+        if m:
+            n, unit = int(m.group(1)), m.group(2)
+            mins = n * {'min': 1, 't': 1, 'h': 60, 'd': 1440, 'w': 10080}.get(unit, 1)
+        else:
+            mins = 5
+    bph = max(1, 60   // mins)
+    bpd = max(1, 1440 // mins)
+    hor = max(1, 240  // mins)
+    return bph, bpd, hor
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  RSI HELPER
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _rsi(s: pd.Series, n: int) -> pd.Series:
+    d  = s.diff()
+    g  = d.clip(lower=0).ewm(alpha=1 / n, adjust=False).mean()
+    ls = (-d).clip(lower=0).ewm(alpha=1 / n, adjust=False).mean()
+    return 100 - 100 / (1 + g / ls.replace(0, np.nan))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  FEATURE BUILDER  (FIX: resample param drives all window sizes)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def compute_features(df: pd.DataFrame, resample: str = '5min') -> pd.DataFrame:
     """
     Compute 27 ML features from an OHLCV DataFrame.
 
-    CRITICAL: The returned feature DataFrame is shifted +1 bar so that
-    at row t, all features reflect information up to and including bar t-1.
-    This prevents any same-bar lookahead.
+    FIX: All rolling windows are now derived from `resample` via
+    get_tf_constants(). At 5-min (default) the output is identical to the
+    original. At any other timeframe the windows scale correctly so features
+    retain their semantic meaning (e.g. ret_1h really is 1-hour return).
+
+    CRITICAL: The returned DataFrame is shifted +1 bar (no same-bar lookahead).
     """
-    c = df["close"]
-    o = df["open"]
-    h = df["high"]
-    l = df["low"]    # noqa: E741
+    bph, bpd, hor = get_tf_constants(resample)
+
+    c = df["close"]; o = df["open"]
+    h = df["high"];  l = df["low"]   # noqa: E741
     v = df["volume"]
 
     f = pd.DataFrame(index=df.index)
@@ -105,15 +121,15 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     # ── Return features ────────────────────────────────────────────────────
     lr = np.log(c / c.shift(1))
     f["ret_1bar"] = lr
-    f["ret_1h"]   = np.log(c / c.shift(BARS_PER_HOUR))
-    f["ret_4h"]   = np.log(c / c.shift(BARS_PER_HOUR * 4))
-    f["ret_1d"]   = np.log(c / c.shift(BARS_PER_DAY))
+    f["ret_1h"]   = np.log(c / c.shift(bph))
+    f["ret_4h"]   = np.log(c / c.shift(bph * 4))
+    f["ret_1d"]   = np.log(c / c.shift(bpd))
 
     # ── Volume features ────────────────────────────────────────────────────
-    av = v.rolling(BARS_PER_DAY, min_periods=BARS_PER_HOUR).mean()
-    f["vol_ratio"]   = v / av.replace(0, np.nan)
-    f["vol_ret_1h"]  = np.log(v / v.shift(BARS_PER_HOUR).replace(0, np.nan))
-    f["vol_ret_1d"]  = np.log(v / v.shift(BARS_PER_DAY).replace(0, np.nan))
+    av = v.rolling(bpd, min_periods=max(2, bph)).mean()
+    f["vol_ratio"]  = v / av.replace(0, np.nan)
+    f["vol_ret_1h"] = np.log(v / v.shift(bph).replace(0, np.nan))
+    f["vol_ret_1d"] = np.log(v / v.shift(bpd).replace(0, np.nan))
 
     # ── Candle structure ───────────────────────────────────────────────────
     rng = (h - l).replace(0, np.nan)
@@ -123,10 +139,10 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     f["candle_dir"] = np.sign(c - o)
 
     # ── Volatility features ────────────────────────────────────────────────
-    f["rvol_1h"]          = lr.rolling(BARS_PER_HOUR, min_periods=6).std()
-    f["rvol_4h"]          = lr.rolling(BARS_PER_HOUR * 4, min_periods=12).std()
-    f["rvol_1d"]          = lr.rolling(BARS_PER_DAY, min_periods=BARS_PER_HOUR).std()
-    f["vol_ratio_1h_1d"]  = f["rvol_1h"] / f["rvol_1d"].replace(0, np.nan)
+    f["rvol_1h"]         = lr.rolling(bph,     min_periods=max(2, bph // 2)).std()
+    f["rvol_4h"]         = lr.rolling(bph * 4, min_periods=max(2, bph)).std()
+    f["rvol_1d"]         = lr.rolling(bpd,     min_periods=max(2, bph)).std()
+    f["vol_ratio_1h_1d"] = f["rvol_1h"] / f["rvol_1d"].replace(0, np.nan)
 
     # ── Oscillators ────────────────────────────────────────────────────────
     f["rsi_14"] = _rsi(c, 14) / 100.0
@@ -142,66 +158,50 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
     # ── VWAP deviation ─────────────────────────────────────────────────────
     tp   = (h + l + c) / 3
     vwap = (
-        (tp * v).rolling(BARS_PER_DAY, min_periods=BARS_PER_HOUR).sum()
-        / v.rolling(BARS_PER_DAY, min_periods=BARS_PER_HOUR).sum().replace(0, np.nan)
+        (tp * v).rolling(bpd, min_periods=max(2, bph)).sum()
+        / v.rolling(bpd, min_periods=max(2, bph)).sum().replace(0, np.nan)
     )
     f["vwap_dev"] = (c - vwap) / c.replace(0, np.nan)
 
     # ── Trend signals ──────────────────────────────────────────────────────
     s = np.sign(lr)
-    f["ctrend_12"] = s.rolling(12, min_periods=6).sum()
-    f["ctrend_48"] = s.rolling(48, min_periods=24).sum()
-    m1 = c.pct_change(BARS_PER_HOUR)
-    f["price_accel"] = m1 - m1.shift(BARS_PER_HOUR)
+    ct12 = max(2, bph)          # ~1h of bars
+    ct48 = max(2, bph * 4)      # ~4h of bars
+    f["ctrend_12"] = s.rolling(ct12, min_periods=max(2, ct12 // 2)).sum()
+    f["ctrend_48"] = s.rolling(ct48, min_periods=max(2, ct48 // 2)).sum()
+
+    m1 = c.pct_change(bph)
+    f["price_accel"] = m1 - m1.shift(bph)
 
     # ── Higher-moment features ─────────────────────────────────────────────
-    f["skew_1d"]    = lr.rolling(BARS_PER_DAY, min_periods=BARS_PER_HOUR).skew()
-    f["kurt_1d"]    = lr.rolling(BARS_PER_DAY, min_periods=BARS_PER_HOUR).kurt()
-    f["max_ret_4h"] = lr.rolling(BARS_PER_HOUR * 4, min_periods=BARS_PER_HOUR).max()
+    f["skew_1d"]    = lr.rolling(bpd, min_periods=max(4, bph)).skew()
+    f["kurt_1d"]    = lr.rolling(bpd, min_periods=max(4, bph)).kurt()
+    f["max_ret_4h"] = lr.rolling(bph * 4, min_periods=max(2, bph)).max()
     f["amihud"]     = (
         (lr.abs() / v.replace(0, np.nan))
-        .rolling(BARS_PER_DAY, min_periods=BARS_PER_HOUR)
+        .rolling(bpd, min_periods=max(2, bph))
         .mean()
     )
 
-    # ── Clean up ───────────────────────────────────────────────────────────
     f = f.replace([np.inf, -np.inf], np.nan)
-
-    # ── SHIFT +1 BAR to prevent same-bar lookahead ─────────────────────────
-    # At time t, features now reflect information through t-1 (past data only)
-    f = f.shift(1)
-
-    return f
+    # +1 bar shift — no same-bar lookahead
+    return f.shift(1)
 
 
-def compute_targets(df: pd.DataFrame) -> pd.DataFrame:
+def compute_targets(df: pd.DataFrame, resample: str = '5min') -> pd.DataFrame:
     """
-    Compute forward return targets. These use FUTURE prices for labelling only.
-    They must NEVER be used as model features — only as training targets.
-
-    future_ret_4h  = log(close[t+48]  / close[t])
-    future_ret_1d  = log(close[t+288] / close[t])
+    Forward return targets. NEVER use as model features — training labels only.
+    horizon scaled by resample so the target always represents ~4H forward return.
     """
+    _, _, hor = get_tf_constants(resample)
     c  = df["close"]
-    lr = np.log(c / c.shift(1))
-
     targets = pd.DataFrame(index=df.index)
-    # Rolling sum of log returns over the horizon = cumulative log return
-    targets["future_ret_4h"] = lr.shift(-HORIZON_4H).rolling(
-        HORIZON_4H, min_periods=HORIZON_4H // 2
-    ).sum().shift(-(HORIZON_4H - 1))
-    targets["future_ret_1d"] = lr.shift(-HORIZON_1D).rolling(
-        HORIZON_1D, min_periods=HORIZON_1D // 2
-    ).sum().shift(-(HORIZON_1D - 1))
-
-    # Simpler, more direct: just the N-bar forward return
-    targets["future_ret_4h"] = np.log(c.shift(-HORIZON_4H) / c)
-    targets["future_ret_1d"] = np.log(c.shift(-HORIZON_1D) / c)
-
-    # Binary labels: 1 if positive return, 0 if negative
+    targets["future_ret_4h"] = np.log(c.shift(-hor) / c)
+    # Keep a 1-day label too (scaled)
+    _, bpd, _ = get_tf_constants(resample)
+    targets["future_ret_1d"] = np.log(c.shift(-bpd) / c)
     targets["label_4h"] = (targets["future_ret_4h"] > 0).astype(float)
     targets["label_1d"] = (targets["future_ret_1d"] > 0).astype(float)
-
     return targets
 
 
@@ -209,27 +209,22 @@ def compute_targets(df: pd.DataFrame) -> pd.DataFrame:
 #  PER-SYMBOL WORKER
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _process_symbol(args: Tuple[str, str, str]) -> Tuple[str, bool, str]:
-    """
-    Worker function: load one symbol, compute features + targets, save parquet.
-    Returns (symbol, success, message).
-    """
-    symbol, data_dir, out_dir = args
+def _process_symbol(args: Tuple[str, str, str, str]) -> Tuple[str, bool, str]:
+    """Worker: load one symbol, compute features + targets, save parquet."""
+    symbol, data_dir, out_dir, resample = args
     out_path = Path(out_dir) / f"{symbol}.parquet"
 
-    # Skip if already cached
     if out_path.exists():
         return symbol, True, "skipped (cached)"
 
     try:
-        parquet_path = Path(data_dir) / f"{symbol}.parquet"
-        if not parquet_path.exists():
+        path = Path(data_dir) / f"{symbol}.parquet"
+        if not path.exists():
             return symbol, False, "source parquet not found"
 
-        df = pd.read_parquet(parquet_path)
+        df = pd.read_parquet(path)
         df.columns = [c.lower() for c in df.columns]
 
-        # Normalise timestamp index
         ts_col = next(
             (c for c in df.columns if c in ("timestamp", "time", "open_time")), None
         )
@@ -249,28 +244,29 @@ def _process_symbol(args: Tuple[str, str, str]) -> Tuple[str, bool, str]:
 
         df = df.sort_index()
 
-        # Validate schema
         required = {"open", "high", "low", "close", "volume"}
         if not required.issubset(df.columns):
-            return symbol, False, f"missing columns: {required - set(df.columns)}"
+            return symbol, False, f"missing: {required - set(df.columns)}"
 
         df = df[list(required)].apply(pd.to_numeric, errors="coerce").dropna()
 
-        if len(df) < MIN_ROWS_REQUIRED:
-            return symbol, False, f"too few rows ({len(df)})"
+        # If a non-5min resample is requested, resample raw data first
+        if resample not in ('5min', '5t'):
+            agg = {'open': 'first', 'high': 'max', 'low': 'min',
+                   'close': 'last', 'volume': 'sum'}
+            df = df.resample(resample, label='left', closed='left').agg(agg).dropna()
 
-        # Compute features and targets
-        feats   = compute_features(df)
-        targets = compute_targets(df)
+        if len(df) < 50:   # after resampling may have fewer rows
+            return symbol, False, f"too few rows ({len(df)}) after resample"
 
-        # Combine
+        feats   = compute_features(df, resample=resample)
+        targets = compute_targets(df, resample=resample)
+
         result = feats.join(targets, how="inner")
         result.insert(0, "symbol", symbol)
-
-        # Drop rows with all-NaN features (warmup period)
         result = result.dropna(subset=FEATURE_COLS, how="all")
 
-        if len(result) < 100:
+        if len(result) < 50:
             return symbol, False, "too few valid rows after dropna"
 
         result.to_parquet(out_path, engine="pyarrow", compression="snappy")
@@ -287,100 +283,79 @@ def _process_symbol(args: Tuple[str, str, str]) -> Tuple[str, bool, str]:
 def main():
     parser = argparse.ArgumentParser(
         description="Azalyst Feature Cache Builder — precompute ML features once",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python build_feature_cache.py --data-dir ./data --out-dir ./feature_cache
-  python build_feature_cache.py --data-dir ./data --out-dir ./feature_cache --workers 8
-  python build_feature_cache.py --data-dir ./data --out-dir ./feature_cache --max-symbols 10 --overwrite
-        """,
     )
-    parser.add_argument("--data-dir",     default="./data",          help="Source parquet directory")
-    parser.add_argument("--out-dir",      default="./feature_cache", help="Output feature cache directory")
-    parser.add_argument("--workers",      type=int, default=4,        help="Parallel worker count")
-    parser.add_argument("--max-symbols",  type=int, default=None,     help="Cap symbol count (for testing)")
-    parser.add_argument("--overwrite",    action="store_true",        help="Recompute even if cache exists")
+    parser.add_argument("--data-dir",     default="./data")
+    parser.add_argument("--out-dir",      default="./feature_cache")
+    parser.add_argument("--workers",      type=int, default=4)
+    parser.add_argument("--max-symbols",  type=int, default=None)
+    parser.add_argument("--overwrite",    action="store_true")
+    parser.add_argument(
+        "--resample", default="5min",
+        help="Candle timeframe for feature computation (default: 5min). "
+             "Use '4h', '1D', '1W' etc for other timeframes."
+    )
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir)
     out_dir  = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Discover symbols
-    parket_files = sorted(data_dir.glob("*.parquet"))
-    if not parket_files:
-        print(f"[ERROR] No parquet files found in {data_dir}"); sys.exit(1)
+    parquet_files = sorted(data_dir.glob("*.parquet"))
+    if not parquet_files:
+        print(f"[ERROR] No parquet files in {data_dir}"); sys.exit(1)
 
-    symbols = [f.stem for f in parket_files]
-    # Filter non-USDT or test symbols (keep only XXXUSDT)
+    symbols = [f.stem for f in parquet_files]
     symbols = [s for s in symbols if s.endswith("USDT") and len(s) > 5]
 
     if args.max_symbols:
         symbols = symbols[:args.max_symbols]
 
-    # Clear cache if overwrite requested
     if args.overwrite:
         for f in out_dir.glob("*.parquet"):
             f.unlink()
 
+    bph, bpd, hor = get_tf_constants(args.resample)
     print("╔══════════════════════════════════════════════════════════════╗")
-    print("         AZALYST  —  FEATURE CACHE BUILDER")
+    print("         AZALYST  —  FEATURE CACHE BUILDER (FIXED)")
     print("╚══════════════════════════════════════════════════════════════╝")
     print(f"  Source   : {data_dir.resolve()}")
     print(f"  Output   : {out_dir.resolve()}")
+    print(f"  Resample : {args.resample}  (bph={bph}, bpd={bpd}, horizon={hor})")
     print(f"  Symbols  : {len(symbols)}")
     print(f"  Workers  : {args.workers}")
-    print(f"  Features : {len(FEATURE_COLS)} per bar + 4 target columns")
-    print(f"  Lookahead: ALL features shifted +1 bar (no lookahead)")
     print()
 
     t0 = time.time()
-    ok_count  = 0
-    err_count = 0
-    skip_count = 0
+    ok_count = err_count = skip_count = 0
 
-    work_args = [(sym, str(data_dir), str(out_dir)) for sym in symbols]
+    work_args = [(sym, str(data_dir), str(out_dir), args.resample) for sym in symbols]
 
     with ProcessPoolExecutor(max_workers=args.workers) as pool:
         futures = {pool.submit(_process_symbol, a): a[0] for a in work_args}
-
         for i, fut in enumerate(as_completed(futures), 1):
             sym, success, msg = fut.result()
-
             if msg.startswith("skipped"):
-                skip_count += 1
-                status = "⏭"
+                skip_count += 1; status = "⏭"
             elif success:
-                ok_count += 1
-                status = "✓"
+                ok_count += 1;   status = "✓"
             else:
-                err_count += 1
-                status = "✗"
+                err_count += 1;  status = "✗"
 
-            # Print every symbol or every 10 for large universes
             if len(symbols) <= 30 or i % 10 == 0 or not success:
                 elapsed = time.time() - t0
-                rate = i / elapsed if elapsed > 0 else 0
-                eta  = (len(symbols) - i) / rate if rate > 0 else 0
-                print(
-                    f"  [{i:>4}/{len(symbols)}] {status} {sym:<20} | {msg}"
-                    f"  [ETA {eta/60:.1f}m]"
-                )
+                rate = i / elapsed if elapsed > 0 else 1
+                eta  = (len(symbols) - i) / rate
+                print(f"  [{i:>4}/{len(symbols)}] {status} {sym:<20} | {msg}  [ETA {eta/60:.1f}m]")
 
     elapsed = time.time() - t0
-    print()
-    print("─" * 62)
-    print(f"  Done in {elapsed:.1f}s")
-    print(f"  Succeeded : {ok_count}")
-    print(f"  Skipped   : {skip_count} (already cached)")
-    print(f"  Failed    : {err_count}")
     cached_files = list(out_dir.glob("*.parquet"))
     total_mb = sum(f.stat().st_size for f in cached_files) / 1e6
+    print(f"\n  Done in {elapsed:.1f}s")
+    print(f"  Succeeded : {ok_count}")
+    print(f"  Skipped   : {skip_count}")
+    print(f"  Failed    : {err_count}")
     print(f"  Cache size: {len(cached_files)} files, {total_mb:.1f} MB")
-    print()
-    print(f"  Feature cache ready → {out_dir.resolve()}")
-    print()
-    print("  Next step: python walkforward_simulator.py --data-dir ./data")
+    print(f"\n  Feature cache ready → {out_dir.resolve()}")
 
 
 if __name__ == "__main__":

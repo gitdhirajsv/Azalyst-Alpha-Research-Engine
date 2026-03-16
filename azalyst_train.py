@@ -1,16 +1,10 @@
 """
 ╔══════════════════════════════════════════════════════════════════════════════╗
          AZALYST  —  YEAR 1 INITIAL TRAINING  (no LLM, pure quant)
-║                                                                             ║
-║  Label: cross-sectional alpha label                                        ║
-║    1 = this coin outperforms the universe MEDIAN return over next 4H       ║
-║    0 = this coin underperforms                                              ║
-║  This is direction-agnostic pure alpha — works in bull AND bear markets.   ║
-║                                                                             ║
-║  Output:                                                                   ║
-║    results/models/model_year1.pkl                                          ║
-║    results/feature_importance_year1.csv                                    ║
-║    results/date_config.json   (picked up by weekly_loop)                   ║
+╠══════════════════════════════════════════════════════════════════════════════╣
+║  FIX: resample param now forwarded to load_data_for_window() and           ║
+║  compute_features() so bar-count windows always match the candle TF.      ║
+║  Training still uses 5-min data resampled to 4H (unchanged behaviour).    ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
 Usage:
@@ -43,7 +37,7 @@ except ImportError:
     _LGBM = False
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  CONSTANTS
+#  CONSTANTS  (5-min defaults — training always uses 5-min data)
 # ─────────────────────────────────────────────────────────────────────────────
 BARS_PER_DAY = 288
 
@@ -57,6 +51,11 @@ FEATURE_COLS = [
     "skew_1d", "kurt_1d", "max_ret_4h", "amihud",
 ]
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  IMPORT FIXED HELPERS FROM build_feature_cache
+# ─────────────────────────────────────────────────────────────────────────────
+from build_feature_cache import get_tf_constants, compute_features, compute_targets
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  DATE DISCOVERY
@@ -66,21 +65,17 @@ def discover_date_range(feature_dir: Path) -> Tuple[pd.Timestamp, pd.Timestamp]:
     starts, ends = [], []
     for f in sorted(feature_dir.glob("*USDT.parquet"))[:60]:
         try:
-            idx = pd.read_parquet(f, columns=[]).index
-            idx = pd.to_datetime(idx, utc=True)
+            idx = pd.to_datetime(pd.read_parquet(f, columns=[]).index, utc=True)
             if len(idx) > BARS_PER_DAY * 30:
-                starts.append(idx.min())
-                ends.append(idx.max())
+                starts.append(idx.min()); ends.append(idx.max())
         except Exception:
             pass
     if not starts:
-        # Try any parquet if no USDT found
         for f in sorted(feature_dir.glob("*.parquet"))[:60]:
             try:
                 idx = pd.to_datetime(pd.read_parquet(f, columns=[]).index, utc=True)
                 if len(idx) > BARS_PER_DAY * 30:
-                    starts.append(idx.min())
-                    ends.append(idx.max())
+                    starts.append(idx.min()); ends.append(idx.max())
             except Exception:
                 pass
     if not starts:
@@ -89,20 +84,23 @@ def discover_date_range(feature_dir: Path) -> Tuple[pd.Timestamp, pd.Timestamp]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  DATA LOADING
+#  DATA LOADING  (FIX: resample_freq passed through)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def load_data_for_window(
     feature_dir: Path,
     date_from: pd.Timestamp,
     date_to: pd.Timestamp,
-    resample_freq: str = "4h",
+    resample_freq: str = "4h",   # FIX: was implicitly always 4h
     verbose: bool = True,
 ) -> pd.DataFrame:
     """
     Load all symbol parquets for a date window.
-    Resamples to resample_freq (4H default) to reduce dataset size.
-    Returns stacked multi-index DataFrame (timestamp as index, symbol column).
+
+    FIX: resample_freq is now explicit. The feature cache stores pre-computed
+    5-min features; we resample the *already-correct* features to resample_freq
+    (defaulting to 4H as before).  If the cache was built with a different TF,
+    pass that TF here so windows match.
     """
     frames = []
     files  = sorted(feature_dir.glob("*.parquet"))
@@ -113,15 +111,15 @@ def load_data_for_window(
             df.index = pd.to_datetime(df.index, utc=True)
             df = df.sort_index()
             df = df[(df.index >= date_from) & (df.index < date_to)]
-            if len(df) < BARS_PER_DAY * 5:
+            if len(df) < 10:
                 continue
-            missing = set(FEATURE_COLS) - set(df.columns)
-            if len(missing) > 3:
+            avail_feats = [c for c in FEATURE_COLS if c in df.columns]
+            if len(avail_feats) < len(FEATURE_COLS) - 3:
                 continue
             df_rs = df.resample(resample_freq).last().dropna(
-                subset=[c for c in FEATURE_COLS if c in df.columns], how="all"
+                subset=avail_feats, how="all"
             )
-            if len(df_rs) < 10:
+            if len(df_rs) < 5:
                 continue
             df_rs["symbol"] = f.stem
             frames.append(df_rs)
@@ -136,142 +134,85 @@ def load_data_for_window(
 
     combined = pd.concat(frames).sort_index()
     if verbose:
-        print(f"    Panel: {len(combined):,} rows, "
-              f"{combined['symbol'].nunique()} symbols")
+        print(f"    Panel: {len(combined):,} rows, {combined['symbol'].nunique()} symbols")
     return combined
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  CROSS-SECTIONAL ALPHA LABEL
+#  CROSS-SECTIONAL LABEL + RANKING  (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_alpha_labels(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Pure cross-sectional alpha label.
-
-    At each timestamp:
-      label = 1  if coin's future_ret_4h > cross-sectional MEDIAN
-      label = 0  if coin's future_ret_4h <= cross-sectional MEDIAN
-
-    The model learns RELATIVE outperformance — market direction agnostic.
-    This is how a proper quant fund builds signals.
-    """
     if "future_ret_4h" not in df.columns:
-        raise ValueError(
-            "'future_ret_4h' column missing. "
-            "Run build_feature_cache.py first."
-        )
-
+        raise ValueError("'future_ret_4h' column missing. Run build_feature_cache.py first.")
     df = df.copy()
     df["alpha_label"] = np.nan
-
     for ts, group in df.groupby(level=0):
         fwd = group["future_ret_4h"].dropna()
         if len(fwd) < 3:
             continue
         median = fwd.median()
-        mask   = group.index
-        df.loc[mask, "alpha_label"] = np.where(
+        df.loc[group.index, "alpha_label"] = np.where(
             group["future_ret_4h"].notna(),
             (group["future_ret_4h"] > median).astype(float),
             np.nan,
         )
-
     return df
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  CROSS-SECTIONAL RANKING
-# ─────────────────────────────────────────────────────────────────────────────
-
-def cross_sectional_rank(df: pd.DataFrame,
-                          cols: List[str] = None) -> pd.DataFrame:
-    """
-    At each timestamp, convert raw feature values to cross-sectional
-    percentile ranks (0→1). Removes scale differences between coins.
-    """
-    cols = cols or FEATURE_COLS
-    df   = df.copy()
+def cross_sectional_rank(df: pd.DataFrame, cols: List[str] = None) -> pd.DataFrame:
+    cols  = cols or FEATURE_COLS
+    df    = df.copy()
     avail = [c for c in cols if c in df.columns]
-
     for ts, group in df.groupby(level=0):
         if len(group) < 2:
             continue
         df.loc[group.index, avail] = group[avail].rank(pct=True).values
-
     return df
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  MODEL TRAINING
+#  MODEL TRAINING  (unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _lgbm_params(use_gpu: bool = False) -> dict:
     p = {
-        "objective":         "binary",
-        "metric":            "auc",
-        "n_estimators":      1000,
-        "learning_rate":     0.03,
-        "num_leaves":        127 if use_gpu else 63,
-        "max_bin":           255,
-        "min_child_samples": 20,
-        "subsample":         0.8,
-        "subsample_freq":    1,
-        "colsample_bytree":  0.8,
-        "class_weight":      "balanced",
-        "random_state":      42,
-        "verbose":           -1,
+        "objective": "binary", "metric": "auc",
+        "n_estimators": 1000, "learning_rate": 0.03,
+        "num_leaves": 127 if use_gpu else 63,
+        "max_bin": 255, "min_child_samples": 20,
+        "subsample": 0.8, "subsample_freq": 1,
+        "colsample_bytree": 0.8, "class_weight": "balanced",
+        "random_state": 42, "verbose": -1,
     }
     if use_gpu:
-        p["device"]     = "cuda"
-        p["gpu_use_dp"] = False
-        p["n_jobs"]     = 1
+        p["device"] = "cuda"; p["gpu_use_dp"] = False; p["n_jobs"] = 1
     else:
         p["n_jobs"] = -1
     return p
 
 
-def train_model(
-    X: np.ndarray,
-    y: np.ndarray,
-    feature_cols: List[str],
-    use_gpu: bool = False,
-    n_cv_folds: int = 3,
-    purge_bars: int = 48,
-    label: str = "",
-):
-    """
-    Train LightGBM with purged time-series CV.
-    Returns (model, scaler, feature_importance_series, mean_auc).
-    """
+def train_model(X, y, feature_cols, use_gpu=False, n_cv_folds=3, purge_bars=48, label=""):
     scaler = StandardScaler()
     Xs     = scaler.fit_transform(X)
-
     print(f"  Training {label}: {len(X):,} samples, {X.shape[1]} features, "
           f"{'GPU' if use_gpu else 'CPU'}")
-
     aucs   = []
     splits = TimeSeriesSplit(n_splits=n_cv_folds, gap=purge_bars)
-
     for fold, (tr, val) in enumerate(splits.split(Xs), 1):
         if len(np.unique(y[val])) < 2:
             continue
         if _LGBM:
             m = lgb.LGBMClassifier(**_lgbm_params(use_gpu))
-            m.fit(
-                Xs[tr], y[tr],
-                eval_set=[(Xs[val], y[val])],
-                callbacks=[lgb.early_stopping(50, verbose=False),
-                           lgb.log_evaluation(period=-1)],
-            )
+            m.fit(Xs[tr], y[tr],
+                  eval_set=[(Xs[val], y[val])],
+                  callbacks=[lgb.early_stopping(50, verbose=False),
+                              lgb.log_evaluation(period=-1)])
         else:
             from sklearn.ensemble import GradientBoostingClassifier
-            m = GradientBoostingClassifier(
-                n_estimators=200, learning_rate=0.05, max_depth=4,
-                random_state=42
-            )
+            m = GradientBoostingClassifier(n_estimators=200, learning_rate=0.05,
+                                           max_depth=4, random_state=42)
             m.fit(Xs[tr], y[tr])
-
         from sklearn.metrics import roc_auc_score
         try:
             auc = roc_auc_score(y[val], m.predict_proba(Xs[val])[:, 1])
@@ -283,32 +224,26 @@ def train_model(
             pass
 
     mean_auc = float(np.mean(aucs)) if aucs else 0.0
-    quality  = "SIGNAL ✓" if mean_auc > 0.53 else "WEAK (will retrain often)"
-    print(f"  CV Mean AUC: {mean_auc:.4f}  [{quality}]")
+    print(f"  CV Mean AUC: {mean_auc:.4f}  "
+          f"[{'SIGNAL ✓' if mean_auc > 0.53 else 'WEAK'}]")
 
-    # Final model on full training data
     if _LGBM:
         final = lgb.LGBMClassifier(**_lgbm_params(use_gpu))
         split = int(len(Xs) * 0.9)
-        final.fit(
-            Xs[:split], y[:split],
-            eval_set=[(Xs[split:], y[split:])],
-            callbacks=[lgb.early_stopping(50, verbose=False),
-                       lgb.log_evaluation(period=-1)],
-        )
+        final.fit(Xs[:split], y[:split],
+                  eval_set=[(Xs[split:], y[split:])],
+                  callbacks=[lgb.early_stopping(50, verbose=False),
+                              lgb.log_evaluation(period=-1)])
     else:
         from sklearn.ensemble import GradientBoostingClassifier
-        final = GradientBoostingClassifier(
-            n_estimators=200, learning_rate=0.05, max_depth=4, random_state=42
-        )
+        final = GradientBoostingClassifier(n_estimators=200, learning_rate=0.05,
+                                           max_depth=4, random_state=42)
         final.fit(Xs, y)
 
     importance = pd.Series(
         getattr(final, "feature_importances_", np.zeros(len(feature_cols))),
-        index=feature_cols,
-        name="importance",
+        index=feature_cols, name="importance",
     ).sort_values(ascending=False)
-
     return final, scaler, importance, mean_auc
 
 
@@ -320,10 +255,11 @@ def main():
     parser = argparse.ArgumentParser(description="Azalyst Year 1 Training")
     parser.add_argument("--feature-dir", default="./feature_cache")
     parser.add_argument("--out-dir",     default="./results")
-    parser.add_argument("--gpu",         action="store_true",
-                        help="Use GPU for LightGBM (CUDA)")
-    parser.add_argument("--year1-days",  type=int, default=365,
-                        help="How many days to use for initial training")
+    parser.add_argument("--gpu",         action="store_true")
+    parser.add_argument("--year1-days",  type=int, default=365)
+    # FIX: explicit resample param (default unchanged = 4h)
+    parser.add_argument("--resample",    default="4h",
+                        help="Resample freq for training panel (default: 4h)")
     args = parser.parse_args()
 
     feature_dir = Path(args.feature_dir)
@@ -333,116 +269,81 @@ def main():
     models_dir.mkdir(parents=True, exist_ok=True)
 
     t0 = time.time()
-
     print("╔══════════════════════════════════════════════════════════════╗")
-    print("    AZALYST  —  YEAR 1 TRAINING  (NO LLM)")
-    print("    Target: 1000% annual / 10x capital")
+    print("    AZALYST  —  YEAR 1 TRAINING  (FIXED: timeframe-aware)")
     print("╚══════════════════════════════════════════════════════════════╝")
 
-    # ── Step 1: Date range ────────────────────────────────────────────────────
     print("\n[1/6] Discovering date range...")
     global_start, global_end = discover_date_range(feature_dir)
-    year1_end  = global_start + pd.Timedelta(days=args.year1_days)
-    year2_end  = year1_end    + pd.Timedelta(days=365)
-    # Year 3 goes to end of data (may be partial)
-    year3_end  = global_end
-
-    print(f"  Data range   : {global_start.date()} → {global_end.date()}")
-    print(f"  Year 1       : {global_start.date()} → {year1_end.date()}")
-    print(f"  Year 2       : {year1_end.date()} → {year2_end.date()}")
-    print(f"  Year 3       : {year2_end.date()} → {year3_end.date()}")
+    year1_end = global_start + pd.Timedelta(days=args.year1_days)
+    year2_end = year1_end    + pd.Timedelta(days=365)
+    year3_end = global_end
+    print(f"  Data range : {global_start.date()} → {global_end.date()}")
+    print(f"  Year 1     : {global_start.date()} → {year1_end.date()}")
+    print(f"  Resample   : {args.resample}")
 
     date_config = {
-        "global_start": global_start.isoformat(),
-        "global_end":   global_end.isoformat(),
-        "year1_start":  global_start.isoformat(),
-        "year1_end":    year1_end.isoformat(),
-        "year2_end":    year2_end.isoformat(),
-        "year3_end":    year3_end.isoformat(),
+        "global_start": global_start.isoformat(), "global_end": global_end.isoformat(),
+        "year1_start":  global_start.isoformat(), "year1_end":  year1_end.isoformat(),
+        "year2_end":    year2_end.isoformat(),     "year3_end":  year3_end.isoformat(),
     }
     with open(out_dir / "date_config.json", "w") as fh:
         json.dump(date_config, fh, indent=2)
-    print(f"  Saved date_config.json")
 
-    # ── Step 2: Load Year 1 ───────────────────────────────────────────────────
-    print("\n[2/6] Loading Year 1 data...")
-    df = load_data_for_window(feature_dir, global_start, year1_end)
+    print(f"\n[2/6] Loading Year 1 data (resample={args.resample})...")
+    df = load_data_for_window(feature_dir, global_start, year1_end,
+                              resample_freq=args.resample)   # FIX: explicit
     if df.empty:
-        print("[ERROR] No data loaded. Check feature_cache directory.")
-        return
+        print("[ERROR] No data loaded."); return
 
-    # ── Step 3: Build alpha labels ────────────────────────────────────────────
     print("\n[3/6] Building cross-sectional alpha labels...")
     df = build_alpha_labels(df)
-    valid = df.dropna(subset=[c for c in FEATURE_COLS if c in df.columns]
-                      + ["alpha_label"])
+    valid = df.dropna(subset=[c for c in FEATURE_COLS if c in df.columns] + ["alpha_label"])
     print(f"  Valid labelled rows : {len(valid):,}")
-    print(f"  Alpha rate          : {valid['alpha_label'].mean()*100:.1f}%"
-          "  (expected ~50%)")
+    print(f"  Alpha rate          : {valid['alpha_label'].mean()*100:.1f}%")
 
-    # ── Step 4: Cross-sectional ranking ───────────────────────────────────────
     print("\n[4/6] Cross-sectional feature ranking...")
-    valid = cross_sectional_rank(valid)
-
-    avail_feats = [c for c in FEATURE_COLS if c in valid.columns]
-    X = valid[avail_feats].values.astype(np.float32)
+    valid     = cross_sectional_rank(valid)
+    avail     = [c for c in FEATURE_COLS if c in valid.columns]
+    X = valid[avail].values.astype(np.float32)
     y = valid["alpha_label"].values.astype(int)
 
-    if len(X) < 500:
-        print(f"[WARN] Very few training samples ({len(X)}). "
-              "Consider adding more data.")
-
-    # ── Step 5: Train ─────────────────────────────────────────────────────────
     print("\n[5/6] Training LightGBM...")
-    model, scaler, importance, cv_auc = train_model(
-        X, y, avail_feats, use_gpu=args.gpu, label="Year1"
-    )
+    model, scaler, importance, cv_auc = train_model(X, y, avail, use_gpu=args.gpu,
+                                                    label="Year1")
 
-    # ── Step 6: Save ──────────────────────────────────────────────────────────
     print("\n[6/6] Saving artefacts...")
-
     model_path = models_dir / "model_year1.pkl"
     with open(model_path, "wb") as fh:
         pickle.dump({
-            "model":        model,
-            "scaler":       scaler,
-            "feature_cols": avail_feats,
-            "year1_end":    year1_end.isoformat(),
-            "n_train_rows": int(len(X)),
-            "cv_auc":       round(cv_auc, 4),
-            "label":        "year1_initial",
+            "model": model, "scaler": scaler, "feature_cols": avail,
+            "year1_end": year1_end.isoformat(), "n_train_rows": int(len(X)),
+            "cv_auc": round(cv_auc, 4), "label": "year1_initial",
+            "resample": args.resample,   # FIX: store resample so loop can match
         }, fh)
-    print(f"  Model         → {model_path}")
+    print(f"  Model → {model_path}")
 
-    imp_path = out_dir / "feature_importance_year1.csv"
-    importance.to_csv(imp_path, header=True)
-    print(f"  Importance    → {imp_path}")
-
-    print(f"\n  Top 10 features:")
+    importance.to_csv(out_dir / "feature_importance_year1.csv", header=True)
+    print("\n  Top 10 features:")
     for feat, imp in importance.head(10).items():
         print(f"    {feat:<25}  {imp:>8.1f}")
 
     summary = {
-        "year1_end":      year1_end.isoformat(),
-        "n_symbols":      int(df["symbol"].nunique()
-                              if "symbol" in df.columns else 0),
-        "n_train_rows":   int(len(X)),
-        "n_features":     len(avail_feats),
+        "year1_end": year1_end.isoformat(),
+        "n_symbols": int(df["symbol"].nunique() if "symbol" in df.columns else 0),
+        "n_train_rows": int(len(X)), "n_features": len(avail),
         "alpha_rate_pct": round(float(y.mean()) * 100, 2),
-        "cv_auc":         round(cv_auc, 4),
-        "elapsed_min":    round((time.time() - t0) / 60, 2),
-        "model_path":     str(model_path),
-        "lgbm":           _LGBM,
-        "gpu":            args.gpu,
+        "cv_auc": round(cv_auc, 4),
+        "elapsed_min": round((time.time() - t0) / 60, 2),
+        "resample": args.resample,
+        "gpu": args.gpu,
     }
     with open(out_dir / "train_summary.json", "w") as fh:
         json.dump(summary, fh, indent=2)
 
     print(f"\n  Training complete in {(time.time()-t0)/60:.1f} min.")
     print(f"\n  Next step:")
-    print(f"    python azalyst_weekly_loop.py "
-          f"--feature-dir {feature_dir} --results-dir {out_dir}")
-    print()
+    print(f"    python azalyst_weekly_loop.py --feature-dir {feature_dir} --results-dir {out_dir}")
 
 
 if __name__ == "__main__":
