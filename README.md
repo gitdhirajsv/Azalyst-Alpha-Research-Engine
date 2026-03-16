@@ -9,16 +9,19 @@
 ![Status](https://img.shields.io/badge/Status-Active%20Research-brightgreen?style=flat-square)
 ![Factors](https://img.shields.io/badge/Factors-35%20Crypto--Native-red?style=flat-square)
 ![ML](https://img.shields.io/badge/ML-LightGBM%20%2B%20CUDA%20v4.0-blueviolet?style=flat-square)
+![Target](https://img.shields.io/badge/Target-1000%25%20Annual-orange?style=flat-square)
 
 ## Overview
 
-Azalyst Alpha Research Engine is research infrastructure for systematic crypto market study. It is built to evaluate cross-sectional signals, neutralize obvious risk exposures, test mean-reversion and regime effects, train predictive models, and validate the resulting process with walk-forward simulation.
+Azalyst Alpha Research Engine is research infrastructure for systematic crypto market study. It is built to evaluate cross-sectional signals, neutralize obvious risk exposures, test mean-reversion and regime effects, train predictive models, and validate the resulting process with a self-improving weekly walk-forward loop.
 
-The project is structured as a research environment rather than a product surface. It is designed for repeatable experimentation, auditability, and transparent methodology. The emphasis is on whether an observed effect survives disciplined validation, not on maximizing narrative appeal or alert volume.
+The project is structured as a research environment rather than a product surface. It is designed for repeatable experimentation, auditability, and transparent methodology. The emphasis is on whether an observed effect survives disciplined validation — not on maximizing narrative appeal or alert volume.
+
+**Alpha target: 1000% annual return (10x capital).** The weekly loop retrains automatically whenever the rolling 4-week annualised return falls below this target.
 
 ## Live Research Monitor
 
-The platform includes a local monitoring layer for long-running walk-forward experiments. The Spyder view below is generated from the same run artifacts that drive the autonomous workflow.
+The platform includes a local monitoring layer for long-running walk-forward experiments.
 
 ![Azalyst Spyder Monitor](docs/assets/azalyst_spyder_monitor.svg)
 
@@ -36,121 +39,133 @@ The platform is built around five core questions:
 
 ```mermaid
 flowchart LR
-    A["Market Data Layer\nPolars + DuckDB + Parquet"] --> B["Factor Engine v2\n35 cross-sectional factors"]
-    B --> C["Institutional Validation\nStyle neutralization + Fama-MacBeth + BH correction"]
-    A --> D["Statistical Arbitrage\nCointegration + Hurst + half-life"]
-    A --> E["Regime Detection\nBTC structure + breadth + GMM"]
-    B --> F["ML Scoring\nLightGBM + purged CV"]
-    E --> F
-    C --> G["Signal Combiner\nRegime-aware weighted fusion"]
-    D --> G
-    F --> G
-    G --> H["Research Outputs\nsignals.csv + reports + simulations"]
+    A["Market Data Layer\nPolars + DuckDB + Parquet"] --> B["Feature Cache\nbuild_feature_cache.py"]
+    B --> C["Year 1 Training\nazalyst_train.py\nCross-sectional alpha label"]
+    C --> D["Year 2 Weekly Loop\nazalyst_weekly_loop.py\nPredict → Evaluate → Retrain"]
+    D --> E["Year 3 Weekly Loop\nExpanding window training"]
+    E --> F["Results\nweekly_summary + all_trades\nfeature_importance + alpha_report"]
+    G["Alpha Metrics\nazalyst_alpha_metrics.py\nTarget: 1000% annual"] --> D
+    G --> E
 ```
 
-## Research Pipeline
+## ML Pipeline
 
-### 1. Data Loading
-- Parallel parquet ingestion with `ProcessPoolExecutor`.
-- Wide close and volume panels built with Polars lazy scans and DuckDB cross-sectional queries.
-- Timestamp normalization and optional interval aggregation.
+### Training Label — Cross-Sectional Alpha
 
-### 2. Factor Research
-- `FactorEngineV2` computes 35 cross-sectional factors.
-- `CrossSectionalAnalyser` evaluates Spearman rank IC, ICIR, Newey-West adjusted t-stats, and decay from 1 hour to 1 week.
-- Signal families include momentum, reversal, volatility, liquidity, microstructure, and ranked technical structure.
+The model does **not** predict whether a coin goes up or down. It predicts whether a coin will **outperform the cross-sectional median** return across all coins at that timestamp. This means:
 
-### 3. Institutional Validation
-- `FactorValidator` removes BTC beta, liquidity, and size effects.
-- Cross-sectional Fama-MacBeth regressions test whether alpha persists after de-biasing.
-- Benjamini-Hochberg correction controls false discovery risk.
+- The signal is direction-agnostic — it works in bull and bear markets equally
+- The model learns relative strength, not absolute price movement
+- This is how institutional quant funds build signals
 
-### 4. Statistical Arbitrage
-- Engle-Granger two-step cointegration testing across symbol pairs.
-- Hurst exponent and half-life validation for mean-reverting spreads.
-- Live z-score computation for spread dislocations.
+### Self-Improving Weekly Loop
 
-### 5. Machine Learning
-- `azalyst_ml.py` trains LightGBM models with optional CUDA acceleration.
-- Purged time-series cross-validation is used to reduce leakage.
-- Core model families include `PumpDumpDetector`, `ReturnPredictor`, and `RegimeDetector`.
+```
+YEAR 1 DATA  (365 days)
+    ↓
+[INITIAL TRAIN]
+LightGBM + purged time-series CV
+Cross-sectional alpha labels
+    ↓
+YEAR 2 DATA  (week by week)
+    ↓
+┌─────────────────────────────────────────────────────┐
+│  Each week:                                         │
+│    1. Predict  — rank symbols by outperformance prob│
+│    2. Trade    — long top 20%, short bottom 20%     │
+│    3. Evaluate — rolling 4-week annualised return   │
+│    4. Decide   — if < 1000% annual → RETRAIN        │
+│       Expanding window: Year 1 + all weeks seen     │
+│    5. Save     — weekly summary + all trades        │
+└─────────────────────────────────────────────────────┘
+    ↓
+YEAR 3 DATA  (same loop continues)
+    ↓
+RESULTS  →  send to Claude for improvement suggestions
+```
 
-### 6. Walk-Forward Simulation
-- Rolling train-test windows with periodic retraining.
-- Feature transforms fit only on training rows.
-- Resume support through checkpoints and logging.
-- Trade replay with next-bar execution assumptions and fee handling.
+### Retrain Trigger
+
+| Condition | Action |
+|---|---|
+| Rolling 4-week annualised < 1000% | Retrain on expanded window |
+| Single week return < -15% | Immediate retrain |
+| On track (>= 1000% annualised) | Keep predicting, no retrain |
 
 ## Execution Modes
 
-### Option 1 - Run the core research and ML pipeline only
+### Option 1 — Local pipeline
 
-Use this mode when you want the research engine itself without the autonomous Ollama layer.
+```bash
+# Step 1: Build feature cache (run once)
+python build_feature_cache.py --data-dir ./data --out-dir ./feature_cache
 
-**End-to-end research pipeline**
+# Step 2: Train on Year 1
+python azalyst_train.py --feature-dir ./feature_cache --out-dir ./results
+
+# Step 3: Run weekly self-improving loop (Year 2 + Year 3)
+python azalyst_weekly_loop.py --feature-dir ./feature_cache --results-dir ./results
+
+# With GPU (recommended)
+python azalyst_train.py --feature-dir ./feature_cache --out-dir ./results --gpu
+python azalyst_weekly_loop.py --feature-dir ./feature_cache --results-dir ./results --gpu
+```
+
+### Option 2 — Kaggle (GPU, faster)
+
+1. Create a new Kaggle notebook
+2. Set accelerator to **GPU T4 x2**
+3. Upload all Python files and your dataset
+4. Run `kaggle_pipeline.py` — it handles everything automatically
+5. Download `results.zip` from the output tab
+
+Expected runtime with T4 GPU: **3–5 hours** for full 3-year pipeline.
+
+### Option 3 — GitHub Actions (automated CI/CD)
+
+Push to `main` branch and the workflow runs automatically. Set three secrets in your repo:
+
+| Secret | Value |
+|---|---|
+| `KAGGLE_USERNAME` | Your Kaggle username |
+| `KAGGLE_KEY` | Your Kaggle API key |
+| `KAGGLE_DATASET` | `username/dataset-name` |
+
+Results are saved as downloadable artifacts for 30 days after each run.
+
+See `SETUP.md` for full setup instructions for both Kaggle and GitHub Actions.
+
+### Option 4 — Core research pipeline only
 
 ```bash
 python azalyst_orchestrator.py --data-dir ./data --out-dir ./azalyst_output
 ```
 
-**Direct walk-forward simulation**
-
 ```bash
 python walkforward_simulator.py
 ```
-
-This path is appropriate when the objective is direct factor research, model training, and simulation without an LLM-driven operating loop.
-
-### Option 2 - Run with Ollama, Jupyter, and the autonomous research loop
-
-Use this mode when you want the local LLM-assisted workflow to monitor the run, surface progress, and support iterative fixing.
-
-```text
-RUN_SHIFT_MONITOR.bat
-```
-
-This mode starts:
-- the live browser dashboard,
-- the Jupyter monitor notebook when available,
-- the local Ollama runtime,
-- the model warm-up process, and
-- the autonomous research team around the simulator.
-
-If you want the same autonomous backend with a Spyder-first monitoring surface instead of browser or notebook tabs, use:
-
-```text
-Azalyst_Spyder.bat
-```
-
-## Local Research Operations Layer
-
-The autonomous operating layer is local-first and built to support long-running experiments.
-
-- `RUN_SHIFT_MONITOR.bat` launches the monitored workflow.
-- `Azalyst_Spyder.bat` launches the Spyder-first monitored workflow.
-- `azalyst_autonomous_team.py` manages the multi-agent local research loop.
-- `monitor_dashboard.py` serves the live dashboard at `http://127.0.0.1:8080`.
-- `Azalyst_Live_Monitor.ipynb` provides a notebook-based monitoring surface.
-- `spyder_live_monitor.py` renders live charts, metrics, and log tails inside Spyder.
-- `ensure_jupyter_monitor.py` reconnects or opens the notebook monitor.
-- `cleanup_locks.py` clears stale launcher locks without deleting checkpoints.
 
 ## Repository Map
 
 | Path | Purpose |
 | --- | --- |
+| `azalyst_alpha_metrics.py` | Alpha calculator — 1000% annual target, retrain trigger logic. |
+| `azalyst_train.py` | Year 1 training — cross-sectional alpha labels, LightGBM + purged CV. |
+| `azalyst_weekly_loop.py` | Year 2+3 weekly self-improving loop — predict, evaluate, retrain. |
+| `kaggle_pipeline.py` | Full GPU pipeline runner for Kaggle notebooks. |
+| `build_feature_cache.py` | Precompute ML features once — 5-20x simulation speedup. |
 | `azalyst_orchestrator.py` | End-to-end research pipeline entry point. |
 | `azalyst_data.py` | High-performance Polars and DuckDB analytics layer. |
-| `azalyst_factors_v2.py` | Cross-sectional factor library. |
+| `azalyst_factors_v2.py` | Cross-sectional factor library (35 factors). |
 | `azalyst_validator.py` | Style neutralization and institutional validation. |
 | `azalyst_statarb.py` | Cointegration and mean-reversion research. |
 | `azalyst_ml.py` | Predictive models, feature engineering, and regime logic. |
 | `azalyst_signal_combiner.py` | Weighted signal fusion layer. |
 | `walkforward_simulator.py` | Rolling walk-forward backtest and checkpointing. |
-| `azalyst_autonomous_team.py` | Local autonomous research runner. |
-| `monitor_dashboard.py` | Browser-based monitor server. |
+| `monitor_dashboard.py` | Browser-based monitor server (`http://127.0.0.1:8080`). |
 | `Azalyst_Live_Monitor.ipynb` | Jupyter-based live monitor. |
-| `azalyst_output/` | Signals, metrics, reports, and generated research artifacts. |
+| `.github/workflows/azalyst_training.yml` | GitHub Actions CI/CD workflow. |
+| `SETUP.md` | Full setup instructions for Kaggle and GitHub Actions. |
 
 ## Data Requirements
 
@@ -164,41 +179,34 @@ The platform is intended for broad, cross-sectional research universes and multi
 
 ## Installation
 
-### Python dependencies
-
 ```bash
 pip install -r requirements.txt
 ```
 
-### Optional notebook monitoring support
+### Optional notebook monitoring
 
 ```bash
 pip install notebook ipykernel
-```
-
-### Local Ollama model
-
-```bash
-ollama pull deepseek-r1:14b
 ```
 
 ## Primary Outputs
 
 | File | Description |
 | --- | --- |
-| `signals.csv` | Ranked per-symbol research output. |
-| `performance_metrics.csv` | Win rate, Sharpe, drawdown, and simulation metrics. |
-| `paper_trades.csv` | Simulated trade log. |
-| `checkpoint.json` | Resume point for interrupted walk-forward runs. |
-| `team_log.txt` | Autonomous runner transcript and simulator stream. |
+| `results/weekly_summary_all.csv` | Week-by-week return, Sharpe, retrain flag across Year 2+3. |
+| `results/all_trades_all.csv` | Every simulated trade across the full 2-year loop. |
+| `results/alpha_report.json` | Summary report — annualised return, total retrains, alpha achieved. |
+| `results/feature_importance_*.csv` | Feature importance at Year 1 and after each retrain. |
+| `results/models/model_*.pkl` | Model checkpoint after each retrain. |
+| `results/train_summary.json` | Year 1 training metadata — AUC, symbols, rows. |
 
 ## Research Principles
 
 - Transparent methodology over opaque claims.
 - Validation before interpretation.
 - Repeatable pipelines over discretionary workflows.
-- Local-first operations for long-running experimentation.
-- Research outputs treated as evidence, not promises.
+- Results treated as evidence, not promises.
+- No LLM in the training loop — pure quantitative self-improvement.
 
 ## Disclaimer
 
