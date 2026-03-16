@@ -1,0 +1,201 @@
+name: Azalyst ML Training Pipeline
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  TRIGGERS
+#  - Push to main branch
+#  - Manual trigger from GitHub Actions tab (workflow_dispatch)
+#  - Weekly schedule (Sunday midnight UTC) — keeps the model fresh
+# ─────────────────────────────────────────────────────────────────────────────
+on:
+  push:
+    branches: [main]
+    paths:
+      - "azalyst_train.py"
+      - "azalyst_weekly_loop.py"
+      - "azalyst_alpha_metrics.py"
+      - "build_feature_cache.py"
+  workflow_dispatch:
+    inputs:
+      year2_only:
+        description: "Run Year 2 only (skip Year 3, faster)"
+        required: false
+        default: "false"
+      year1_days:
+        description: "Days of data to use for Year 1 training"
+        required: false
+        default: "365"
+  schedule:
+    - cron: "0 0 * * 0"   # Every Sunday midnight UTC
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  PERMISSIONS
+# ─────────────────────────────────────────────────────────────────────────────
+permissions:
+  contents: read
+  actions: write     # needed to upload artifacts
+
+jobs:
+  train:
+    name: Full ML Training Pipeline
+    # Large runner — training can take 4-8 hours
+    runs-on: ubuntu-latest
+    timeout-minutes: 480    # 8 hours max
+
+    steps:
+      # ── 1. Checkout code ────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Python setup ─────────────────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      # ── 3. Install dependencies ─────────────────────────────────────────────
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install \
+            numpy pandas scikit-learn scipy \
+            lightgbm pyarrow polars \
+            statsmodels python-dotenv \
+            requests psutil sortedcontainers
+
+      # ── 4. Download data from Kaggle ─────────────────────────────────────────
+      # Requires GitHub Secrets:
+      #   KAGGLE_USERNAME  — your Kaggle username
+      #   KAGGLE_KEY       — your Kaggle API key  (from kaggle.com → Account → API)
+      #   KAGGLE_DATASET   — format: "username/dataset-name"
+      - name: Download data from Kaggle
+        env:
+          KAGGLE_USERNAME: ${{ secrets.KAGGLE_USERNAME }}
+          KAGGLE_KEY:      ${{ secrets.KAGGLE_KEY }}
+        run: |
+          pip install kaggle
+          mkdir -p data
+          # Download your Binance parquet dataset
+          kaggle datasets download \
+            -d "${{ secrets.KAGGLE_DATASET }}" \
+            -p data/ \
+            --unzip
+          echo "Data files:"
+          ls -lah data/ | head -30
+          echo "Total parquet files: $(find data/ -name '*.parquet' | wc -l)"
+
+      # ── 5. Build feature cache ────────────────────────────────────────────────
+      - name: Build feature cache
+        run: |
+          mkdir -p feature_cache results
+          python build_feature_cache.py \
+            --data-dir   ./data \
+            --out-dir    ./feature_cache \
+            --workers    4
+          echo "Cached symbols: $(find feature_cache/ -name '*.parquet' | wc -l)"
+
+      # ── 6. Year 1 training ────────────────────────────────────────────────────
+      - name: Train Year 1 model
+        run: |
+          python azalyst_train.py \
+            --feature-dir ./feature_cache \
+            --out-dir     ./results \
+            --year1-days  ${{ github.event.inputs.year1_days || '365' }}
+
+      # ── 7. Weekly self-improving loop ─────────────────────────────────────────
+      - name: Run weekly loop (Year 2 + Year 3)
+        run: |
+          YEAR2_FLAG=""
+          if [ "${{ github.event.inputs.year2_only }}" = "true" ]; then
+            YEAR2_FLAG="--year2-only"
+          fi
+          python azalyst_weekly_loop.py \
+            --feature-dir ./feature_cache \
+            --results-dir ./results \
+            $YEAR2_FLAG
+
+      # ── 8. List results ───────────────────────────────────────────────────────
+      - name: List result files
+        run: |
+          echo "=== RESULTS DIRECTORY ==="
+          ls -lah results/
+          echo ""
+          echo "=== MODELS ==="
+          ls -lah results/models/ | head -20
+          echo ""
+          echo "=== ALPHA REPORT ==="
+          cat results/alpha_report.json || echo "alpha_report.json not found"
+          echo ""
+          echo "=== WEEKLY SUMMARY (last 10 rows) ==="
+          python -c "
+          import pandas as pd
+          import os
+          f = 'results/weekly_summary_all.csv'
+          if os.path.exists(f):
+              df = pd.read_csv(f)
+              print(df.tail(10).to_string())
+          else:
+              print('weekly_summary_all.csv not found')
+          "
+
+      # ── 9. Package all results ────────────────────────────────────────────────
+      - name: Package results
+        run: |
+          cd results
+          zip -r ../azalyst_results.zip . \
+            --exclude "*/feature_cache/*"
+          cd ..
+          echo "Results package size: $(du -sh azalyst_results.zip)"
+
+      # ── 10. Upload as GitHub artifact (downloadable for 30 days) ─────────────
+      - name: Upload results artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: azalyst-results-${{ github.run_number }}
+          path: azalyst_results.zip
+          retention-days: 30
+
+      # ── 11. Upload individual key files for quick inspection ──────────────────
+      - name: Upload key CSV files
+        uses: actions/upload-artifact@v4
+        with:
+          name: azalyst-key-files-${{ github.run_number }}
+          path: |
+            results/alpha_report.json
+            results/weekly_summary_all.csv
+            results/all_trades_all.csv
+            results/feature_importance_year1.csv
+            results/train_summary.json
+          retention-days: 30
+          if-no-files-found: warn
+
+      # ── 12. Job summary ───────────────────────────────────────────────────────
+      - name: Write job summary
+        run: |
+          python -c "
+          import json, pandas as pd, os
+
+          summary_lines = ['## Azalyst ML Training Results\n']
+
+          # Alpha report
+          if os.path.exists('results/alpha_report.json'):
+              with open('results/alpha_report.json') as f:
+                  rpt = json.load(f)
+              summary_lines.append('### Alpha Report')
+              for k, v in rpt.items():
+                  summary_lines.append(f'- **{k}**: {v}')
+              summary_lines.append('')
+
+          # Weekly summary stats
+          if os.path.exists('results/weekly_summary_all.csv'):
+              wk = pd.read_csv('results/weekly_summary_all.csv')
+              summary_lines.append('### Weekly Performance')
+              summary_lines.append(f'- Total weeks: {len(wk)}')
+              summary_lines.append(f'- Mean weekly return: {wk[\"week_return_pct\"].mean():.2f}%')
+              summary_lines.append(f'- Weeks on track: {wk[\"on_track\"].sum()} / {len(wk)}')
+              summary_lines.append(f'- Total retrains: {wk[\"retrained\"].sum()}')
+              if 'annualised_pct' in wk.columns:
+                  summary_lines.append(f'- Avg annualised projection: {wk[\"annualised_pct\"].mean():.0f}%')
+
+          print('\n'.join(summary_lines))
+          " >> \$GITHUB_STEP_SUMMARY
