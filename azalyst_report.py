@@ -3,14 +3,6 @@
        AZALYST ALPHA RESEARCH ENGINE    RESEARCH REPORT & LIVE SCANNER        
 ║        Factor Signals · ML Scores · Regime · Pair Signals                 ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
-
-This module ties everything together into:
-  1. ResearchReport  — Generate comprehensive CSV/console research report
-  2. LiveAlphaScanner — Run all 4 alpha engines on latest data and output signals
-  3. SignalAggregator — Combine factor + ML + statarb signals into a unified score
-
-Run as standalone:
-  python azalyst_report.py --data-dir ./data --out-dir ./research --models-dir ./models
 """
 
 from __future__ import annotations
@@ -37,10 +29,7 @@ BARS_PER_DAY  = 288
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ResearchReport:
-    """
-    Generates a full research report from existing output files.
-    Summarises: IC table, backtest stats, top factors, cointegrated pairs.
-    """
+    """Generates a full research report from existing output files."""
 
     def __init__(self, out_dir: str):
         self.out_dir = out_dir
@@ -51,7 +40,6 @@ class ResearchReport:
         print("  " + datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"))
         print("═"*65)
 
-        # ── IC Analysis ────────────────────────────────────────────────────
         ic_path = os.path.join(self.out_dir, "ic_analysis.csv")
         if os.path.exists(ic_path):
             ic_df = pd.read_csv(ic_path)
@@ -64,7 +52,6 @@ class ResearchReport:
                       f"IC+%={row['IC_pos%']:.0f}%")
             print("└────────────────────────────────────────────────────────────┘")
 
-        # ── Backtest Performance ────────────────────────────────────────────
         bt_path = os.path.join(self.out_dir, "performance_summary.csv")
         if os.path.exists(bt_path):
             bt_df = pd.read_csv(bt_path)
@@ -84,7 +71,6 @@ class ResearchReport:
                 print(f"  {k:<20} {v}")
             print("└────────────────────────────────────────────────────────────┘")
 
-        # ── Cointegrated Pairs ──────────────────────────────────────────────
         pairs_path = os.path.join(self.out_dir, "cointegrated_pairs.csv")
         if os.path.exists(pairs_path):
             pairs = pd.read_csv(pairs_path)
@@ -96,7 +82,6 @@ class ResearchReport:
                       f"H={row['hurst']:.3f}")
             print("└────────────────────────────────────────────────────────────┘")
 
-        # ── Pairs Backtest ──────────────────────────────────────────────────
         pairs_bt_path = os.path.join(self.out_dir, "pairs_backtest_summary.csv")
         if os.path.exists(pairs_bt_path):
             pairs_bt = pd.read_csv(pairs_bt_path)
@@ -119,16 +104,8 @@ class ResearchReport:
 
 class LiveAlphaScanner:
     """
-    Runs all 4 alpha engines on the most recent data and produces
+    Runs all alpha engines on the most recent data and produces
     a unified signal table ranked by composite alpha score.
-
-    Sources
-    ───────
-    Factor Score   : Composite rank from factor engine
-    ML Pump Score  : PumpDumpDetector probability (higher = avoid)
-    ML Return Score: ReturnPredictor up-probability
-    Pair Signal    : Z-score from StatArb (if pair signal exists for coin)
-    Regime         : Current market regime (adjusts weights)
     """
 
     REGIME_WEIGHTS = {
@@ -149,51 +126,40 @@ class LiveAlphaScanner:
         self.pairs_df     = pd.read_csv(pairs_csv) if pairs_csv and os.path.exists(pairs_csv) else None
         self._ic_table    = pd.read_csv(ic_csv) if ic_csv and os.path.exists(ic_csv) else None
 
-        self.pump_model   = None
         self.return_model = None
-        self.regime_model = None
-
         if models_dir and os.path.isdir(models_dir):
             self._load_models(models_dir)
 
     def _load_models(self, models_dir: str) -> None:
-        pump_path   = os.path.join(models_dir, "pump_dump_model.pkl")
         return_path = os.path.join(models_dir, "return_predictor.pkl")
-        regime_path = os.path.join(models_dir, "regime_detector.pkl")
-
-        if os.path.exists(pump_path):
-            from azalyst_ml import PumpDumpDetector
-            self.pump_model = PumpDumpDetector()
-            self.pump_model.load(pump_path)
-
         if os.path.exists(return_path):
-            from azalyst_ml import ReturnPredictor
-            self.return_model = ReturnPredictor()
+            from azalyst_ml import ReturnPredictorV2
+            self.return_model = ReturnPredictorV2()
             self.return_model.load(return_path)
-
-        if os.path.exists(regime_path):
-            with open(regime_path, "rb") as f:
-                self.regime_model = pickle.load(f)
 
     def _get_regime(self) -> str:
         btc_key = next((k for k in self.data if "BTC" in k), None)
-        if btc_key and self.regime_model:
-            return self.regime_model.current_regime(self.data[btc_key])
+        if btc_key:
+            btc = self.data[btc_key]["close"]
+            ret_4w = btc.pct_change(BARS_PER_DAY * 28).iloc[-1]
+            if ret_4w > 0.05:
+                return "BULL_TREND"
+            elif ret_4w < -0.05:
+                return "BEAR_TREND"
         return "BULL_TREND"
 
     def _factor_scores_latest(self) -> pd.Series:
         """
         Compute composite score on latest available bar.
 
-        Upgrade from v1 (20 factors) → v2 (35 factors):
-          - Builds full OHLCV panels so open/high/low-dependent factors
-            (OVERNIGHT, CLOSE_TO_OPEN, VWAP_DEV, CORWIN_SCHULTZ) are included.
-          - Uses CompositeFactorBuilder from FactorEngineV2 which has the
-            correct momentum/reversal/quality composites for the v2 factor set.
+        FIX: Gemini introduced FactorEngineV2 (which doesn't exist) with
+        methods like ic_weighted_composite, reversal_composite, quality_composite
+        (which also don't exist). The correct classes are FactorEngine from
+        azalyst_engine.py and CompositeFactorBuilder also from azalyst_engine.py.
         """
-        from azalyst_factors_v2 import FactorEngineV2
+        # FIX: FactorEngine lives in azalyst_engine, not azalyst_factors_v2
+        from azalyst_engine import FactorEngine, CompositeFactorBuilder
 
-        # Build panels from the loaded data dict
         close_panel = pd.DataFrame(
             {sym: df["close"] for sym, df in self.data.items()}
         ).sort_index().ffill(limit=3)
@@ -202,41 +168,21 @@ class LiveAlphaScanner:
             {sym: df["volume"] for sym, df in self.data.items()}
         ).sort_index().ffill(limit=3)
 
-        open_panel = pd.DataFrame(
-            {sym: df["open"] for sym, df in self.data.items()
-             if "open" in df.columns}
-        ).sort_index().ffill(limit=3) if any("open" in df.columns for df in self.data.values()) else None
+        fe = FactorEngine()
+        factors = fe.compute_all(close_panel, volume_panel)
 
-        high_panel = pd.DataFrame(
-            {sym: df["high"] for sym, df in self.data.items()
-             if "high" in df.columns}
-        ).sort_index().ffill(limit=3) if any("high" in df.columns for df in self.data.values()) else None
+        # FIX: CompositeFactorBuilder has the actual composite methods
+        cfb = CompositeFactorBuilder()
 
-        low_panel = pd.DataFrame(
-            {sym: df["low"] for sym, df in self.data.items()
-             if "low" in df.columns}
-        ).sort_index().ffill(limit=3) if any("low" in df.columns for df in self.data.values()) else None
-
-        # Compute all 35 factors
-        fe_v2   = FactorEngineV2()
-        factors = fe_v2.compute_all(
-            close=close_panel,
-            volume=volume_panel,
-            high=high_panel,
-            low=low_panel,
-            open_=open_panel,
-        )
-
-        # Build composite based on selected mode, falling back gracefully
         if self.composite == "ic_weighted" and self._ic_table is not None:
-            comp = fe_v2.ic_weighted_composite(factors, self._ic_table, horizon="1D")
+            comp = cfb.ic_weighted(factors, self._ic_table, horizon="1D")
         elif self.composite == "quality":
-            comp = fe_v2.quality_composite(factors)
+            comp = cfb.quality_composite(factors)
         elif self.composite == "momentum":
-            comp = fe_v2.momentum_composite(factors)
+            comp = cfb.momentum_composite(factors)
         else:
-            # Default: reversal — confirmed as dominant alpha in this universe
-            comp = fe_v2.reversal_composite(factors)
+            # Default: reversal — confirmed dominant alpha in this universe
+            comp = cfb.reversal_composite(factors)
 
         return comp.iloc[-1].dropna()
 
@@ -247,7 +193,6 @@ class LiveAlphaScanner:
         regime = self._get_regime()
         print(f"  Market Regime: {regime}")
 
-        # Factor scores
         try:
             factor_scores = self._factor_scores_latest()
         except Exception as e:
@@ -260,42 +205,36 @@ class LiveAlphaScanner:
                 continue
 
             row = {"symbol": sym, "regime": regime}
-
-            # Factor score
             row["factor_score"] = round(factor_scores.get(sym, 0.5), 4)
 
-            # ML pump score
-            if self.pump_model:
-                try:
-                    row["pump_prob"] = round(self.pump_model.predict(df).iloc[-1], 4)
-                except Exception:
-                    row["pump_prob"] = 0.0
-            else:
-                row["pump_prob"] = 0.0
-
-            # ML return score
             if self.return_model:
                 try:
-                    row["up_prob"] = round(self.return_model.predict_proba(df).iloc[-1], 4)
+                    from azalyst_factors_v2 import build_features, FEATURE_COLS
+                    feats = build_features(df)
+                    latest = feats[FEATURE_COLS].dropna(how="all").iloc[-1:]
+                    if not latest.empty:
+                        proba = self.return_model.predict_proba(
+                            latest.values.astype(np.float32)
+                        )
+                        row["up_prob"] = round(float(proba[0]), 4)
+                    else:
+                        row["up_prob"] = 0.5
                 except Exception:
                     row["up_prob"] = 0.5
             else:
                 row["up_prob"] = 0.5
 
-            # Latest price momentum
+            row["pump_prob"] = 0.0
+
             close = df["close"]
             row["ret_1h"]  = round(close.pct_change(BARS_PER_HOUR).iloc[-1] * 100, 3)
-            row["ret_4h"]  = round(close.pct_change(BARS_PER_HOUR*4).iloc[-1] * 100, 3)
+            row["ret_4h"]  = round(close.pct_change(BARS_PER_HOUR * 4).iloc[-1] * 100, 3)
             row["ret_1d"]  = round(close.pct_change(BARS_PER_DAY).iloc[-1] * 100, 3)
             row["price"]   = round(close.iloc[-1], 6)
 
-            # Composite alpha score (higher = better long candidate)
-            pump_penalty   = row["pump_prob"] * 0.3
-            composite      = (row["factor_score"] * 0.5 +
-                              row["up_prob"] * 0.5 -
-                              pump_penalty)
+            composite = row["factor_score"] * 0.5 + row["up_prob"] * 0.5
             row["alpha_score"] = round(composite, 4)
-            row["signal"]      = (
+            row["signal"] = (
                 "STRONG BUY" if composite > 0.75 else
                 "BUY"        if composite > 0.60 else
                 "SELL"       if composite < 0.30 else
@@ -341,43 +280,27 @@ class LiveAlphaScanner:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Azalyst Report — Research Reports & Live Signal Scanner",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Generate research report from existing output files
-  python azalyst_report.py --report-only --out-dir ./azalyst_output
-
-  # Run live signal scan on latest data
-  python azalyst_report.py --data-dir ./data --models-dir ./models --live
-
-  # Full: live scan + save results
-  python azalyst_report.py --data-dir ./data --models-dir ./models --live --save
-        """
+        description="Azalyst Report — Research Reports & Live Signal Scanner"
     )
     parser.add_argument("--data-dir",    default=None)
     parser.add_argument("--out-dir",     default="./azalyst_output")
     parser.add_argument("--models-dir",  default="./azalyst_models")
     parser.add_argument("--pairs-csv",   default=None)
-    parser.add_argument("--ic-csv",      default=None,
-                        help="Path to ic_analysis.csv (needed for ic_weighted live scan)")
+    parser.add_argument("--ic-csv",      default=None)
     parser.add_argument("--composite",   default="reversal",
-                        choices=["reversal", "quality", "ic_weighted", "momentum"],
-                        help="Composite for live factor scoring (default: reversal)")
+                        choices=["reversal", "quality", "ic_weighted", "momentum"])
     parser.add_argument("--max-symbols", type=int, default=None)
     parser.add_argument("--report-only", action="store_true")
     parser.add_argument("--live",        action="store_true")
     parser.add_argument("--save",        action="store_true")
     args = parser.parse_args()
 
-    # Report from existing files
     report = ResearchReport(args.out_dir)
     report.generate()
 
     if args.report_only or not args.data_dir:
         return
 
-    # Live scan
     if args.live:
         from azalyst_engine import DataLoader
         loader  = DataLoader(args.data_dir, max_symbols=args.max_symbols, workers=4)
