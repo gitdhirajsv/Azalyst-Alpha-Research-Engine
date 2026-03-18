@@ -6,10 +6,10 @@ chcp 65001 >nul 2>&1
 cd /d "%~dp0"
 
 echo.
-echo  ╔══════════════════════════════════════════════════════════╗
-echo  ║        AZALYST ALPHA RESEARCH ENGINE  v3.1             ║
-echo  ║   XGBoost  ^|  20 Factors  ^|  Binance OHLCV 5m         ║
-echo  ╚══════════════════════════════════════════════════════════╝
+echo  ============================================================
+echo    AZALYST ALPHA RESEARCH ENGINE  v3.1
+echo    XGBoost  ^|  20 Factors  ^|  Binance OHLCV 5m
+echo  ============================================================
 echo.
 echo  System scan in progress...
 echo.
@@ -82,10 +82,30 @@ if errorlevel 1 (
 )
 echo.
 
-:: ════════════════════════════════════════════════════════════════
-echo ════════════════════════════════════════════════════════════════
+:: ── Pre-flight: data directory check ────────────────────────────────────────
+if not exist "%~dp0data\" (
+    echo  [ERROR] Data folder not found: %~dp0data
+    echo  Create a 'data' subfolder next to this .bat file and add your .parquet files.
+    echo.
+    pause
+    exit /b 1
+)
+set PARQUET_COUNT=0
+for %%f in ("%~dp0data\*.parquet") do if exist "%%f" set /a PARQUET_COUNT+=1
+if "!PARQUET_COUNT!"=="0" (
+    echo  [ERROR] No .parquet files found in %~dp0data
+    echo  Add your Binance 5-min OHLCV .parquet files to the data\ folder.
+    echo.
+    pause
+    exit /b 1
+)
+echo  [OK] Data: !PARQUET_COUNT! .parquet file(s) found
+echo.
+
+:: ================================================================
+echo ================================================================
 echo   CONFIGURATION
-echo ════════════════════════════════════════════════════════════════
+echo ================================================================
 echo.
 
 :: ── Q1: GPU or CPU ───────────────────────────────────────────────────────────
@@ -136,10 +156,10 @@ if "!SPYDER_FOUND!"=="1" (
 :Q2_DONE
 echo.
 
-:: ════════════════════════════════════════════════════════════════
-echo ════════════════════════════════════════════════════════════════
+:: ================================================================
+echo ================================================================
 echo   LAUNCH SUMMARY
-echo ════════════════════════════════════════════════════════════════
+echo ================================================================
 echo.
 echo   Compute  : %COMPUTE_LABEL%
 if "!USE_SPYDER!"=="1" (
@@ -147,10 +167,10 @@ if "!USE_SPYDER!"=="1" (
 ) else (
     echo   Output   : Terminal only
 )
-echo   Data dir : .\data\
-echo   Results  : .\results\
+echo   Data dir : %~dp0data\
+echo   Results  : %~dp0results\
 echo.
-echo ════════════════════════════════════════════════════════════════
+echo ================================================================
 echo.
 set /p CONFIRM="  Start? (Y/N): "
 if /i not "!CONFIRM!"=="Y" ( echo  Cancelled. & timeout /t 2 /nobreak >nul & exit /b 0 )
@@ -169,9 +189,9 @@ powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c >nul 2>&1
 :: ── Launch Spyder (detached - closing it will NOT stop pipeline) ──────────────
 if "!USE_SPYDER!"=="1" (
     echo.
-    echo ════════════════════════════════════════════════════════════════
+    echo ================================================================
     echo   LAUNCHING SPYDER
-    echo ════════════════════════════════════════════════════════════════
+    echo ================================================================
     echo.
     echo  Spyder opens in background. Once loaded:
     echo    - Open azalyst_spyder_monitor.py and press F5 for live charts
@@ -189,20 +209,20 @@ if "!USE_SPYDER!"=="1" (
     echo.
 )
 
-:: ════════════════════════════════════════════════════════════════
-echo ════════════════════════════════════════════════════════════════
+:: ================================================================
+echo ================================================================
 echo   RUNNING AZALYST PIPELINE
-echo ════════════════════════════════════════════════════════════════
+echo ================================================================
 echo.
 echo  Compute  : %COMPUTE_LABEL%
 echo  Started  : %date% %time%
-echo  Data     : .\data\
-echo  Results  : .\results\
+echo  Data     : %~dp0data\
+echo  Results  : %~dp0results\
 echo.
-echo ────────────────────────────────────────────────────────────────
+echo ----------------------------------------------------------------
 echo.
 
-python azalyst_engine.py --data-dir ./data --out-dir ./results
+python azalyst_engine.py --data-dir "%~dp0data" --out-dir "%~dp0results"
 
 set EXIT_CODE=%errorlevel%
 
@@ -210,14 +230,14 @@ set EXIT_CODE=%errorlevel%
 powercfg /setactive 381b4222-f694-41f0-9685-ff5bb260df2e >nul 2>&1
 
 echo.
-echo ────────────────────────────────────────────────────────────────
+echo ----------------------------------------------------------------
 
 if "!EXIT_CODE!"=="0" (
     color 0A
     echo.
     echo  Pipeline completed successfully!
     echo.
-    echo  Output files saved to .\results\
+    echo  Output files saved to %~dp0results\
     echo    ic_analysis.csv          - Factor IC / ICIR scores
     echo    backtest_pnl.csv         - Daily PnL with fees
     echo    performance_summary.csv  - Sharpe, Sortino, Calmar
@@ -228,7 +248,7 @@ if "!EXIT_CODE!"=="0" (
     echo  [ERROR] Pipeline failed (exit code !EXIT_CODE!)
     echo.
     echo  Common fixes:
-    echo    No .parquet files?   Add them to .\data\
+    echo    No .parquet files?   Add them to %~dp0data\
     echo    Missing packages?    pip install xgboost numpy pandas scikit-learn scipy matplotlib pyarrow psutil statsmodels
     echo    Python not found?    Reinstall Python 3.10+ with "Add to PATH" checked
     echo.
