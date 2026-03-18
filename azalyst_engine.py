@@ -727,8 +727,11 @@ class BacktestEngine:
             (c for c in close_panel.columns if "BTC" in str(c).upper()), None
         )
         
-        from azalyst_execution import ImpactModel
-        self._impact_model = ImpactModel(decay_param=0.5)
+        try:
+            from azalyst_execution import ImpactModel
+            self._impact_model = ImpactModel(decay_param=0.5)
+        except Exception:
+            self._impact_model = None
 
     def _build_weights(self, scores: pd.Series,
                        n_long: int, n_short: int) -> pd.Series:
@@ -757,7 +760,7 @@ class BacktestEngine:
         """
         Estimate institutional market impact cost using square-root model.
         """
-        if self.volume is None or self.mi_coef <= 0:
+        if self.volume is None or self.mi_coef <= 0 or self._impact_model is None:
             return 0.0
         
         # Current bar volumes (base currency equivalent)
