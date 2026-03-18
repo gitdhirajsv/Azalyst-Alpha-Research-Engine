@@ -6,8 +6,16 @@
 ║  4GB VRAM guard: caps training at 2M rows to prevent OOM.                 ║
 ║  Live Spyder console output every 4 weeks.                                 ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
+
+FIXES vs original:
+  - Added argparse: --gpu, --no-gpu, --year2-only  (bat file now wires correctly)
+  - GPU mode is now selectable, not forced — if --no-gpu is passed, skip CUDA
+  - --year2-only shifts year3_start back 180 days (same as azalyst_weekly_loop.py)
+  - alpha_label recomputed cross-sectionally after pooling ALL symbols (not per-symbol)
+  - MAX_TRAIN_ROWS stays at 2_000_000 (4GB VRAM guard for RTX 2050)
 """
 
+import argparse
 import os, sys, gc, json, time, pickle, warnings, subprocess
 import numpy as np
 import pandas as pd
@@ -16,12 +24,6 @@ from scipy import stats
 from sklearn.preprocessing import RobustScaler
 from sklearn.metrics import roc_auc_score
 warnings.filterwarnings("ignore")
-
-# ── Force CUDA to RTX 2050, ignore Intel UHD ─────────────────────────────────
-# Intel UHD is NOT a CUDA device — XGBoost will never see it.
-# Pinning CUDA_VISIBLE_DEVICES=0 ensures RTX 2050 is always device 0.
-os.environ["CUDA_VISIBLE_DEVICES"]  = "0"
-os.environ["CUDA_DEVICE_ORDER"]     = "PCI_E_BUS_ID"
 
 # ── CONFIG — edit these to match your folder layout ──────────────────────────
 DATA_DIR    = r"./data"           # raw SYMBOL.parquet files
@@ -53,41 +55,43 @@ FEATURE_COLS = [
 ]
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  STEP 1 — GPU VALIDATION  (RTX 2050 only, hard abort if missing)
+#  STEP 1 — GPU VALIDATION
 # ─────────────────────────────────────────────────────────────────────────────
 
-def validate_gpu():
-    print("=" * 64)
-    print("  AZALYST LOCAL GPU RUNNER")
-    print("  Target: NVIDIA RTX 2050  (CUDA device 0)")
-    print("=" * 64)
+def validate_gpu(require_gpu: bool = False):
+    """
+    Detect and validate CUDA. Returns cuda_api string or None.
 
-    # nvidia-smi check
+    require_gpu=True  → exit if GPU not available (used when --gpu flag passed)
+    require_gpu=False → warn and fall back to CPU (auto mode)
+    """
+    print("=" * 64)
+    print("  GPU CHECK")
+
     try:
         r = subprocess.run(
             ["nvidia-smi", "--query-gpu=name,memory.total,driver_version",
              "--format=csv,noheader"],
             capture_output=True, text=True, timeout=10)
         if r.returncode != 0:
-            raise RuntimeError("nvidia-smi returned non-zero")
+            raise RuntimeError("nvidia-smi non-zero exit")
         gpu_info = r.stdout.strip()
-        print(f"\n  GPU detected  : {gpu_info}")
+        print(f"  GPU detected  : {gpu_info}")
     except Exception as e:
-        print(f"\n  [ERROR] Cannot find NVIDIA GPU: {e}")
-        print("  Check: Device Manager > Display Adapters > RTX 2050 listed?")
-        print("  Check: NVIDIA driver installed?  Run: nvidia-smi in cmd")
-        sys.exit(1)
+        if require_gpu:
+            print(f"\n  [ERROR] Cannot find NVIDIA GPU: {e}")
+            print("  Re-run the launcher and select CPU or Auto mode.")
+            sys.exit(1)
+        else:
+            print(f"  [INFO] No NVIDIA GPU detected — using CPU")
+            print("=" * 64)
+            return None
 
-    if "RTX 2050" not in gpu_info and "NVIDIA" not in gpu_info:
-        print("\n  [WARN] GPU name unexpected — continuing anyway but check above")
-
-    # XGBoost CUDA test
     try:
         import xgboost as xgb
         print(f"  XGBoost ver   : {xgb.__version__}")
     except ImportError:
-        print("  [ERROR] xgboost not installed.")
-        print("  Fix: pip install xgboost>=2.0.3 --upgrade")
+        print("  [ERROR] xgboost not installed. Run: pip install xgboost>=2.0.3")
         sys.exit(1)
 
     _x = np.random.rand(500, 10).astype(np.float32)
@@ -100,22 +104,36 @@ def validate_gpu():
         cuda_api = "new"
         print(f"  CUDA API      : new  (device='cuda')")
     except Exception as e1:
-        # Legacy API
         try:
             xgb.XGBClassifier(tree_method='gpu_hist', n_estimators=5, verbosity=0).fit(_x, _y)
             cuda_api = "old"
             print(f"  CUDA API      : legacy  (tree_method='gpu_hist')")
         except Exception as e2:
-            print(f"\n  [ERROR] XGBoost CUDA failed with both APIs.")
-            print(f"  New API error : {e1}")
-            print(f"  Old API error : {e2}")
-            print(f"\n  Fix: pip install xgboost>=2.0.3 --upgrade")
-            print(f"  Also: check CUDA toolkit installed (run: nvcc --version)")
-            sys.exit(1)
+            if require_gpu:
+                print(f"\n  [ERROR] XGBoost CUDA failed.")
+                print(f"  New API: {e1}")
+                print(f"  Old API: {e2}")
+                print(f"\n  Fix: pip install xgboost>=2.0.3 --upgrade")
+                sys.exit(1)
+            else:
+                print(f"  [WARN] CUDA test failed — falling back to CPU")
+                print("=" * 64)
+                return None
 
     print(f"  VRAM guard    : {MAX_TRAIN_ROWS:,} rows  (safe for 4GB)")
-    print(f"  Status        : RTX 2050 CUDA CONFIRMED\n")
+    print(f"  Status        : RTX 2050 CUDA CONFIRMED")
+    print("=" * 64)
+    print()
     return cuda_api
+
+
+def skip_gpu_validation():
+    """Return None so the rest of the script uses CPU path everywhere."""
+    print("=" * 64)
+    print("  CPU MODE  (GPU skipped by user choice)")
+    print("=" * 64)
+    print()
+    return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -225,8 +243,10 @@ def build_feature_store(data_dir, cache_dir):
             df = pd.read_parquet(f)
             df.index = pd.to_datetime(df.index, utc=True)
             feat = build_features(df)
+            # FIX: column is 'future_ret' not 'future_ret_4h'
             feat['future_ret'] = np.log(df['close'].shift(-HORIZON_BARS) / df['close'])
             feat['symbol'] = f.stem
+            # NOTE: alpha_label NOT saved here — computed cross-sectionally after pooling
             feat.dropna(subset=['future_ret']+FEATURE_COLS, how='all').to_parquet(out)
             new_count += 1
         except Exception as e:
@@ -255,12 +275,12 @@ def compute_ic(y_pred, y_true):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Train model on RTX 2050
+#  Train model
 # ─────────────────────────────────────────────────────────────────────────────
 
 def train_model(X, y, y_ret, cuda_api, label=''):
     import xgboost as xgb
-    print(f"  Training [{label}]: {len(X):,} rows | GPU=RTX2050")
+    print(f"  Training [{label}]: {len(X):,} rows | {'GPU=RTX2050' if cuda_api else 'CPU'}")
     t0=time.time()
     scaler=RobustScaler(); Xs=scaler.fit_transform(X)
     cv=PurgedTimeSeriesCV(n_splits=5,gap=48)
@@ -290,7 +310,39 @@ def train_model(X, y, y_ret, cuda_api, label=''):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
-    cuda_api = validate_gpu()
+    # ── FIX: argparse so bat file flags actually work ─────────────────────────
+    parser = argparse.ArgumentParser(
+        description="Azalyst Local GPU Runner — RTX 2050 / CPU"
+    )
+    parser.add_argument("--gpu",        action="store_true",
+                        help="Use CUDA GPU (RTX 2050). Exit if unavailable.")
+    parser.add_argument("--no-gpu",     action="store_true",
+                        help="Force CPU mode. Skip all CUDA checks.")
+    parser.add_argument("--year2-only", action="store_true",
+                        help="Shorter test window: shift Year 3 start back 180 days.")
+    args = parser.parse_args()
+
+    print()
+    print("  ╔══════════════════════════════════════════════════════════════╗")
+    print("  ║          AZALYST ALPHA RESEARCH ENGINE  v2.0                ║")
+    print("  ║   i5-11260H  |  RTX 2050 4GB  |  XGBoost CUDA             ║")
+    print("  ╚══════════════════════════════════════════════════════════════╝")
+    print()
+
+    # ── GPU / CPU decision ────────────────────────────────────────────────────
+    if args.no_gpu:
+        cuda_api = skip_gpu_validation()
+    elif args.gpu:
+        # Force GPU; exit if unavailable
+        os.environ["CUDA_VISIBLE_DEVICES"]  = "0"
+        os.environ["CUDA_DEVICE_ORDER"]     = "PCI_E_BUS_ID"
+        cuda_api = validate_gpu(require_gpu=True)
+    else:
+        # Auto: try GPU, fall back silently
+        os.environ["CUDA_VISIBLE_DEVICES"]  = "0"
+        os.environ["CUDA_DEVICE_ORDER"]     = "PCI_E_BUS_ID"
+        cuda_api = validate_gpu(require_gpu=False)
+
     for d in [RESULTS_DIR, f"{RESULTS_DIR}/models"]:
         Path(d).mkdir(parents=True, exist_ok=True)
 
@@ -298,8 +350,8 @@ def main():
     print("[Step 1] Feature store...")
     build_feature_store(DATA_DIR, CACHE_DIR)
 
-    # Load all
-    print("\n[Step 2] Loading feature store...")
+    # Load all symbols
+    print("\n[Step 2] Loading feature store (ALL symbols)...")
     all_files = sorted(Path(CACHE_DIR).glob("*.parquet"))
     if not all_files:
         print("  [ERROR] Feature store empty. Check DATA_DIR path.")
@@ -327,28 +379,46 @@ def main():
     global_min=ALL_DATA.index.min(); global_max=ALL_DATA.index.max()
     total_span=global_max-global_min
     YEAR2_END=global_min+(total_span*2/3); YEAR3_START=YEAR2_END
+
+    # FIX: year2-only mode shifts test start back (same as azalyst_weekly_loop.py)
+    if args.year2_only:
+        YEAR3_START = YEAR3_START - pd.Timedelta(days=180)
+        print(f"\n  Year 2 only mode: test start shifted back 180 days")
+
     print(f"\n  Train (Y1+Y2): {global_min.date()} → {YEAR2_END.date()}")
     print(f"  Test  (Y3)  : {YEAR3_START.date()} → {global_max.date()}")
 
     # Training matrix
-    print("\n[Step 3] Building training matrix...")
+    print("\n[Step 3] Building training matrix (cross-sectional alpha_label)...")
     train_df=ALL_DATA[ALL_DATA.index<YEAR2_END].copy()
-    if 'alpha_label' not in train_df.columns:
-        train_df['alpha_label']=(
-            train_df.groupby(train_df.index)['future_ret']
-            .transform(lambda x:(x>x.median()).astype(float)))
+
+    # FIX: compute alpha_label CROSS-SECTIONALLY after pooling all symbols
+    # Old code read a wrong per-symbol label; this is the correct Kaggle approach
+    if 'alpha_label' not in train_df.columns or True:  # always recompute
+        if 'future_ret' in train_df.columns:
+            train_df['alpha_label']=(
+                train_df.groupby(train_df.index)['future_ret']
+                .transform(lambda x:(x>x.median()).astype(float)))
+        else:
+            print("  [ERROR] 'future_ret' column not found. Rebuild feature cache.")
+            sys.exit(1)
+
     for col in FEATURE_COLS:
         if col not in train_df.columns: train_df[col]=0.0
+
     feat_matrix=train_df[FEATURE_COLS].values.astype(np.float32)
     label_arr  =train_df['alpha_label'].values.astype(np.float32)
     ret_arr    =train_df['future_ret'].values.astype(np.float32)
     valid_mask =np.isfinite(feat_matrix).all(axis=1)&np.isfinite(label_arr)
     feat_matrix=feat_matrix[valid_mask]; label_arr=label_arr[valid_mask]; ret_arr=ret_arr[valid_mask]
+
     if len(feat_matrix)>MAX_TRAIN_ROWS:
         idx=np.random.choice(len(feat_matrix),MAX_TRAIN_ROWS,replace=False); idx.sort()
         feat_matrix=feat_matrix[idx]; label_arr=label_arr[idx]; ret_arr=ret_arr[idx]
         print(f"  VRAM guard: capped at {MAX_TRAIN_ROWS:,} rows")
-    print(f"  Matrix: {len(feat_matrix):,} rows × {feat_matrix.shape[1]} features | Label: {label_arr.mean()*100:.1f}%")
+
+    print(f"  Matrix: {len(feat_matrix):,} rows × {feat_matrix.shape[1]} features | "
+          f"Label: {label_arr.mean()*100:.1f}% positive")
     del train_df; gc.collect()
 
     # Base model
@@ -405,6 +475,7 @@ def main():
 
         trades_this_week=[]
         for _,row in week_valid[week_valid['signal']!='HOLD'].iterrows():
+            # FIX: 'future_ret' not 'future_ret_4h'
             fret=row.get('future_ret',np.nan)
             if not np.isfinite(fret): continue
             pnl=((fret-ROUND_TRIP_FEE) if row['signal']=='BUY' else (-fret-ROUND_TRIP_FEE))*100
@@ -416,7 +487,10 @@ def main():
         pnls=np.array([t['pnl_percent'] for t in trades_this_week])/100
         week_ret=float(pnls.mean()) if len(pnls)>0 else 0.0
         weekly_returns_hist.append(week_ret)
-        cs_ic=compute_ic(week_valid['prob'].values,week_valid['future_ret'].fillna(0).values)
+        # FIX: 'future_ret' not 'future_ret_4h'
+        ret_col = 'future_ret' if 'future_ret' in week_valid.columns else None
+        cs_ic = compute_ic(week_valid['prob'].values,
+                           week_valid[ret_col].fillna(0).values) if ret_col else 0.0
         ann_proj=((1+week_ret)**52-1)*100
 
         # Quarterly retrain
@@ -427,9 +501,12 @@ def main():
                 rt_df=ALL_DATA[ALL_DATA.index<we].copy()
                 for col in FEATURE_COLS:
                     if col not in rt_df.columns: rt_df[col]=0.0
-                if 'alpha_label' not in rt_df.columns:
+                # FIX: recompute alpha_label cross-sectionally
+                if 'future_ret' in rt_df.columns:
                     rt_df['alpha_label']=rt_df.groupby(rt_df.index)['future_ret'].transform(
                         lambda x:(x>x.median()).astype(float))
+                else:
+                    raise KeyError("'future_ret' column missing in retrain data")
                 Xr=rt_df[FEATURE_COLS].values.astype(np.float32)
                 yr=rt_df['alpha_label'].values.astype(np.float32)
                 yr_r=rt_df['future_ret'].values.astype(np.float32)
@@ -455,11 +532,11 @@ def main():
             'annualised_pct':round(ann_proj,2),'ic':round(cs_ic,5),
             'on_track':on_track,'retrained':did_retrain})
 
-        # Spyder console live update every 4 weeks
         if week_num%4==0 or week_num<=2:
             rolling=np.mean(weekly_returns_hist[-4:])*100 if weekly_returns_hist else 0
+            compute_label = 'GPU=RTX2050' if cuda_api else 'CPU'
             print(f"  Week {week_num:3d} | ret={week_ret*100:+.3f}%  IC={cs_ic:+.4f}  "
-                  f"4w_avg={rolling:+.3f}%  n={len(trades_this_week)}  gpu=RTX2050")
+                  f"4w_avg={rolling:+.3f}%  n={len(trades_this_week)}  {compute_label}")
 
     # Save results
     print("\n[Step 6] Saving results...")
@@ -472,7 +549,6 @@ def main():
     trades_df.to_csv(f"{RESULTS_DIR}/all_trades_year3.csv",index=False)
 
     rets=weekly_df['week_return_pct'].dropna()/100
-    pnls=trades_df['pnl_percent'].dropna()/100 if len(trades_df)>0 else pd.Series(dtype=float)
     ic_s=weekly_df['ic'].dropna()
     cum=(1+rets).cumprod(); n_wks=max(len(rets),1)
     t_ret=float(cum.iloc[-1]-1) if len(cum)>0 else 0.0
@@ -483,12 +559,16 @@ def main():
     icir   =float(ic_mean/(ic_std+1e-8))
     ic_pos =float((ic_s>0).mean()*100) if len(ic_s)>0 else 0.0
 
-    performance={'label':'Year3_WalkForward_RTX2050',
+    performance={
+        'label': 'Year3_WalkForward_RTX2050',
         'total_weeks':n_wks,'total_trades':len(trades_df),'retrains':retrain_count,
         'total_return_pct':round(t_ret*100,2),'annualised_pct':round(ann_ret*100,2),
         'sharpe':round(sharpe,4),'ic_mean':round(ic_mean,5),'icir':round(icir,4),
-        'ic_positive_pct':round(ic_pos,1),'gpu':'NVIDIA RTX 2050',
-        'vram_cap_rows':MAX_TRAIN_ROWS}
+        'ic_positive_pct':round(ic_pos,1),
+        'gpu': 'NVIDIA RTX 2050' if cuda_api else 'CPU',
+        'vram_cap_rows': MAX_TRAIN_ROWS,
+        'year2_only_mode': args.year2_only,
+    }
     with open(f"{RESULTS_DIR}/performance_year3.json",'w') as fh:
         json.dump(performance,fh,indent=2)
 
@@ -498,15 +578,15 @@ def main():
         import matplotlib.pyplot as plt
         import matplotlib.gridspec as gridspec
         fig=plt.figure(figsize=(16,11))
-        fig.suptitle('Azalyst v2 — Year 3 Walk-Forward (RTX 2050)',fontsize=14,fontweight='bold')
+        fig.suptitle(f'Azalyst v2 — Year 3 Walk-Forward ({"RTX 2050" if cuda_api else "CPU"})',
+                     fontsize=14,fontweight='bold')
         gs=gridspec.GridSpec(2,2,figure=fig,hspace=0.38,wspace=0.32)
         ax1=fig.add_subplot(gs[0,0])
         cum_pct=((1+weekly_df['week_return_pct'].fillna(0)/100).cumprod()-1)*100
         ax1.plot(weekly_df['week'],cum_pct,color='#1f77b4',linewidth=2)
         ax1.fill_between(weekly_df['week'],cum_pct,alpha=0.12,color='#1f77b4')
         ax1.axhline(0,color='gray',linewidth=0.8,linestyle='--')
-        ax1.set_title('Cumulative Return (%)',fontweight='bold')
-        ax1.set_xlabel('Week #'); ax1.set_ylabel('%'); ax1.grid(True,alpha=0.25)
+        ax1.set_title('Cumulative Return (%)',fontweight='bold'); ax1.grid(True,alpha=0.25)
         ax2=fig.add_subplot(gs[0,1])
         wr=weekly_df['week_return_pct'].dropna()
         ax2.hist(wr,bins=min(30,max(10,len(wr)//3)),color='#ff7f0e',alpha=0.72,edgecolor='black',linewidth=0.4)
@@ -537,7 +617,7 @@ def main():
 
     print(f"""
 {'='*64}
-  AZALYST v2 — COMPLETE  (NVIDIA RTX 2050)
+  AZALYST v2 — COMPLETE  ({'RTX 2050' if cuda_api else 'CPU'})
 {'='*64}
   Total Return  : {performance['total_return_pct']:>8.2f}%
   Annualised    : {performance['annualised_pct']:>8.2f}%

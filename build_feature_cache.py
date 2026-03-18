@@ -3,6 +3,13 @@
          AZALYST ALPHA RESEARCH ENGINE    FEATURE CACHE BUILDER v2
 ║   65 features  |  Vectorized Factor Engine  |  Multi-process Scaling        ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
+
+FIXES vs original:
+  - Renamed future_ret_4h → future_ret  (aligns with Kaggle notebook + local GPU script)
+  - Removed per-symbol alpha_label computation — WRONG to compute per symbol.
+    Cross-sectional alpha_label (did coin outperform median at time t?) requires
+    ALL symbols pooled together. It is now computed inside build_training_matrix()
+    in azalyst_weekly_loop.py and azalyst_local_gpu.py AFTER pooling.
 """
 
 import argparse
@@ -17,8 +24,6 @@ from typing import Tuple
 import numpy as np
 import pandas as pd
 
-# FIX: was "from azalyst_factors_v2 import compute_v2_features, FEATURE_COLS"
-# compute_v2_features does not exist — the correct function is build_features
 from azalyst_factors_v2 import build_features, FEATURE_COLS
 from azalyst_tf_utils import get_tf_constants
 
@@ -37,7 +42,7 @@ def _process_symbol(args: Tuple) -> Tuple[str, bool, str]:
         df = pd.read_parquet(path)
         df.columns = [c.lower() for c in df.columns]
 
-        # Ensure index is datetime
+        # ── Ensure datetime index ─────────────────────────────────────────────
         if not isinstance(df.index, pd.DatetimeIndex):
             ts_col = next(
                 (c for c in df.columns if c in ("timestamp", "time", "open_time")), None
@@ -52,9 +57,12 @@ def _process_symbol(args: Tuple) -> Tuple[str, bool, str]:
             else:
                 df.index = pd.to_datetime(df.index, utc=True)
 
+        if df.index.tz is None:
+            df.index = df.index.tz_localize("UTC")
+
         df = df.sort_index()
 
-        # Resample to desired timeframe if needed
+        # ── Resample if needed ────────────────────────────────────────────────
         if resample not in ("5min", "5t"):
             agg = {
                 "open": "first",
@@ -67,15 +75,21 @@ def _process_symbol(args: Tuple) -> Tuple[str, bool, str]:
 
         bph, bpd, hor = get_tf_constants(resample)
 
-        # FIX: was compute_v2_features(df, bph=bph, bpd=bpd)
-        # build_features() is the correct function name in azalyst_factors_v2.py
         feats = build_features(df, timeframe=resample)
 
-        # Future returns (target)
-        feats["future_ret_4h"] = np.log(df["close"].shift(-hor) / df["close"])
-        feats["alpha_label"] = (feats["future_ret_4h"] > 0).astype(np.float32)
+        # ── FIX: column is now 'future_ret' (not 'future_ret_4h') ─────────────
+        # This aligns with azalyst_local_gpu.py and the Kaggle notebook.
+        feats["future_ret"] = np.log(df["close"].shift(-hor) / df["close"])
 
-        # Clean and save
+        # ── FIX: do NOT compute alpha_label here ──────────────────────────────
+        # alpha_label = "did this coin outperform the cross-sectional median?"
+        # That requires ALL symbols pooled at the SAME timestamps.
+        # Computing it per-symbol just gives "did the price go up?" which is
+        # the wrong objective. It is computed AFTER pooling in:
+        #   azalyst_local_gpu.py  →  build step 3
+        #   azalyst_weekly_loop.py → build_training_matrix()
+
+        # ── Save: keep only valid feature rows ───────────────────────────────
         feats = feats.dropna(subset=FEATURE_COLS, how="all").astype(np.float32)
         feats.to_parquet(out_path, engine="pyarrow", compression="snappy")
 
@@ -86,32 +100,72 @@ def _process_symbol(args: Tuple) -> Tuple[str, bool, str]:
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--data-dir", required=True)
-    parser.add_argument("--out-dir", default="./feature_cache")
-    parser.add_argument("--workers", type=int, default=4)
-    parser.add_argument("--resample", default="5min")
+    parser = argparse.ArgumentParser(
+        description="Azalyst Feature Cache Builder v2 — pre-compute 65 features for all symbols"
+    )
+    parser.add_argument("--data-dir",  required=True,  help="Directory with SYMBOL.parquet files")
+    parser.add_argument("--out-dir",   default="./feature_cache", help="Output directory")
+    parser.add_argument("--workers",   type=int, default=4,   help="Parallel workers (default 4)")
+    parser.add_argument("--resample",  default="5min",         help="Resample string (default 5min)")
+    parser.add_argument("--overwrite", action="store_true",    help="Reprocess already-cached symbols")
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir)
-    out_dir = Path(args.out_dir)
+    out_dir  = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     parquet_files = sorted(data_dir.glob("*.parquet"))
+    if not parquet_files:
+        print(f"[ERROR] No .parquet files found in {data_dir}")
+        sys.exit(1)
+
     symbols = [f.stem for f in parquet_files]
 
-    print(f"Building cache for {len(symbols)} symbols...")
+    # Skip already-cached unless --overwrite
+    if not args.overwrite:
+        symbols = [s for s in symbols if not (out_dir / f"{s}.parquet").exists()]
+        cached  = len(parquet_files) - len(symbols)
+        if cached:
+            print(f"[Cache] {cached} symbols already cached — skipping (use --overwrite to rebuild)")
+
+    if not symbols:
+        print("[Cache] All symbols already cached. Done.")
+        return
+
+    print(f"[FeatureCache] Building cache for {len(symbols)} symbols "
+          f"({args.resample}, {args.workers} workers)...")
     t0 = time.time()
 
+    ok_count  = 0
+    err_count = 0
+
     with ProcessPoolExecutor(max_workers=args.workers) as pool:
-        work = [(s, str(data_dir), str(out_dir), args.resample) for s in symbols]
+        work    = [(s, str(data_dir), str(out_dir), args.resample) for s in symbols]
         futures = {pool.submit(_process_symbol, a): a[0] for a in work}
+
         for i, fut in enumerate(as_completed(futures), 1):
             sym, success, msg = fut.result()
-            if i % 10 == 0:
-                print(f"[{i}/{len(symbols)}] {sym}: {'✓' if success else '✗'} {msg}")
+            if success:
+                ok_count += 1
+            else:
+                err_count += 1
+                print(f"  [WARN] {sym}: {msg}")
 
-    print(f"Done in {time.time()-t0:.1f}s")
+            if i % 25 == 0 or i == len(symbols):
+                elapsed = time.time() - t0
+                eta = elapsed / i * (len(symbols) - i)
+                print(f"  [{i}/{len(symbols)}] ok={ok_count} err={err_count} "
+                      f"elapsed={elapsed:.0f}s eta={eta:.0f}s")
+
+    elapsed = time.time() - t0
+    cached_total = len(list(out_dir.glob("*.parquet")))
+    print(f"\n[FeatureCache] Done in {elapsed:.1f}s")
+    print(f"  Built : {ok_count}")
+    print(f"  Errors: {err_count}")
+    print(f"  Total cached: {cached_total} symbols in {out_dir}")
+    print()
+    print("  NOTE: alpha_label is NOT stored in the cache.")
+    print("  It is computed cross-sectionally after pooling all symbols during training.")
 
 
 if __name__ == "__main__":
