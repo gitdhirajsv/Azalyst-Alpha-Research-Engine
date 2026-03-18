@@ -25,6 +25,15 @@ from sklearn.preprocessing import RobustScaler
 from sklearn.metrics import roc_auc_score
 warnings.filterwarnings("ignore")
 
+# Windows terminals can default to cp1252, which cannot encode box-drawing chars.
+# Force UTF-8 output when possible so startup banners never crash execution.
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 # ── CONFIG — edit these to match your folder layout ──────────────────────────
 DATA_DIR    = r"./data"           # raw SYMBOL.parquet files
 RESULTS_DIR = r"./results"        # outputs (CSVs, chart, JSON, models)
@@ -53,6 +62,47 @@ FEATURE_COLS = [
     'cs_momentum','cs_reversal','vol_adjusted_mom','trend_consistency',
     'vol_regime','trend_strength','corr_btc_proxy','hurst_exp','fft_strength',
 ]
+
+PROGRESS_FILE = f"{RESULTS_DIR}/pretrain_progress.json"
+
+
+def write_progress(stage: str, progress_pct: float | None = None, detail: str = "", **extra):
+    payload = {
+        "stage": stage,
+        "detail": detail,
+        "timestamp": int(time.time()),
+    }
+    if progress_pct is not None:
+        payload["progress_pct"] = float(max(0.0, min(100.0, progress_pct)))
+    payload.update(extra)
+    try:
+        Path(RESULTS_DIR).mkdir(parents=True, exist_ok=True)
+        with open(PROGRESS_FILE, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=2)
+    except Exception:
+        pass
+
+
+def _to_utc_index(idx: pd.Index) -> pd.DatetimeIndex:
+    """Normalize mixed timestamp index formats to a UTC DatetimeIndex."""
+    if isinstance(idx, pd.DatetimeIndex):
+        return idx.tz_localize("UTC") if idx.tz is None else idx.tz_convert("UTC")
+
+    values = pd.Index(idx)
+    if np.issubdtype(values.dtype, np.number):
+        # Infer epoch unit by magnitude: s, ms, us, ns.
+        mag = float(np.nanmedian(np.abs(values.to_numpy(dtype=np.float64, copy=False))))
+        if mag > 1e17:
+            unit = "ns"
+        elif mag > 1e14:
+            unit = "us"
+        elif mag > 1e11:
+            unit = "ms"
+        else:
+            unit = "s"
+        return pd.to_datetime(values, unit=unit, utc=True, errors="coerce")
+
+    return pd.to_datetime(values, utc=True, errors="coerce")
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  STEP 1 — GPU VALIDATION
@@ -221,7 +271,7 @@ def build_features(df):
     f['vol_regime']=f['rvol_1d']/f['rvol_1d'].rolling(bpd*30).mean()
     f['trend_strength']=f['adx_14']
     f['corr_btc_proxy']=lr.rolling(bpd).corr(lr.shift(1))
-    f['hurst_exp']=np.nan; f['fft_strength']=np.nan
+    f['hurst_exp']=0.0; f['fft_strength']=0.0
     return f.replace([np.inf,-np.inf],np.nan).shift(1).astype(np.float32)
 
 
@@ -229,19 +279,20 @@ def build_features(df):
 #  Feature store
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_feature_store(data_dir, cache_dir):
+def build_feature_store(data_dir, cache_dir, progress_cb=None):
     Path(cache_dir).mkdir(parents=True, exist_ok=True)
     files = sorted(Path(data_dir).rglob("*.parquet"))
     if not files:
         print(f"  [ERROR] No parquet files in {data_dir}")
         sys.exit(1)
     new_count = skip_count = 0
-    for f in files:
+    total = len(files)
+    for i, f in enumerate(files, 1):
         out = Path(cache_dir) / f.name
         if out.exists(): skip_count += 1; continue
         try:
             df = pd.read_parquet(f)
-            df.index = pd.to_datetime(df.index, utc=True)
+            df.index = _to_utc_index(df.index)
             feat = build_features(df)
             # FIX: column is 'future_ret' not 'future_ret_4h'
             feat['future_ret'] = np.log(df['close'].shift(-HORIZON_BARS) / df['close'])
@@ -251,7 +302,18 @@ def build_feature_store(data_dir, cache_dir):
             new_count += 1
         except Exception as e:
             print(f"    [WARN] {f.stem}: {e}")
+        if progress_cb and (i == 1 or i % 20 == 0 or i == total):
+            pct = 5 + (25 * i / max(total, 1))
+            progress_cb(
+                "step1_feature_store",
+                pct,
+                detail=f"Building feature cache {i}/{total}",
+                built=new_count,
+                cached=skip_count,
+                total_symbols=total,
+            )
     print(f"  Feature store: {new_count} built, {skip_count} cached ({len(files)} symbols total)")
+    return {"built": new_count, "cached": skip_count, "total": total}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -346,6 +408,8 @@ def main():
     for d in [RESULTS_DIR, f"{RESULTS_DIR}/models"]:
         Path(d).mkdir(parents=True, exist_ok=True)
 
+    write_progress("startup", 1, detail="Runner initialized")
+
     # Feature store
     print("[Step 1] Feature store...")
     build_feature_store(DATA_DIR, CACHE_DIR)
@@ -360,10 +424,7 @@ def main():
     for fp in all_files:
         try:
             df=pd.read_parquet(fp)
-            if not isinstance(df.index,pd.DatetimeIndex):
-                df.index=pd.to_datetime(df.index,utc=True)
-            elif df.index.tz is None:
-                df.index=df.index.tz_localize('UTC')
+            df.index=_to_utc_index(df.index)
             if 'symbol' not in df.columns: df['symbol']=fp.stem
             frames.append(df)
         except Exception as e:
