@@ -414,18 +414,34 @@ def main():
     print("[Step 1] Feature store...")
     build_feature_store(DATA_DIR, CACHE_DIR)
 
-    # Load all symbols
+    # Load all symbols (memory-optimized for 16GB RAM)
     print("\n[Step 2] Loading feature store (ALL symbols)...")
     all_files = sorted(Path(CACHE_DIR).glob("*.parquet"))
     if not all_files:
         print("  [ERROR] Feature store empty. Check DATA_DIR path.")
         sys.exit(1)
+
+    # Memory guard: count total rows and downsample if needed (16GB RAM limit)
+    total_rows = sum(len(pd.read_parquet(fp, columns=[])) for fp in all_files)
+    MAX_MEMORY_ROWS = 35_000_000  # safe for 16GB system RAM with overhead
+    stride = max(1, int(np.ceil(total_rows / MAX_MEMORY_ROWS)))
+    keep_minutes = None
+    if stride > 1:
+        interval = 5 * stride
+        if interval >= 60:
+            keep_minutes = {0}
+        else:
+            keep_minutes = set(range(0, 60, interval))
+        print(f"  Memory guard: stride={stride} ({total_rows:,} rows → ~{total_rows//stride:,})")
+
     frames=[]
     for fp in all_files:
         try:
             df=pd.read_parquet(fp)
             df.index=_to_utc_index(df.index)
             if 'symbol' not in df.columns: df['symbol']=fp.stem
+            if keep_minutes is not None:
+                df = df[df.index.minute.isin(keep_minutes)]
             frames.append(df)
         except Exception as e:
             print(f"  [WARN] {fp.stem}: {e}")
@@ -433,6 +449,8 @@ def main():
         print("  [ERROR] No feature files loaded."); sys.exit(1)
 
     ALL_DATA=pd.concat(frames,axis=0).sort_index()
+    ALL_DATA['symbol'] = ALL_DATA['symbol'].astype('category')
+    del frames; gc.collect()
     print(f"  Loaded {len(ALL_DATA):,} rows | {ALL_DATA['symbol'].nunique()} symbols")
     print(f"  Range : {ALL_DATA.index.min().date()} → {ALL_DATA.index.max().date()}")
 
