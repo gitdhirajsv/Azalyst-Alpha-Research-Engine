@@ -292,7 +292,10 @@ def build_feature_store(data_dir, cache_dir, progress_cb=None):
         if out.exists(): skip_count += 1; continue
         try:
             df = pd.read_parquet(f)
-            df.index = _to_utc_index(df.index)
+            if 'time' in df.columns:
+                df = df.set_index('time')
+            if not isinstance(df.index, pd.DatetimeIndex):
+                df.index = _to_utc_index(df.index)
             feat = build_features(df)
             # FIX: column is 'future_ret' not 'future_ret_4h'
             feat['future_ret'] = np.log(df['close'].shift(-HORIZON_BARS) / df['close'])
@@ -438,7 +441,8 @@ def main():
     for fp in all_files:
         try:
             df=pd.read_parquet(fp)
-            df.index=_to_utc_index(df.index)
+            if not isinstance(df.index, pd.DatetimeIndex):
+                df.index=_to_utc_index(df.index)
             if 'symbol' not in df.columns: df['symbol']=fp.stem
             if keep_minutes is not None:
                 df = df[df.index.minute.isin(keep_minutes)]
