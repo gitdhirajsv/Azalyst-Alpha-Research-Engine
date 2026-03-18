@@ -35,3 +35,13 @@ learning_log.csv
 paper_trades.csv
 performance_metrics.csv
 team_log.txt
+
+# Debug and test output files
+*_out.txt
+output.txt
+responses.txt
+gpu_run_output.txt
+debug_run.bat
+test_pkg.bat
+test*.bat
+results/
