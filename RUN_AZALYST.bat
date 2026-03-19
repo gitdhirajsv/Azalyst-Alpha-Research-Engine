@@ -84,14 +84,15 @@ if "!GPU_FOUND!"=="1" (
 :: -- Step 3: Spyder detection ------------------------------------------------
 set SPYDER_FOUND=0
 set SPYDER_CMD=spyder
+set SPYDER_MODE=PATH
 
 :: 3a. Direct command in PATH (Scripts folder now boosted above)
 where spyder >nul 2>&1
-if not errorlevel 1 ( set SPYDER_FOUND=1 & echo  [OK] Spyder found in PATH & goto :SPYDER_DONE )
+if not errorlevel 1 ( set SPYDER_FOUND=1 & set SPYDER_MODE=PATH & echo  [OK] Spyder found in PATH & goto :SPYDER_DONE )
 
-:: 3b. Importable as module in run-Python
-!RUN_PYTHON! -c "import spyder" >nul 2>&1
-if not errorlevel 1 ( set SPYDER_FOUND=1 & set "SPYDER_CMD=!RUN_PYTHON! -m spyder" & echo  [OK] Spyder found (module) & goto :SPYDER_DONE )
+:: 3b. Importable as module in run-Python (quoted for paths with spaces)
+"!RUN_PYTHON!" -c "import spyder" >nul 2>&1
+if not errorlevel 1 ( set SPYDER_FOUND=1 & set SPYDER_MODE=MODULE & echo  [OK] Spyder found (module) & goto :SPYDER_DONE )
 
 :: 3c. Common explicit paths
 for %%p in (
@@ -111,7 +112,7 @@ for %%p in (
     "%USERPROFILE%\miniconda3\Scripts\spyder.exe"
     "C:\Program Files\Spyder\spyder.exe"
 ) do (
-    if exist %%p ( set SPYDER_FOUND=1 & set "SPYDER_CMD=%%p" & echo  [OK] Spyder: %%p & goto :SPYDER_DONE )
+    if exist %%p ( set SPYDER_FOUND=1 & set SPYDER_MODE=EXE & set "SPYDER_CMD=%%~p" & echo  [OK] Spyder: %%p & goto :SPYDER_DONE )
 )
 
 :: 3d. Not found - auto-install into global Python (user preference)
@@ -120,8 +121,8 @@ echo  [Setup] Spyder not found - installing now (one-time, ~3 min)...
 if not errorlevel 1 (
     echo  [OK] Spyder installed successfully
     set SPYDER_FOUND=1
-    set "SPYDER_CMD=!PYTHON_CMD! -m spyder"
-    :: also add the fresh Scripts dir to PATH so 'spyder' works next time
+    set SPYDER_MODE=MODULE
+    :: add the fresh Scripts dir to PATH so 'spyder' works next time
     for /f "tokens=*" %%s in ('!PYTHON_CMD! -c "import sysconfig; print(sysconfig.get_path(chr(115)+chr(99)+chr(114)+chr(105)+chr(112)+chr(116)+chr(115)))" 2^>nul') do set "PATH=%%s;!PATH!"
     goto :SPYDER_DONE
 )
@@ -131,13 +132,14 @@ echo.
 
 :: -- Step 4: Package check ---------------------------------------------------
 echo  [Setup] Checking packages in run environment...
-!RUN_PYTHON! -c "import xgboost, numpy, pandas, sklearn, scipy, matplotlib, pyarrow, psutil, statsmodels" >nul 2>&1
+"!RUN_PYTHON!" -c "import xgboost, numpy, pandas, sklearn, scipy, matplotlib, pyarrow, psutil, statsmodels" >nul 2>&1
 if not errorlevel 1 goto :PKGS_OK
 echo  [Setup] Installing missing packages into global Python (one-time, ~2 min)...
-!PYTHON_CMD! -m pip install xgboost numpy pandas scikit-learn scipy matplotlib pyarrow psutil statsmodels --upgrade -q
+:: Note: no --upgrade to avoid RECORD-file errors on packages installed outside pip
+!PYTHON_CMD! -m pip install xgboost numpy pandas scikit-learn scipy matplotlib pyarrow psutil statsmodels -q
 if errorlevel 1 (
-    echo  [WARN] Some packages failed to install via global pip - trying run-env pip...
-    !RUN_PYTHON! -m pip install xgboost numpy pandas scikit-learn scipy matplotlib pyarrow psutil statsmodels --upgrade -q
+    echo  [WARN] Some packages failed via global pip - trying run-env pip...
+    "!RUN_PYTHON!" -m pip install xgboost numpy pandas scikit-learn scipy matplotlib pyarrow psutil statsmodels -q
     if errorlevel 1 (
         echo  [ERROR] Package install failed in both environments.
         echo         Check internet connection, then run:
@@ -269,14 +271,12 @@ if "!USE_SPYDER!"=="1" (
     echo    - Open azalyst_spyder_monitor.py and press F5 for live charts
     echo    - Closing Spyder will NOT stop the pipeline
     echo.
-    if "!SPYDER_CMD!"=="spyder" (
+    if "!SPYDER_MODE!"=="PATH" (
         start "" /B spyder --new-instance --workdir="%~dp0" 2>nul
-    ) else if "!SPYDER_CMD!"=="!RUN_PYTHON! -m spyder" (
-        start "" /B !RUN_PYTHON! -m spyder --new-instance --workdir="%~dp0" 2>nul
-    ) else if "!SPYDER_CMD!"=="!PYTHON_CMD! -m spyder" (
-        start "" /B !PYTHON_CMD! -m spyder --new-instance --workdir="%~dp0" 2>nul
+    ) else if "!SPYDER_MODE!"=="MODULE" (
+        start "" /B "!RUN_PYTHON!" -m spyder --new-instance --workdir="%~dp0" 2>nul
     ) else (
-        start "" !SPYDER_CMD! --new-instance --workdir="%~dp0" 2>nul
+        start "" "!SPYDER_CMD!" --new-instance --workdir="%~dp0" 2>nul
     )
     echo  [OK] Spyder launching... waiting 5s
     timeout /t 5 /nobreak >nul
@@ -298,9 +298,9 @@ echo ----------------------------------------------------------------
 echo.
 
 if "!COMPUTE_CHOICE!"=="gpu" (
-    !RUN_PYTHON! azalyst_local_gpu.py --gpu --data-dir "%~dp0data" --out-dir "%~dp0results"
+    "!RUN_PYTHON!" azalyst_local_gpu.py --gpu --data-dir "%~dp0data" --out-dir "%~dp0results"
 ) else (
-    !RUN_PYTHON! azalyst_engine.py --data-dir "%~dp0data" --out-dir "%~dp0results"
+    "!RUN_PYTHON!" azalyst_engine.py --data-dir "%~dp0data" --out-dir "%~dp0results"
 )
 
 set EXIT_CODE=!errorlevel!
