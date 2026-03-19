@@ -6,30 +6,25 @@ chcp 65001 >nul 2>&1
 cd /d "%~dp0"
 
 :: -- Boost PATH with common Python install locations -------------------------
+:: Add base Python dirs AND their Scripts subfolders so spyder.exe is found
 for %%d in (
     "%LOCALAPPDATA%\Programs\Python\Python313"
-    "%LOCALAPPDATA%\Programs\Python\Python313\Scripts"
     "%LOCALAPPDATA%\Programs\Python\Python312"
-    "%LOCALAPPDATA%\Programs\Python\Python312\Scripts"
     "%LOCALAPPDATA%\Programs\Python\Python311"
-    "%LOCALAPPDATA%\Programs\Python\Python311\Scripts"
     "%LOCALAPPDATA%\Programs\Python\Python310"
-    "%LOCALAPPDATA%\Programs\Python\Python310\Scripts"
     "%USERPROFILE%\AppData\Local\Programs\Python\Python313"
-    "%USERPROFILE%\AppData\Local\Programs\Python\Python313\Scripts"
     "%USERPROFILE%\AppData\Local\Programs\Python\Python312"
-    "%USERPROFILE%\AppData\Local\Programs\Python\Python312\Scripts"
     "%USERPROFILE%\AppData\Local\Programs\Python\Python311"
-    "%USERPROFILE%\AppData\Local\Programs\Python\Python311\Scripts"
     "%USERPROFILE%\AppData\Local\Programs\Python\Python310"
-    "%USERPROFILE%\AppData\Local\Programs\Python\Python310\Scripts"
     "C:\Python313" "C:\Python312" "C:\Python311" "C:\Python310"
     "%ProgramFiles%\Python313" "%ProgramFiles%\Python312"
     "%ProgramFiles%\Python311" "%ProgramFiles%\Python310"
-    "%ProgramData%\Anaconda3" "%ProgramData%\Anaconda3\Scripts"
-    "%USERPROFILE%\anaconda3" "%USERPROFILE%\anaconda3\Scripts"
-    "%USERPROFILE%\miniconda3" "%USERPROFILE%\miniconda3\Scripts"
-) do if exist %%d\python.exe set "PATH=%%~d;!PATH!"
+    "%ProgramData%\Anaconda3"
+    "%USERPROFILE%\anaconda3"
+    "%USERPROFILE%\miniconda3"
+) do if exist "%%~d\python.exe" (
+    set "PATH=%%~d;%%~d\Scripts;!PATH!"
+)
 
 echo.
 echo  ============================================================
@@ -56,7 +51,15 @@ exit /b 1
 
 :PY_FOUND
 for /f "tokens=2" %%v in ('!PYTHON_CMD! --version 2^>^&1') do set PY_VER=%%v
-echo  [OK] Python %PY_VER% (!PYTHON_CMD!)
+echo  [OK] Python !PY_VER! (!PYTHON_CMD!)
+
+:: -- .venv fallback for running the pipeline (prefer global Python for installs)
+set "VENV_PYTHON="
+if exist "%~dp0.venv\Scripts\python.exe" set "VENV_PYTHON=%~dp0.venv\Scripts\python.exe"
+:: RUN_PYTHON = what actually executes the pipeline scripts
+:: PYTHON_CMD = used for pip installs (global Python preferred)
+set "RUN_PYTHON=!PYTHON_CMD!"
+if "!VENV_PYTHON!" neq "" set "RUN_PYTHON=!VENV_PYTHON!"
 
 :: -- Step 2: GPU detection ---------------------------------------------------
 set GPU_FOUND=0
@@ -81,37 +84,68 @@ if "!GPU_FOUND!"=="1" (
 :: -- Step 3: Spyder detection ------------------------------------------------
 set SPYDER_FOUND=0
 set SPYDER_CMD=spyder
+
+:: 3a. Direct command in PATH (Scripts folder now boosted above)
 where spyder >nul 2>&1
-if not errorlevel 1 ( set SPYDER_FOUND=1 & echo  [OK] Spyder found & goto :SPYDER_DONE )
-!PYTHON_CMD! -c "import spyder" >nul 2>&1
-if not errorlevel 1 ( set SPYDER_FOUND=1 & set "SPYDER_CMD=!PYTHON_CMD! -m spyder" & echo  [OK] Spyder found (module) & goto :SPYDER_DONE )
+if not errorlevel 1 ( set SPYDER_FOUND=1 & echo  [OK] Spyder found in PATH & goto :SPYDER_DONE )
+
+:: 3b. Importable as module in run-Python
+!RUN_PYTHON! -c "import spyder" >nul 2>&1
+if not errorlevel 1 ( set SPYDER_FOUND=1 & set "SPYDER_CMD=!RUN_PYTHON! -m spyder" & echo  [OK] Spyder found (module) & goto :SPYDER_DONE )
+
+:: 3c. Common explicit paths
 for %%p in (
-    "%LOCALAPPDATA%\Programs\Spyder\spyder.exe"
+    "%~dp0.venv\Scripts\spyder.exe"
+    "%LOCALAPPDATA%\Programs\Python\Python313\Scripts\spyder.exe"
+    "%LOCALAPPDATA%\Programs\Python\Python312\Scripts\spyder.exe"
     "%LOCALAPPDATA%\Programs\Python\Python311\Scripts\spyder.exe"
     "%LOCALAPPDATA%\Programs\Python\Python310\Scripts\spyder.exe"
-    "%LOCALAPPDATA%\Programs\Python\Python312\Scripts\spyder.exe"
+    "%USERPROFILE%\AppData\Local\Programs\Python\Python313\Scripts\spyder.exe"
+    "%USERPROFILE%\AppData\Local\Programs\Python\Python312\Scripts\spyder.exe"
+    "%USERPROFILE%\AppData\Local\Programs\Python\Python311\Scripts\spyder.exe"
+    "%USERPROFILE%\AppData\Local\Programs\Python\Python310\Scripts\spyder.exe"
+    "%LOCALAPPDATA%\Programs\Spyder\spyder.exe"
     "C:\ProgramData\Anaconda3\Scripts\spyder.exe"
     "C:\ProgramData\miniconda3\Scripts\spyder.exe"
     "%USERPROFILE%\anaconda3\Scripts\spyder.exe"
     "%USERPROFILE%\miniconda3\Scripts\spyder.exe"
     "C:\Program Files\Spyder\spyder.exe"
 ) do (
-    if exist %%p ( set SPYDER_FOUND=1 & set SPYDER_CMD=%%p & echo  [OK] Spyder: %%p & goto :SPYDER_DONE )
+    if exist %%p ( set SPYDER_FOUND=1 & set "SPYDER_CMD=%%p" & echo  [OK] Spyder: %%p & goto :SPYDER_DONE )
 )
-echo  [INFO] Spyder not found
+
+:: 3d. Not found - auto-install into global Python (user preference)
+echo  [Setup] Spyder not found - installing now (one-time, ~3 min)...
+!PYTHON_CMD! -m pip install spyder -q
+if not errorlevel 1 (
+    echo  [OK] Spyder installed successfully
+    set SPYDER_FOUND=1
+    set "SPYDER_CMD=!PYTHON_CMD! -m spyder"
+    :: also add the fresh Scripts dir to PATH so 'spyder' works next time
+    for /f "tokens=*" %%s in ('!PYTHON_CMD! -c "import sysconfig; print(sysconfig.get_path(chr(115)+chr(99)+chr(114)+chr(105)+chr(112)+chr(116)+chr(115)))" 2^>nul') do set "PATH=%%s;!PATH!"
+    goto :SPYDER_DONE
+)
+echo  [WARN] Spyder install failed - continuing without Spyder
 :SPYDER_DONE
 echo.
 
 :: -- Step 4: Package check ---------------------------------------------------
-echo  [Setup] Checking packages...
-!PYTHON_CMD! -c "import xgboost, numpy, pandas, sklearn, scipy, matplotlib, pyarrow, psutil, statsmodels" >nul 2>&1
+echo  [Setup] Checking packages in run environment...
+!RUN_PYTHON! -c "import xgboost, numpy, pandas, sklearn, scipy, matplotlib, pyarrow, psutil, statsmodels" >nul 2>&1
 if not errorlevel 1 goto :PKGS_OK
-echo  [Setup] Installing missing packages (one-time, ~2 min)...
+echo  [Setup] Installing missing packages into global Python (one-time, ~2 min)...
 !PYTHON_CMD! -m pip install xgboost numpy pandas scikit-learn scipy matplotlib pyarrow psutil statsmodels --upgrade -q
 if errorlevel 1 (
-    echo  [ERROR] Package install failed. Check internet connection.
-    pause
-    exit /b 1
+    echo  [WARN] Some packages failed to install via global pip - trying run-env pip...
+    !RUN_PYTHON! -m pip install xgboost numpy pandas scikit-learn scipy matplotlib pyarrow psutil statsmodels --upgrade -q
+    if errorlevel 1 (
+        echo  [ERROR] Package install failed in both environments.
+        echo         Check internet connection, then run:
+        echo           pip install xgboost numpy pandas scikit-learn scipy matplotlib pyarrow psutil statsmodels
+        echo.
+        pause
+        exit /b 1
+    )
 )
 echo  [OK] Packages installed
 goto :PKGS_DONE
@@ -188,8 +222,7 @@ echo.
 goto :Q2_LOOP
 
 :Q2_NO_SPYDER
-echo  [2/2] Output: Terminal only (Spyder not installed)
-echo         To install Spyder:  pip install spyder
+echo  [2/2] Output: Terminal only (Spyder install was skipped or failed)
 
 :Q2_DONE
 echo.
@@ -238,6 +271,8 @@ if "!USE_SPYDER!"=="1" (
     echo.
     if "!SPYDER_CMD!"=="spyder" (
         start "" /B spyder --new-instance --workdir="%~dp0" 2>nul
+    ) else if "!SPYDER_CMD!"=="!RUN_PYTHON! -m spyder" (
+        start "" /B !RUN_PYTHON! -m spyder --new-instance --workdir="%~dp0" 2>nul
     ) else if "!SPYDER_CMD!"=="!PYTHON_CMD! -m spyder" (
         start "" /B !PYTHON_CMD! -m spyder --new-instance --workdir="%~dp0" 2>nul
     ) else (
@@ -263,9 +298,9 @@ echo ----------------------------------------------------------------
 echo.
 
 if "!COMPUTE_CHOICE!"=="gpu" (
-    !PYTHON_CMD! azalyst_local_gpu.py --gpu
+    !RUN_PYTHON! azalyst_local_gpu.py --gpu --data-dir "%~dp0data" --out-dir "%~dp0results"
 ) else (
-    !PYTHON_CMD! azalyst_engine.py --data-dir "%~dp0data" --out-dir "%~dp0results"
+    !RUN_PYTHON! azalyst_engine.py --data-dir "%~dp0data" --out-dir "%~dp0results"
 )
 
 set EXIT_CODE=!errorlevel!

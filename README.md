@@ -326,6 +326,36 @@ python azalyst_orchestrator.py --data-dir ./data --out-dir ./azalyst_output
 
 ## Bug Fixes
 
+### v2.3 — RUN_AZALYST.bat: Spyder Not Detected + Pipeline Closes Immediately (19 Mar 2026)
+
+**Problem 1 — Spyder not found even when installed.**
+The PATH-boost loop added `Python311\Scripts` to `PATH` only when `python.exe` existed inside `Scripts\` — it doesn't (it lives in the base dir). So `where spyder` failed and the `[OK] Spyder found` branch was never reached.
+
+**Fix:** PATH loop now checks for `python.exe` in the **base dir** (`%%~d\python.exe`) and adds **both** `%%~d` *and* `%%~d\Scripts` simultaneously. `spyder.exe`, `pip.exe`, etc. are immediately visible.
+
+**Problem 2 — Spyder auto-install.**
+When Spyder was missing the BAT printed "To install: pip install spyder" but never installed it, leaving the user to do it manually.
+
+**Fix:** Added a step 3d — if Spyder is not found via PATH, module import, or any of 15 explicit paths (including `.venv\Scripts\spyder.exe`), the BAT now **automatically runs `pip install spyder`** into global Python. If that succeeds, Spyder is launched normally. If it fails, execution continues in terminal-only mode (no crash).
+
+**Problem 3 — Pipeline using wrong Python / packages.**
+There was no distinction between the Python used for `pip install` vs the Python that runs the pipeline. On machines with a `.venv`, the venv Python (which has xgboost, pyarrow, etc.) should run the pipeline, while global Python handles installs.
+
+**Fix:** Introduced two variables:
+- `PYTHON_CMD` — global Python (for `pip install`)
+- `RUN_PYTHON` — `.venv` Python when a `.venv` exists, otherwise falls back to `PYTHON_CMD`
+
+All pipeline scripts now launch via `!RUN_PYTHON!`. Package install retries in the run-env if global pip fails.
+
+**Problem 4 — GPU mode ignoring explicit data path.**
+`azalyst_local_gpu.py` had no `--data-dir` / `--out-dir` arguments. GPU mode in the BAT launched `python azalyst_local_gpu.py --gpu` with no path, relying on `./data` relative to CWD — which fails if the terminal isn't in the project root.
+
+**Fix:** Added `--data-dir` and `--out-dir` to `azalyst_local_gpu.py` argparse. The BAT now passes `--data-dir "%~dp0data" --out-dir "%~dp0results"` (absolute paths) for both GPU and CPU mode, matching the CPU launch that already worked correctly.
+
+**Status:** ✅ Verified — PATH boost finds `spyder.exe` at `Python311\Scripts\spyder.exe`, Spyder auto-installs to global pip on first run, `.venv` Python runs pipeline, GPU mode receives correct data path.
+
+---
+
 ### v2.2 — Notebook: Stale Feature Cache Detection (Cell 6)
 
 **Problem:** After `frac_diff_close` was added in v2.1, the feature cache contained 443 files with 56 columns. Cell 6 only checked whether enough *files* existed (≥ 90% threshold) — it never validated *column* presence. So the rebuild was silently skipped and the pipeline continued with a cache missing `frac_diff_close`.

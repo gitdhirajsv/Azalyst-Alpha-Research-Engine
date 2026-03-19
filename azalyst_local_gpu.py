@@ -133,48 +133,78 @@ def make_xgb_params(cuda_api):
 #  Feature engineering
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _rsi(s, n):
-    d  = s.diff()
-    g  = d.clip(lower=0).ewm(alpha=1/n, adjust=False).mean()
-    ls = (-d).clip(lower=0).ewm(alpha=1/n, adjust=False).mean()
-    return 100 - 100 / (1 + g / ls.replace(0, np.nan))
+# Expected feature columns for this simplified GPU model.
+# Cache files with different columns will be rebuilt automatically.
+FEAT_COLS = ['logret_10d', 'ret_1d', 'vol_10d', 'vol_60d', 'rsi_14', 'hurst_20', 'fft_str']
 
-def _hurst(s):
-    """Estimate Hurst exponent; return 0.5 on NaN/error."""
+def _hurst(arr):
+    """Hurst exponent from a numpy array of returns; return 0.5 on error."""
     try:
-        lags = np.arange(1, min(len(s) // 4, 100))
-        tau  = np.array([np.std(np.subtract(s[lag:], s[:-lag])) for lag in lags])
-        poly = np.polyfit(np.log(lags), np.log(tau), 1)
-        h    = poly[0]
-        if np.isnan(h): return 0.5
-        return max(0.0, min(1.0, h))
+        s = np.asarray(arr, dtype=float)
+        n = len(s)
+        if n < 8: return 0.5
+        lags = np.arange(1, min(n // 4 + 1, 50))
+        tau  = np.array([np.std(s[lag:] - s[:-lag]) for lag in lags])
+        mask = tau > 0
+        if mask.sum() < 2: return 0.5
+        poly = np.polyfit(np.log(lags[mask]), np.log(tau[mask]), 1)
+        h = float(poly[0])
+        return max(0.0, min(1.0, h)) if np.isfinite(h) else 0.5
     except:
         return 0.5
 
-def _fft_strength(s):
-    """Dominant frequency strength; return 0.0 on NaN/error."""
+def _fft_strength(arr):
+    """Dominant FFT frequency strength from a numpy array; return 0.0 on error."""
     try:
-        fft_result = np.fft.fft(s.values)
-        ps = np.abs(fft_result[1:len(s)//2])**2
-        if np.isnan(ps).any() or ps.max() == 0: return 0.0
-        return float(ps.max() / ps.sum())
+        s = np.asarray(arr, dtype=float)
+        if len(s) < 4: return 0.0
+        ps = np.abs(np.fft.fft(s)[1:len(s)//2]) ** 2
+        total = ps.sum()
+        if total == 0 or not np.isfinite(total): return 0.0
+        return float(ps.max() / total)
     except:
         return 0.0
 
-def _build_features(df):
-    """Cross-sectional features for one bar (last row of df)."""
-    if len(df) < 20: return None
-    
-    ret = {
-        'logret_10d': np.log(df['close'].iloc[-1] / df['close'].iloc[-10]) if df['close'].iloc[-10] > 0 else 0,
-        'ret_1d':     (df['close'].iloc[-1] - df['close'].iloc[-2]) / df['close'].iloc[-2] if df['close'].iloc[-2] > 0 else 0,
-        'vol_10d':    df['ret'].tail(10).std(),
-        'vol_60d':    df['ret'].tail(60).std(),
-        'rsi_14':     _rsi(df['close'], 14),
-        'hurst_20':   _hurst(df['ret'].tail(20)),
-        'fft_str':    _fft_strength(df['ret']),
-    }
-    return ret
+def _build_features_vectorized(df):
+    """
+    Vectorized O(n) feature computation for an entire OHLCV DataFrame.
+    Replaces the old O(n^2) incremental loop.
+    """
+    close = df['close'].astype(float)
+    ret   = close.pct_change().fillna(0)
+
+    # Log return over 10 bars
+    shifted10  = close.shift(10).replace(0, np.nan)
+    logret_10d = np.log(close / shifted10).fillna(0)
+
+    # 1-bar return
+    ret_1d = ret
+
+    # Rolling volatility
+    vol_10d = ret.rolling(10, min_periods=1).std().fillna(0)
+    vol_60d = ret.rolling(60, min_periods=1).std().fillna(0)
+
+    # RSI-14 (EWM-based, computed on the full series)
+    d      = ret.diff()
+    g      = d.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
+    ls     = (-d).clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
+    rsi_14 = (100 - 100 / (1 + g / ls.replace(0, np.nan))).fillna(50)
+
+    # Hurst exponent over 20-bar windows (raw=True → numpy array per window, fast)
+    hurst_20 = ret.rolling(20, min_periods=10).apply(_hurst, raw=True).fillna(0.5)
+
+    # FFT dominant frequency strength over 20-bar windows
+    fft_str = ret.rolling(20, min_periods=20).apply(_fft_strength, raw=True).fillna(0.0)
+
+    return pd.DataFrame({
+        'logret_10d': logret_10d,
+        'ret_1d':     ret_1d,
+        'vol_10d':    vol_10d,
+        'vol_60d':    vol_60d,
+        'rsi_14':     rsi_14,
+        'hurst_20':   hurst_20,
+        'fft_str':    fft_str,
+    }, index=df.index)
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Feature Store Builder
@@ -182,52 +212,69 @@ def _build_features(df):
 
 def build_feature_store():
     """
-    Scan data/*.parquet → build feature cache (once).
-    Each symbol gets 443 bars × features → 1 Parquet per symbol in feature_cache/.
+    Scan data/*.parquet → build / validate feature cache.
+    Uses vectorized O(n) computation instead of the old O(n^2) incremental loop.
+    Cache files that were built by a different script (wrong columns) are
+    automatically deleted and rebuilt.
     """
     cache_path = Path(CACHE_DIR)
-    if not cache_path.exists():
-        cache_path.mkdir(parents=True, exist_ok=True)
-    
+    cache_path.mkdir(parents=True, exist_ok=True)
+
     data_path = Path(DATA_DIR)
     if not data_path.exists():
         print(f"ERROR: {DATA_DIR} does not exist")
         return False
-    
+
     symbol_files = sorted(data_path.glob("*.parquet"))
     print(f"\n📦 FEATURE STORE: {len(symbol_files)} symbols found in data/")
-    
+
     count = 0
+    rebuilt = 0
     for fpath in symbol_files:
         cache_file = cache_path / f"{fpath.stem}.parquet"
+
+        # Validate existing cache: must have exactly FEAT_COLS columns
         if cache_file.exists():
-            count += 1
-            continue
-        
+            try:
+                cols = pd.read_parquet(cache_file, columns=[]).columns.tolist()
+                if cols == FEAT_COLS:
+                    count += 1
+                    continue
+                # Column mismatch (e.g. built by build_feature_cache.py with 58 cols)
+                cache_file.unlink()
+            except Exception:
+                cache_file.unlink(missing_ok=True)
+
         try:
             df = pd.read_parquet(fpath)
-            
-            # Fix: set 'time' as DatetimeIndex if present (else keep RangeIndex)
-            if 'time' in df.columns:
-                df = df.set_index('time')
-            
+            df.columns = [c.lower() for c in df.columns]
+
+            # Ensure datetime index
+            if not isinstance(df.index, pd.DatetimeIndex):
+                for tc in ('time', 'timestamp', 'open_time'):
+                    if tc in df.columns:
+                        df = df.set_index(tc)
+                        break
+
             df = df.sort_index()
-            df['ret'] = df['close'].pct_change().fillna(0)
-            
-            features = []
-            for i in range(len(df)):
-                f = _build_features(df.iloc[:i+1])
-                if f is not None:
-                    f['bar'] = i
-                    features.append(f)
-            
-            if features:
-                feat_df = pd.DataFrame(features).set_index('bar')
-                feat_df.to_parquet(cache_file)
-                count += 1
+            if 'close' not in df.columns:
+                continue
+
+            # Vectorized feature build — O(n) per symbol
+            feat_df = _build_features_vectorized(df)
+            feat_df = feat_df.dropna()
+            if len(feat_df) < 20:
+                continue
+
+            feat_df.to_parquet(cache_file)
+            count  += 1
+            rebuilt += 1
+
         except Exception as e:
             print(f"  ⚠ {fpath.stem}: {e}")
-    
+
+    if rebuilt:
+        print(f"  ↺ Rebuilt {rebuilt} cache files (old format replaced)")
     print(f"  ✓ Feature cache: {count}/{len(symbol_files)} symbols cached\n")
     return count > 0
 
@@ -302,24 +349,31 @@ def _build_step2_labels(symbols, val_start, val_end, horizon_bars=48):
     return lbl_df
 
 def _build_step2_features(cache_dir, symbols, val_start, val_end):
-    """Load and align features from cache with validation labels."""
+    """Load features from cache, selecting only FEAT_COLS for consistency."""
     features = []
     cache_path = Path(cache_dir)
-    
+
     for symbol in symbols:
         cache_file = cache_path / f"{symbol}.parquet"
         if not cache_file.exists(): continue
-        
-        feat_df = pd.read_parquet(cache_file)
-        X_raw = feat_df.values
-        
-        if len(X_raw) > MAX_MEMORY_ROWS:
-            # Stride downsampling to stay under memory limit
-            X_raw = X_raw[::STRIDE_STEP]
-        
-        for i, fs in enumerate(X_raw):
-            features.append({'symbol': symbol, 'bar': i, 'features': fs})
-    
+
+        try:
+            feat_df = pd.read_parquet(cache_file)
+            # Select only the expected columns (handles any leftover mismatched files)
+            available = [c for c in FEAT_COLS if c in feat_df.columns]
+            if len(available) < len(FEAT_COLS):
+                continue
+            feat_df = feat_df[FEAT_COLS].dropna()
+
+            X_raw = feat_df.values
+            if len(X_raw) > MAX_MEMORY_ROWS:
+                X_raw = X_raw[::STRIDE_STEP]
+
+            for i, fs in enumerate(X_raw):
+                features.append({'symbol': symbol, 'bar': i, 'features': fs})
+        except Exception:
+            continue
+
     return pd.DataFrame(features)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -381,7 +435,17 @@ def main():
     parser.add_argument('--gpu', action='store_true', help='Use GPU (CUDA)')
     parser.add_argument('--no-gpu', action='store_true', help='Force CPU-only')
     parser.add_argument('--year2-only', action='store_true', help='Year2 pretrain only (16 weeks, no Year3 walk-forward)')
+    parser.add_argument('--data-dir', default=None, help='Path to folder containing SYMBOL.parquet files (default: ./data)')
+    parser.add_argument('--out-dir', default=None, help='Path to results output folder (default: ./results)')
     args = parser.parse_args()
+
+    # Override module-level paths if supplied via CLI
+    if args.data_dir:
+        global DATA_DIR
+        DATA_DIR = args.data_dir
+    if args.out_dir:
+        global RESULTS_DIR
+        RESULTS_DIR = args.out_dir
     
     # Determine GPU usage
     use_gpu = args.gpu if not args.no_gpu else False
