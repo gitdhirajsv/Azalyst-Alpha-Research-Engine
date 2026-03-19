@@ -41,7 +41,10 @@ team_log.txt
 output.txt
 responses.txt
 gpu_run_output.txt
-debug_run.bat
+pipeline_output.txt
+gpu_live_run.txt
+_b64_*.txt
+debug*.bat
 test_pkg.bat
 test*.bat
 results/
