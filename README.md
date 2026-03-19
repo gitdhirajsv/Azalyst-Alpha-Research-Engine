@@ -356,6 +356,39 @@ All pipeline scripts now launch via `!RUN_PYTHON!`. Package install retries in t
 
 ---
 
+### v2.3b — RUN_AZALYST.bat: Quoted RUN_PYTHON Path + pip --upgrade RECORD Error (19 Mar 2026)
+
+**Problem 1 — `can't open file 'D:\\Azalyst Alpha Research Engine\\Alpha'`.**
+`!RUN_PYTHON!` was used unquoted as an executable. Because the path contains spaces (`D:\Azalyst Alpha Research Engine\...`), `cmd.exe` split it at every space — so Python received `Alpha` as the script name instead of the actual file.
+
+**Fix:** All `!RUN_PYTHON!` usages as an executable are now wrapped in double-quotes: `"!RUN_PYTHON!"`.
+
+**Problem 2 — `error: uninstall-no-record-file / Cannot uninstall psutil None`.**
+The package install step used `pip install ... --upgrade`, which forces pip to uninstall the existing version first. `psutil` was installed without a `RECORD` metadata file (system-managed or pre-existing install), so pip crashed trying to remove it even though it was perfectly functional.
+
+**Fix:** Removed `--upgrade` from both pip install calls. Packages are only installed if missing; existing working installs are left untouched.
+
+**Problem 3 — Spyder launch mode comparison broken for long paths.**
+`if "!SPYDER_CMD!"=="!RUN_PYTHON! -m spyder"` — comparing a variable that contains a long path with spaces against a string embedding another variable is unreliable in cmd's delayed-expansion mode.
+
+**Fix:** Replaced with a clean `SPYDER_MODE` flag (`PATH` / `MODULE` / `EXE`) set at detection time. Launch block checks this flag instead.
+
+**Status:** ✅ Tested in real `cmd` context — `[OK] All packages present` with quoted `.venv` path confirmed.
+
+---
+
+### v2.3c — RUN_AZALYST.bat: Launch Summary Always Showed "Terminal only" (19 Mar 2026)
+
+**Problem:** User selects `[2] Terminal + Spyder` but Launch Summary displayed `Output : Terminal only`.
+
+**Root cause:** Windows batch `set USE_SPYDER=1 & echo...` silently captures the space before `&` as part of the value — `USE_SPYDER` becomes `"1 "` (trailing space), not `"1"`. The check `if "!USE_SPYDER!"=="1"` in the Launch Summary never matched, so it always fell through to `else → Terminal only`. The same bug affected `COMPUTE_CHOICE` and `COMPUTE_LABEL` on the GPU/CPU selection lines.
+
+**Fix:** All inline `set VAR=value` commands changed to the quoted form `set "VAR=value"` which correctly trims surrounding whitespace. Tested: `USE_SPYDER=[1]` and `SUMMARY: Terminal + Spyder` confirmed in cmd.
+
+**Status:** ✅ Verified via isolated test BAT — quoted `set` form resolves trailing-space correctly.
+
+---
+
 ### v2.2 — Notebook: Stale Feature Cache Detection (Cell 6)
 
 **Problem:** After `frac_diff_close` was added in v2.1, the feature cache contained 443 files with 56 columns. Cell 6 only checked whether enough *files* existed (≥ 90% threshold) — it never validated *column* presence. So the rebuild was silently skipped and the pipeline continued with a cache missing `frac_diff_close`.
