@@ -1,0 +1,77 @@
+﻿<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 320" width="1200" height="320">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%"   stop-color="#22d3ee"/>
+      <stop offset="55%"  stop-color="#6ee7b7"/>
+      <stop offset="100%" stop-color="#fde047"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="320" fill="url(#bg)"/>
+
+  <!--  GEOMETRIC WIREFRAME  (center ~540,128)  -->
+  <g stroke="#1e293b" stroke-width="1.4" fill="none"
+     stroke-linecap="round" stroke-linejoin="round" opacity="0.73">
+
+    <!-- Main outer hexagon (flat-top, R80) -->
+    <polygon points="604,90 615,128 604,166 476,166 465,128 476,90"/>
+
+    <!-- 3-axis internal division  isometric 3-face cube look -->
+    <line x1="604" y1="90"  x2="476" y2="166"/>
+    <line x1="476" y1="90"  x2="604" y2="166"/>
+    <line x1="465" y1="128" x2="615" y2="128"/>
+
+    <!-- Inner hexagon ring (R40) -->
+    <polygon points="574,108 580,128 574,148 506,148 500,128 506,108"/>
+
+    <!-- Top-right wing -->
+    <polygon points="604,90 642,74 642,110 615,128"/>
+
+    <!-- Top-left wing -->
+    <polygon points="476,90 438,74 438,110 465,128"/>
+
+    <!-- Bottom-right wing -->
+    <polygon points="615,128 642,110 642,147 604,166"/>
+
+    <!-- Small diamond — top center -->
+    <polygon points="528,68 540,52 552,68 540,84"/>
+    <line x1="540" y1="52" x2="540" y2="84"/>
+
+    <!-- Floating square — upper -->
+    <rect x="555" y="37" width="16" height="16" rx="1"/>
+
+    <!-- Far-right triangle -->
+    <polygon points="642,110 660,128 642,147"/>
+
+    <!-- Bottom-left foot -->
+    <polygon points="438,147 438,175 465,166"/>
+
+    <!-- Far-left nub -->
+    <polygon points="438,110 418,128 438,147"/>
+  </g>
+
+  <!-- INSIGHT (left) -->
+  <text x="195" y="156"
+        font-family="'Helvetica Neue',Helvetica,Arial,sans-serif"
+        font-size="19" letter-spacing="7"
+        fill="#1e293b" opacity="0.82" text-anchor="middle">INSIGHT</text>
+
+  <!-- ANALYTICA (right) -->
+  <text x="950" y="156"
+        font-family="'Helvetica Neue',Helvetica,Arial,sans-serif"
+        font-size="19" letter-spacing="5"
+        fill="#1e293b" opacity="0.82" text-anchor="middle">ANALYTICA</text>
+
+  <!-- AZALYST brand -->
+  <text x="562" y="258"
+        font-family="'Helvetica Neue',Helvetica,Arial,sans-serif"
+        font-size="56" font-weight="700"
+        fill="#1e293b" text-anchor="middle" letter-spacing="3">AZALYST</text>
+
+  <!-- ALPHA X sub-brand -->
+  <text x="562" y="294"
+        font-family="'Helvetica Neue',Helvetica,Arial,sans-serif"
+        font-size="15" letter-spacing="12"
+        fill="#1e293b" opacity="0.60" text-anchor="middle">ALPHA X</text>
+</svg>
