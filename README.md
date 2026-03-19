@@ -19,6 +19,24 @@
 
 ---
 
+## 🚀 Quick Start — Run with Jupyter
+
+The easiest way to run the full Azalyst pipeline is through the **Jupyter notebook**:
+
+1. Open `azalyst-alpha-research-engine.ipynb` in **VSCode** (with Jupyter extension) or **JupyterLab**
+2. Place your Binance 5-min OHLCV `.parquet` files in the `./data/` folder
+3. Run all cells — the notebook will:
+   - Auto-install dependencies from `requirements.txt`
+   - Detect your GPU (NVIDIA CUDA) or fall back to CPU
+   - Build 56 cross-sectional features
+   - Train XGBoost with Purged K-Fold CV + Meta-Labeling
+   - Walk-forward test on Year 3 with position-tracked fees
+   - Save results to `./results/` (CSVs, charts, JSON, model files)
+
+> **💡 Tip:** This notebook is optimized for local GPU execution (tested on RTX 2050 4GB). It automatically caps training rows to prevent VRAM overflow.
+
+---
+
 ## Why Azalyst Exists
 
 Most open-source crypto "bots" are toy systems: fit a moving average on BTC, overfit on in-sample, declare victory. Azalyst is the antithesis.
