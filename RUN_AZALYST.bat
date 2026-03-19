@@ -74,11 +74,12 @@ set PYTHONIOENCODING=utf-8
 echo  [Setup] Checking packages...
 python -c "import xgboost, numpy, pandas, sklearn, scipy, matplotlib, pyarrow, psutil, statsmodels" 2>nul
 if errorlevel 1 (
-    echo  [Setup] Installing missing packages (one-time, ~2 min)...
+    echo  [Setup] Installing missing packages ^(one-time, ~2 min^)...
     pip install "xgboost>=2.0.3" numpy pandas scikit-learn scipy matplotlib pyarrow psutil statsmodels --upgrade -q
     if errorlevel 1 (
         echo  [ERROR] Package install failed. Check internet connection.
-        pause & exit /b 1
+        pause
+        exit /b 1
     )
     echo  [OK] Packages installed
 ) else (
@@ -120,17 +121,17 @@ if "!GPU_FOUND!"=="1" (
     :Q1_LOOP
     echo  [1/2] Select compute device:
     echo.
-    echo        [1] GPU  - !GPU_NAME!  (faster ~4x)
+    echo        [1] GPU  - !GPU_NAME!  ^(faster ~4x^)
     echo        [2] CPU  - All cores
     echo.
-    set /p Q1="  Your choice (1/2): "
-    if "!Q1!"=="1" ( set COMPUTE_CHOICE=gpu & set COMPUTE_LABEL=GPU (!GPU_NAME!) & echo  [OK] GPU mode & goto :Q2 )
+    set /p Q1="  Your choice ^(1/2^): "
+    if "!Q1!"=="1" ( set COMPUTE_CHOICE=gpu & set COMPUTE_LABEL=GPU ^(!GPU_NAME!^) & echo  [OK] GPU mode & goto :Q2 )
     if "!Q1!"=="2" ( set COMPUTE_CHOICE=cpu & set COMPUTE_LABEL=CPU & echo  [OK] CPU mode & goto :Q2 )
     echo  [!] Enter 1 or 2.
     echo.
     goto :Q1_LOOP
 ) else (
-    echo  [1/2] Compute: CPU only (no GPU detected)
+    echo  [1/2] Compute: CPU only ^(no GPU detected^)
 )
 
 :Q2
@@ -144,16 +145,16 @@ if "!SPYDER_FOUND!"=="1" (
     echo  [2/2] Output mode:
     echo.
     echo        [1] Terminal only
-    echo        [2] Terminal + Spyder  (closing Spyder will NOT stop the pipeline)
+    echo        [2] Terminal + Spyder  ^(closing Spyder will NOT stop the pipeline^)
     echo.
-    set /p Q2="  Your choice (1/2): "
+    set /p Q2="  Your choice ^(1/2^): "
     if "!Q2!"=="1" ( set USE_SPYDER=0 & echo  [OK] Terminal only & goto :Q2_DONE )
     if "!Q2!"=="2" ( set USE_SPYDER=1 & echo  [OK] Terminal + Spyder & goto :Q2_DONE )
     echo  [!] Enter 1 or 2.
     echo.
     goto :Q2_LOOP
 ) else (
-    echo  [2/2] Output: Terminal only (Spyder not installed)
+    echo  [2/2] Output: Terminal only ^(Spyder not installed^)
     echo         To install Spyder:  pip install spyder
 )
 
@@ -176,7 +177,7 @@ echo   Results  : %~dp0results\
 echo.
 echo ================================================================
 echo.
-set /p CONFIRM="  Start? (Y/N): "
+set /p CONFIRM="  Start? ^(Y/N^): "
 if /i not "!CONFIRM!"=="Y" ( echo  Cancelled. & timeout /t 2 /nobreak >nul & exit /b 0 )
 echo.
 
@@ -226,7 +227,11 @@ echo.
 echo ----------------------------------------------------------------
 echo.
 
-python azalyst_engine.py --data-dir "%~dp0data" --out-dir "%~dp0results"
+if "!COMPUTE_CHOICE!"=="gpu" (
+    python azalyst_local_gpu.py --gpu
+) else (
+    python azalyst_engine.py --data-dir "%~dp0data" --out-dir "%~dp0results"
+)
 
 set EXIT_CODE=%errorlevel%
 

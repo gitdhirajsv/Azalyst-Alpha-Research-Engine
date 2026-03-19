@@ -282,15 +282,19 @@ High-conviction trades dominate the portfolio return. Low-conviction trades are 
 
 ### Option 1 — Windows One-Click (recommended for local)
 
-Just double-click **`RUN_AZALYST.bat`** — it handles everything automatically:
+Just double-click **`RUN_AZALYST.bat`** — it guides you through 3 quick prompts then runs the full pipeline automatically:
+
+1. **Select compute device** — `[1] GPU` (RTX 2050, ~4x faster) or `[2] CPU`
+2. **Select output mode** — `[1] Terminal only` or `[2] Terminal + Spyder` (live charts)
+3. **Confirm start** — `Y` to launch
+
+After confirmation it runs fully unattended. The batch file also:
 
 - Detects Python installation and GPU availability
-- **Auto-installs all missing packages** from `requirements.txt` on first run
+- **Auto-installs all missing packages** on first run (no manual `pip install` needed)
 - Validates data files in `./data/`
 - Sets UTF-8 encoding to prevent Windows console crashes
-- Launches the full engine pipeline
-
-> No manual `pip install` needed. The `.bat` file checks every package and installs anything missing before starting the engine.
+- Launches `azalyst_local_gpu.py --gpu` for GPU mode or `azalyst_engine.py` for CPU mode
 
 ### Option 2 — VSCode Jupyter (Local GPU — RTX 2050 / any NVIDIA)
 
