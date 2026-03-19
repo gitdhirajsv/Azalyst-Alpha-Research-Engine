@@ -194,8 +194,8 @@ echo        [1] GPU  - !GPU_NAME!  (faster ~4x)
 echo        [2] CPU  - All cores
 echo.
 set /p Q1="  Your choice (1/2): "
-if "!Q1!"=="1" ( set COMPUTE_CHOICE=gpu & set COMPUTE_LABEL=GPU & echo  [OK] GPU mode & goto :Q2 )
-if "!Q1!"=="2" ( set COMPUTE_CHOICE=cpu & set COMPUTE_LABEL=CPU & echo  [OK] CPU mode & goto :Q2 )
+if "!Q1!"=="1" ( set "COMPUTE_CHOICE=gpu" & set "COMPUTE_LABEL=GPU" & echo  [OK] GPU mode & goto :Q2 )
+if "!Q1!"=="2" ( set "COMPUTE_CHOICE=cpu" & set "COMPUTE_LABEL=CPU" & echo  [OK] CPU mode & goto :Q2 )
 echo  [!] Enter 1 or 2.
 echo.
 goto :Q1_LOOP
@@ -217,8 +217,8 @@ echo        [1] Terminal only
 echo        [2] Terminal + Spyder  (closing Spyder will NOT stop the pipeline)
 echo.
 set /p Q2="  Your choice (1/2): "
-if "!Q2!"=="1" ( set USE_SPYDER=0 & echo  [OK] Terminal only & goto :Q2_DONE )
-if "!Q2!"=="2" ( set USE_SPYDER=1 & echo  [OK] Terminal + Spyder & goto :Q2_DONE )
+if "!Q2!"=="1" ( set "USE_SPYDER=0" & echo  [OK] Terminal only & goto :Q2_DONE )
+if "!Q2!"=="2" ( set "USE_SPYDER=1" & echo  [OK] Terminal + Spyder & goto :Q2_DONE )
 echo  [!] Enter 1 or 2.
 echo.
 goto :Q2_LOOP
