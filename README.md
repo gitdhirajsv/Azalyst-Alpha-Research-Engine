@@ -1,8 +1,4 @@
-<div align="center">
-  <img src="assets/banner.png" alt="Azalyst" width="100%"/>
-</div>
-
-# Azalyst Alpha Research Engine
+﻿# Azalyst Alpha Research Engine
 
 > **Autonomous quantitative research infrastructure for crypto alpha generation** — built by Azalyst Research. Cross-sectional signal discovery, GPU-accelerated machine learning, and institutional walk-forward validation across 300+ digital assets.
 
@@ -595,6 +591,8 @@ This is a research and educational project. Not financial advice. Past performan
 ---
 
 <div align="center">
-Built by **[Azalyst](https://github.com/gitdhirajsv)** | [Azalyst AlphaX](https://github.com/gitdhirajsv/Azalyst-Alpha-X)
+
+Built by [Azalyst](https://github.com/gitdhirajsv) | Azalyst Quant Research
+
 </div>
 
