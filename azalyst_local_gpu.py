@@ -489,89 +489,238 @@ def main():
     # Step 5+6: Walk-forward on Year 3
     print(f"STEP 5+6: Walk-forward (Year 3: {MID_DATE} to {YEAR3_END})\n")
     try:
-        from datetime import datetime, timedelta
-        
-        all_trades = []
-        total_return = 0.0
+        # Pre-index features for O(1) lookups during weekly prediction
+        feat_index = {}
+        for _, row in train_features.iterrows():
+            feat_index[(row['symbol'], row['bar'])] = row['features']
+        print(f"  Feature index: {len(feat_index):,} entries")
+
+        weeks = pd.date_range(start=MID_DATE, end=YEAR3_END, freq="W-MON")
+        if len(weeks) < 2:
+            print("  Not enough weeks in Year 3 range")
+            return
+
+        prev_longs  = set()
+        prev_shorts = set()
+        all_trades      = []
+        weekly_summary  = []
+        weekly_returns  = []
         retrains = 0
-        
-        start = pd.Timestamp(MID_DATE)
-        end = pd.Timestamp(YEAR3_END)
-        weeks_count = int((end - start).days / 7)
-        
-        for week in range(weeks_count):
-            val_start = start + timedelta(weeks=week)
-            val_end = val_start + timedelta(weeks=1)
-            retrain_start = start - timedelta(weeks=RETRAIN_WEEKS)
-            
-            # Retrain every RETRAIN_WEEKS
-            if week % RETRAIN_WEEKS == 0 and week > 0:
-                print(f"  Week {week:2d}: RETRAIN")
-                retrains += 1
-                
-                # Rebuild training set
-                retrain_labels = _build_step2_labels(symbols, retrain_start.strftime('%Y-%m-%d'), val_start.strftime('%Y-%m-%d'), HORIZON_BARS)
-                if retrain_labels is not None and len(retrain_labels) > 0:
-                    X_retrain_raw = np.array([_fetch_feature_vector(train_features, s, b) for s, b in zip(retrain_labels['symbol'], retrain_labels['bar'])])
-                    X_retrain = X_retrain_raw[:min(MAX_TRAIN_ROWS, len(X_retrain_raw))]
-                    y_retrain = retrain_labels['label'].values[:len(X_retrain)]
-                    
-                    scaler = RobustScaler()
-                    X_retrain_scaled = scaler.fit_transform(X_retrain)
-                    
-                    final=xgb.XGBClassifier(**make_xgb_params(cuda_api))
-                    final.fit(X_retrain_scaled, y_retrain, verbose=False)
-                    
-                    BASE_MODEL = final
-                    BASE_SCALER = scaler
-            
-            # Generate trades for this week
-            trades_week = build_trade_log(BASE_MODEL, BASE_SCALER, symbols, START_DATE, val_start.strftime('%Y-%m-%d'), val_end.strftime('%Y-%m-%d'), train_features, cuda_api)
-            if trades_week is not None:
-                all_trades.append(trades_week)
-                week_ret = trades_week['return_pct'].sum() / 100
-                total_return += week_ret
-                print(f"  Week {week:2d}: {len(trades_week):6.0f} trades, {week_ret:7.2%} return")
-        
-        # Save results
-        full_trades = pd.concat(all_trades, ignore_index=True) if all_trades else pd.DataFrame()
-        
+
+        for week_num, (ws, we) in enumerate(zip(weeks[:-1], weeks[1:]), 1):
+
+            # ── Quarterly retrain ────────────────────────────────────────
+            if week_num % RETRAIN_WEEKS == 0:
+                print(f"  Week {week_num:2d}: RETRAIN")
+                X_rt, y_rt = [], []
+                retrain_end = str(ws)
+                for symbol, df in symbols.items():
+                    df_rt = df[(df.index >= START_DATE) & (df.index < retrain_end)]
+                    if len(df_rt) < HORIZON_BARS + 10:
+                        continue
+                    n_bars = len(df_rt) - HORIZON_BARS
+                    step = max(1, n_bars // 500)
+                    for i in range(0, n_bars, step):
+                        try:
+                            bar_idx = df.index.get_loc(df_rt.index[i])
+                        except KeyError:
+                            continue
+                        fv = feat_index.get((symbol, bar_idx))
+                        if fv is None or len(fv) != BASE_SCALER.n_features_in_:
+                            continue
+                        cur_c = df_rt.iloc[i]['close']
+                        fut_c = df_rt.iloc[i + HORIZON_BARS]['close']
+                        if cur_c <= 0:
+                            continue
+                        X_rt.append(fv)
+                        y_rt.append(1 if fut_c > cur_c else 0)
+
+                if len(X_rt) > 100:
+                    X_rt = np.array(X_rt[:MAX_TRAIN_ROWS])
+                    y_rt = np.array(y_rt[:len(X_rt)])
+                    scaler_new = RobustScaler()
+                    X_rt_s = scaler_new.fit_transform(X_rt)
+                    m_new = xgb.XGBClassifier(**make_xgb_params(cuda_api))
+                    split = int(len(X_rt_s) * 0.9)
+                    m_new.fit(
+                        X_rt_s[:split], y_rt[:split],
+                        eval_set=[(X_rt_s[split:], y_rt[split:])],
+                        verbose=False,
+                    )
+                    BASE_MODEL  = m_new
+                    BASE_SCALER = scaler_new
+                    retrains += 1
+                    print(f"    → {len(X_rt):,} samples, retrained OK")
+                    del X_rt, y_rt, X_rt_s
+                    gc.collect()
+                else:
+                    print(f"    → too few samples ({len(X_rt)}), skipped retrain")
+
+            # ── Predict: one probability per symbol per week ─────────────
+            predictions = {}
+            actual_rets = {}
+
+            for symbol, df in symbols.items():
+                mask = (df.index >= str(ws)) & (df.index < str(we))
+                df_week = df[mask]
+                if len(df_week) < 3:
+                    continue
+
+                feat_vecs = []
+                for idx in df_week.index:
+                    try:
+                        bar_idx = df.index.get_loc(idx)
+                    except KeyError:
+                        continue
+                    fv = feat_index.get((symbol, bar_idx))
+                    if fv is not None and len(fv) == BASE_SCALER.n_features_in_:
+                        feat_vecs.append(fv)
+
+                if not feat_vecs:
+                    continue
+
+                X = np.vstack(feat_vecs)
+                X_scaled = BASE_SCALER.transform(X)
+                probs = BASE_MODEL.predict_proba(X_scaled)[:, 1]
+                predictions[symbol] = float(probs.mean())
+
+                # Actual return: close-to-close over the week
+                if len(df_week) >= 2:
+                    wk_r = (df_week.iloc[-1]['close'] / df_week.iloc[0]['close']) - 1
+                    if np.isfinite(wk_r):
+                        actual_rets[symbol] = float(wk_r)
+
+            if len(predictions) < 5:
+                print(f"  Week {week_num:2d}: skipped — only {len(predictions)} symbols")
+                continue
+
+            # ── Cross-sectional ranking + position-tracked fees ──────────
+            pred_series = pd.Series(predictions)
+            ranked = pred_series.rank(pct=True)
+            cur_longs  = set(ranked[ranked >= (1 - TOP_QUANTILE)].index)
+            cur_shorts = set(ranked[ranked <= TOP_QUANTILE].index)
+
+            trades = []
+            for sym in cur_longs:
+                ret = actual_rets.get(sym, 0.0)
+                if not np.isfinite(ret):
+                    ret = 0.0
+                fee = 0.0 if sym in prev_longs else ROUND_TRIP_FEE
+                pnl = (ret - fee) * 100
+                trades.append({
+                    'week': week_num, 'symbol': sym, 'signal': 'BUY',
+                    'pred_prob': round(predictions[sym], 5),
+                    'return_pct': round(pnl, 4),
+                    'raw_ret_pct': round(ret * 100, 4),
+                })
+
+            for sym in cur_shorts:
+                ret = actual_rets.get(sym, 0.0)
+                if not np.isfinite(ret):
+                    ret = 0.0
+                fee = 0.0 if sym in prev_shorts else ROUND_TRIP_FEE
+                pnl = (-ret - fee) * 100
+                trades.append({
+                    'week': week_num, 'symbol': sym, 'signal': 'SELL',
+                    'pred_prob': round(predictions[sym], 5),
+                    'return_pct': round(pnl, 4),
+                    'raw_ret_pct': round(ret * 100, 4),
+                })
+
+            week_ret = float(np.mean([t['return_pct'] for t in trades])) / 100 if trades else 0.0
+            weekly_returns.append(week_ret)
+
+            # IC (Spearman rank correlation)
+            common = [s for s in predictions if s in actual_rets]
+            if len(common) > 10:
+                pred_arr = np.array([predictions[s] for s in common])
+                ret_arr  = np.array([actual_rets[s]  for s in common])
+                week_ic  = float(stats.spearmanr(pred_arr, ret_arr)[0])
+            else:
+                week_ic = 0.0
+
+            # Turnover
+            n_cur = len(cur_longs) + len(cur_shorts)
+            n_new = len(cur_longs - prev_longs) + len(cur_shorts - prev_shorts)
+            turnover = round(n_new / n_cur * 100, 1) if n_cur > 0 else 100.0
+            prev_longs, prev_shorts = cur_longs, cur_shorts
+
+            all_trades.extend(trades)
+            ann_proj = ((1 + week_ret) ** 52 - 1) * 100
+            weekly_summary.append({
+                'week': week_num,
+                'week_start': str(ws.date()),
+                'week_end': str(we.date()),
+                'n_symbols': len(predictions),
+                'n_trades': len(trades),
+                'week_return_pct': round(week_ret * 100, 4),
+                'annualised_pct': round(ann_proj, 2),
+                'ic': round(week_ic, 5),
+                'turnover_pct': turnover,
+                'on_track': week_ret >= ((1.10) ** (1 / 52) - 1),
+                'retrained': week_num % RETRAIN_WEEKS == 0,
+            })
+
+            if week_num % 4 == 0 or week_num <= 2:
+                rolling = np.mean(weekly_returns[-4:]) * 100
+                print(f"  Week {week_num:2d}: {len(trades):4d} trades | "
+                      f"ret={week_ret*100:+.2f}% | IC={week_ic:+.4f} | "
+                      f"turnover={turnover:.0f}% | 4w_avg={rolling:+.2f}%")
+
+        # ── Save results ─────────────────────────────────────────────────
         os.makedirs(RESULTS_DIR, exist_ok=True)
-        if len(full_trades) > 0:
-            full_trades.to_csv(f"{RESULTS_DIR}/all_trades_year3.csv", index=False)
-            print(f"\n  ✓ Trades: {len(full_trades)} total ({full_trades['return_pct'].sum() / 100:.2%} total return)\n")
-        
-        # Summary
-        annualized = ((1 + total_return) ** (52 / weeks_count) - 1) * 100 if weeks_count > 0 else 0.0
-        ic_mean = full_trades['return_pct'].mean() / 100 if len(full_trades) > 0 else 0.0
-        ic_std = full_trades['return_pct'].std() / 100 if len(full_trades) > 1 else 0.0
-        icir = ic_mean / ic_std if ic_std > 0 else 0.0
-        ic_positive = (full_trades['return_pct'] > 0).sum() / len(full_trades) * 100 if len(full_trades) > 0 else 0.0
-        
+
+        trades_df  = pd.DataFrame(all_trades)  if all_trades  else pd.DataFrame()
+        summary_df = pd.DataFrame(weekly_summary) if weekly_summary else pd.DataFrame()
+
+        if len(trades_df) > 0:
+            trades_df.to_csv(f"{RESULTS_DIR}/all_trades_year3.csv", index=False)
+        if len(summary_df) > 0:
+            summary_df.to_csv(f"{RESULTS_DIR}/weekly_summary_year3.csv", index=False)
+
+        # Performance metrics (proper definitions)
+        n_wks = len(weekly_returns)
+        if n_wks > 0:
+            cum_ret = float(np.prod([1 + r for r in weekly_returns]) - 1)
+            ann_ret = ((1 + cum_ret) ** (52 / n_wks) - 1) * 100
+            wk_std  = float(np.std(weekly_returns))
+            sharpe  = float(np.mean(weekly_returns)) / wk_std * np.sqrt(52) if wk_std > 0 else 0.0
+        else:
+            cum_ret, ann_ret, sharpe = 0.0, 0.0, 0.0
+
+        ic_series = summary_df['ic'] if len(summary_df) > 0 else pd.Series(dtype=float)
+        ic_mean = float(ic_series.mean()) if len(ic_series) > 0 else 0.0
+        ic_std_v = float(ic_series.std()) if len(ic_series) > 1 else 0.0
+        icir = ic_mean / (ic_std_v + 1e-8)
+        ic_pos = float((ic_series > 0).mean() * 100) if len(ic_series) > 0 else 0.0
+
         perf = {
             "label": "Year3_WalkForward_RTX2050",
-            "total_weeks": weeks_count,
-            "total_trades": len(full_trades),
+            "total_weeks": n_wks,
+            "total_trades": len(trades_df),
             "retrains": retrains,
-            "total_return_pct": round(total_return * 100, 1),
-            "annualised_pct": round(annualized, 1),
-            "sharpe": round(ic_mean / ic_std * np.sqrt(52) if ic_std > 0 else 0, 3),
+            "total_return_pct": round(cum_ret * 100, 1),
+            "annualised_pct": round(ann_ret, 1),
+            "sharpe": round(sharpe, 3),
             "ic_mean": round(ic_mean, 5),
             "icir": round(icir, 4),
-            "ic_positive_pct": round(ic_positive, 1),
+            "ic_positive_pct": round(ic_pos, 1),
             "gpu": "NVIDIA RTX 2050" if use_gpu else "CPU",
             "vram_cap_rows": MAX_TRAIN_ROWS,
-            "year2_only_mode": year2_only
+            "year2_only_mode": year2_only,
         }
-        
+
         with open(f"{RESULTS_DIR}/performance_year3.json", 'w') as f:
-            json.dump(perf, f)
-        
-        print(f"RESULTS:")
+            json.dump(perf, f, indent=2)
+
+        print(f"\nRESULTS:")
         for k, v in perf.items():
             print(f"  {k}: {v}")
-        
+
         print(f"\n✅ Walk-forward complete")
+        print(f"  Trades  → {RESULTS_DIR}/all_trades_year3.csv")
+        print(f"  Summary → {RESULTS_DIR}/weekly_summary_year3.csv")
+        print(f"  Perf    → {RESULTS_DIR}/performance_year3.json")
     
     except Exception as e:
         print(f"❌ Step 5+6 failed: {e}")

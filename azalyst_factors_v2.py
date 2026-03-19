@@ -22,6 +22,7 @@ FEATURE_COLS = [
     'wq_alpha001','wq_alpha012','wq_alpha031','wq_alpha098',
     'cs_momentum','cs_reversal','vol_adjusted_mom','trend_consistency',
     'vol_regime','trend_strength','corr_btc_proxy','hurst_exp','fft_strength',
+    'frac_diff_close',
 ]
 
 def _rsi(s, n):
@@ -32,6 +33,36 @@ def _rsi(s, n):
 
 def _ema(s, n):
     return s.ewm(span=n, adjust=False).mean()
+
+
+def frac_diff_ffd(series: pd.Series, d: float = 0.4,
+                  threshold: float = 1e-5) -> pd.Series:
+    """
+    Fixed-Width Window Fractional Differentiation (AFML Ch. 5).
+
+    d ∈ (0, 1): d=0 is raw price (non-stationary, max memory),
+    d=1.0 is standard returns (stationary, zero memory).
+    d≈0.4 balances stationarity with memory retention.
+    """
+    w = [1.0]
+    k = 1
+    while True:
+        w_k = -w[-1] * (d - k + 1) / k
+        if abs(w_k) < threshold:
+            break
+        w.append(w_k)
+        k += 1
+    w = np.array(w[::-1], dtype=np.float64)   # oldest weight first
+    width = len(w)
+
+    arr = series.values.astype(np.float64)
+    out = np.full(len(arr), np.nan, dtype=np.float64)
+    for i in range(width - 1, len(arr)):
+        chunk = arr[i - width + 1 : i + 1]
+        if np.isnan(chunk).any():
+            continue
+        out[i] = np.dot(w, chunk)
+    return pd.Series(out, index=series.index, dtype=np.float32)
 
 def build_features(df, timeframe='5min'):
     """
@@ -163,5 +194,9 @@ def build_features(df, timeframe='5min'):
         fft_mag = np.abs(np.fft.rfft(seg_ret))
         fft_strength.iloc[i] = float(np.max(fft_mag[1:]) / (np.mean(fft_mag[1:]) + 1e-10))
     f['fft_strength'] = fft_strength.astype(np.float32)
+
+    # Fractional differentiation of log-price (AFML Ch. 5)
+    # Preserves price level memory while achieving stationarity
+    f['frac_diff_close'] = frac_diff_ffd(np.log(c.clip(lower=1e-10)), d=0.4)
 
     return f.replace([np.inf, -np.inf], np.nan).shift(1).astype(np.float32)

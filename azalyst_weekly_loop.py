@@ -37,7 +37,7 @@ from scipy import stats
 
 from azalyst_factors_v2 import FEATURE_COLS
 from azalyst_alpha_metrics import session_report, should_retrain
-from azalyst_train import train_model
+from azalyst_train import train_model, train_meta_model
 
 warnings.filterwarnings("ignore")
 
@@ -206,15 +206,18 @@ def build_training_matrix(data: dict, end_date, min_rows: int = 500):
 #  WEEKLY PREDICTION
 # ─────────────────────────────────────────────────────────────────────────────
 
-def predict_week(model, scaler, data: dict, week_start, week_end):
+def predict_week(model, scaler, data: dict, week_start, week_end,
+                 meta_model=None, meta_scaler=None):
     """
     Run model inference for every symbol within the week window.
-    Returns dicts of {symbol: mean_pred_prob} and {symbol: mean_actual_ret}.
+    Returns dicts of {symbol: mean_pred_prob}, {symbol: mean_actual_ret},
+    and {symbol: meta_confidence} (empty dict if no meta model).
 
     FIX: uses 'future_ret' column (not 'future_ret_4h').
     """
     predictions = {}
     actual_rets = {}
+    meta_confidences = {}
 
     for sym, df in data.items():
         try:
@@ -237,6 +240,13 @@ def predict_week(model, scaler, data: dict, week_start, week_end):
             probs = model.predict_proba(feat_scaled)[:, 1]
             predictions[sym] = float(probs.mean())
 
+            # Meta-labeling confidence (position sizing)
+            if meta_model is not None and meta_scaler is not None:
+                meta_input = np.column_stack([feat_scaled, probs.reshape(-1, 1)])
+                meta_scaled = meta_scaler.transform(meta_input)
+                meta_probs = meta_model.predict_proba(meta_scaled)[:, 1]
+                meta_confidences[sym] = float(meta_probs.mean())
+
             # FIX: 'future_ret' not 'future_ret_4h'
             if "future_ret" in week_data.columns:
                 ret_col     = week_data["future_ret"].values[valid]
@@ -247,7 +257,7 @@ def predict_week(model, scaler, data: dict, week_start, week_end):
         except Exception:
             pass
 
-    return predictions, actual_rets
+    return predictions, actual_rets, meta_confidences
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -255,48 +265,77 @@ def predict_week(model, scaler, data: dict, week_start, week_end):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def simulate_weekly_trades(predictions: dict, actual_rets: dict,
-                           top_q: float = TOP_QUANTILE):
+                           prev_longs: set = None, prev_shorts: set = None,
+                           top_q: float = TOP_QUANTILE,
+                           meta_confidences: dict = None):
     """
-    Convert cross-sectional predictions to long/short trades.
-    Returns list of trade records and the mean net weekly return (decimal).
+    Cross-sectional long/short simulation with position-aware fees
+    and meta-labeling position sizing.
+
+    Fees are charged only when a symbol ENTERS the portfolio (new position).
+    Held positions (same side as last week) pay zero fees.
+
+    When meta_confidences is provided, each trade's PnL is scaled by the
+    meta-model's confidence (AFML Ch. 3).  High-confidence predictions
+    get proportionally more weight in the portfolio return.
+
+    Returns (trades, week_return_decimal, current_longs_set, current_shorts_set).
     """
+    if prev_longs is None:
+        prev_longs = set()
+    if prev_shorts is None:
+        prev_shorts = set()
+
     if not predictions:
-        return [], 0.0
+        return [], 0.0, set(), set()
 
     pred_series = pd.Series(predictions)
     ranked      = pred_series.rank(pct=True)
-    longs       = ranked[ranked >= (1 - top_q)].index.tolist()
-    shorts      = ranked[ranked <= top_q].index.tolist()
+    cur_longs   = set(ranked[ranked >= (1 - top_q)].index)
+    cur_shorts  = set(ranked[ranked <= top_q].index)
 
     trades = []
-    for sym in longs:
+    for sym in cur_longs:
         ret = actual_rets.get(sym, 0.0)
         if not np.isfinite(ret):
             ret = 0.0
-        pnl = (ret - ROUND_TRIP_FEE) * 100
+        fee = 0.0 if sym in prev_longs else ROUND_TRIP_FEE
+        meta_size = meta_confidences.get(sym, 1.0) if meta_confidences else 1.0
+        pnl = (ret - fee) * meta_size * 100
         trades.append({
             "symbol":      sym,
             "signal":      "BUY",
             "pred_prob":   round(predictions[sym], 5),
             "pnl_percent": round(pnl, 4),
             "raw_ret":     round(ret * 100, 4),
+            "meta_size":   round(meta_size, 4),
         })
 
-    for sym in shorts:
+    for sym in cur_shorts:
         ret = actual_rets.get(sym, 0.0)
         if not np.isfinite(ret):
             ret = 0.0
-        pnl = (-ret - ROUND_TRIP_FEE) * 100
+        fee = 0.0 if sym in prev_shorts else ROUND_TRIP_FEE
+        meta_size = meta_confidences.get(sym, 1.0) if meta_confidences else 1.0
+        pnl = (-ret - fee) * meta_size * 100
         trades.append({
             "symbol":      sym,
             "signal":      "SELL",
             "pred_prob":   round(predictions[sym], 5),
             "pnl_percent": round(pnl, 4),
             "raw_ret":     round(ret * 100, 4),
+            "meta_size":   round(meta_size, 4),
         })
 
-    week_ret = float(np.mean([t["pnl_percent"] for t in trades])) / 100 if trades else 0.0
-    return trades, week_ret
+    # Confidence-weighted weekly return
+    if trades:
+        sizes = np.array([t["meta_size"] for t in trades])
+        pnls  = np.array([t["pnl_percent"] for t in trades])
+        week_ret = float(np.average(pnls, weights=sizes)) / 100
+    else:
+        week_ret = 0.0
+
+    return trades, week_ret, cur_longs, cur_shorts
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -440,6 +479,34 @@ def run_weekly_loop(
         del X, y, y_ret
         gc.collect()
 
+    # 3b. Load or train meta-labeling model (AFML Ch. 3)
+    meta_model_path  = os.path.join(models_dir, "meta_model_base.pkl")
+    meta_scaler_path = os.path.join(models_dir, "meta_scaler_base.pkl")
+    meta_model  = None
+    meta_scaler = None
+
+    if os.path.exists(meta_model_path) and os.path.exists(meta_scaler_path):
+        print(f"[WeeklyLoop] Loading meta model: {meta_model_path}")
+        with open(meta_model_path, "rb") as f:
+            meta_model = pickle.load(f)
+        with open(meta_scaler_path, "rb") as f:
+            meta_scaler = pickle.load(f)
+    else:
+        print("[WeeklyLoop] Training meta-labeling model...")
+        X, y, y_ret = build_training_matrix(data, year3_start)
+        if X is not None:
+            meta_model, meta_scaler = train_meta_model(
+                model, scaler, X, y, FEATURE_COLS,
+                label="meta_base", use_gpu=gpu,
+            )
+            if meta_model is not None:
+                with open(meta_model_path, "wb") as f:
+                    pickle.dump(meta_model, f)
+                with open(meta_scaler_path, "wb") as f:
+                    pickle.dump(meta_scaler, f)
+            del X, y, y_ret
+            gc.collect()
+
     # 4. Generate weekly timestamps
     weeks = pd.date_range(start=year3_start, end=global_max, freq="W-MON")
     if len(weeks) < 2:
@@ -451,18 +518,26 @@ def run_weekly_loop(
     all_trades:             list = []
     weekly_summary:         list = []
     weekly_returns_history: list = []
+    prev_longs:             set  = set()
+    prev_shorts:            set  = set()
 
     for week_num, (week_start, week_end) in enumerate(zip(weeks[:-1], weeks[1:]), 1):
 
-        # Predict
-        predictions, actual_rets = predict_week(model, scaler, data, week_start, week_end)
+        # Predict (with optional meta-labeling confidence)
+        predictions, actual_rets, meta_confs = predict_week(
+            model, scaler, data, week_start, week_end,
+            meta_model=meta_model, meta_scaler=meta_scaler,
+        )
 
         if len(predictions) < 5:
             print(f"  Week {week_num:3d}: skipped — only {len(predictions)} symbols")
             continue
 
-        # Trade simulation
-        trades, week_ret = simulate_weekly_trades(predictions, actual_rets)
+        # Trade simulation (position-tracked fees + meta-labeling sizing)
+        trades, week_ret, cur_longs, cur_shorts = simulate_weekly_trades(
+            predictions, actual_rets, prev_longs, prev_shorts,
+            meta_confidences=meta_confs,
+        )
 
         # IC
         if predictions and actual_rets:
@@ -501,6 +576,21 @@ def run_weekly_loop(
                 )
                 model, scaler = model_new, scaler_new
                 print(f"    → AUC={auc_n:.4f}  IC={ic_n:.4f}  ICIR={icir_n:.4f}")
+
+                # Retrain meta-labeling model alongside primary
+                meta_new, meta_scaler_new = train_meta_model(
+                    model, scaler, X_new, y_new, FEATURE_COLS,
+                    label=f"meta_week{week_num:03d}", use_gpu=gpu,
+                )
+                if meta_new is not None:
+                    meta_model, meta_scaler = meta_new, meta_scaler_new
+                    meta_pkl = os.path.join(models_dir, f"meta_model_week{week_num:03d}.pkl")
+                    meta_sca = os.path.join(models_dir, f"meta_scaler_week{week_num:03d}.pkl")
+                    with open(meta_pkl, "wb") as f:
+                        pickle.dump(meta_model, f)
+                    with open(meta_sca, "wb") as f:
+                        pickle.dump(meta_scaler, f)
+
                 did_retrain = True
                 del X_new, y_new, y_ret_new
                 gc.collect()
@@ -510,6 +600,12 @@ def run_weekly_loop(
             t["week"]       = week_num
             t["week_start"] = str(week_start.date())
         all_trades.extend(trades)
+
+        # Turnover tracking
+        n_cur = len(cur_longs) + len(cur_shorts)
+        n_new = len(cur_longs - prev_longs) + len(cur_shorts - prev_shorts)
+        turnover_pct = round(n_new / n_cur * 100, 1) if n_cur > 0 else 100.0
+        prev_longs, prev_shorts = cur_longs, cur_shorts
 
         on_track_thresh = (1.10) ** (1 / 52) - 1
         weekly_summary.append({
@@ -521,6 +617,7 @@ def run_weekly_loop(
             "week_return_pct":  round(week_ret * 100, 4),
             "annualised_pct":   round(ann_proj, 2),
             "ic":               round(week_ic, 5),
+            "turnover_pct":     turnover_pct,
             "on_track":         week_ret >= on_track_thresh,
             "retrained":        did_retrain,
         })

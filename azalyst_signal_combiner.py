@@ -131,7 +131,42 @@ class SignalCombiner:
         self.entry_z = statarb_entry_z
         self.exit_z  = statarb_exit_z
         self.weights = REGIME_WEIGHT_TABLE[self.regime]
+        self.ic_history: Dict[str, List[float]] = {}   # per-source rolling IC
         logger.info(f"[SignalCombiner] Regime={self.regime}  Weights={self.weights}")
+
+    # ── IC tracking (Grinold & Kahn dynamic reweighting) ─────────────────────
+
+    def update_ic(self, source: str, ic_value: float) -> None:
+        """Record a weekly IC observation for a signal source."""
+        if source not in self.ic_history:
+            self.ic_history[source] = []
+        self.ic_history[source].append(float(ic_value))
+
+    def _ic_adjusted_weights(self, lookback: int = 13) -> Dict[str, float]:
+        """
+        Adjust base regime weights by rolling IC quality.
+
+        Sources with higher recent IC get proportionally more weight.
+        Requires >= 4 weeks of IC history per source to activate.
+        Falls back to base regime weights if insufficient history.
+        """
+        multipliers = {}
+        for source in self.weights:
+            ics = self.ic_history.get(source, [])
+            if len(ics) >= 4:
+                recent = ics[-lookback:]
+                mean_ic = float(np.mean(recent))
+                # Positive IC → boost weight, negative → shrink
+                # Clamp multiplier to [0.1, 3.0] for stability
+                multipliers[source] = max(0.1, min(3.0, 1.0 + 10.0 * mean_ic))
+            else:
+                multipliers[source] = 1.0
+
+        adjusted = {k: self.weights[k] * multipliers[k] for k in self.weights}
+        total = sum(adjusted.values())
+        if total > 0:
+            adjusted = {k: v / total for k, v in adjusted.items()}
+        return adjusted
 
     # ── Signal source processors ──────────────────────────────────────────────
 
@@ -250,7 +285,9 @@ class SignalCombiner:
             "pump_inv":  pump_proba     is not None and not pump_proba.empty,
             "statarb":   statarb_zscore is not None and not statarb_zscore.empty,
         }
-        w = {k: v if present[k] else 0.0 for k, v in self.weights.items()}
+        w = {k: v if present[k] else 0.0
+             for k, v in (self._ic_adjusted_weights()
+                          if self.ic_history else self.weights).items()}
         total_w = sum(w.values())
         if total_w == 0:
             total_w = 1.0

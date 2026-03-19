@@ -141,3 +141,65 @@ def train_model(X, y, y_ret, feature_cols, label="", use_gpu=True):
     ).sort_values(ascending=False)
 
     return final, scaler, importance, mean_auc, mean_ic, icir
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  META-LABELING  (Lopez de Prado, AFML Ch. 3)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def train_meta_model(primary_model, primary_scaler, X, y, feature_cols,
+                     label="meta", use_gpu=True):
+    """
+    Train a second-stage model that predicts P(primary model is correct).
+
+    Uses purged CV to generate honest out-of-sample predictions from
+    *temporary* primary models (one per fold), avoiding information leakage.
+    The meta-model learns when the primary signal is trustworthy.
+    Output is used for position sizing in the weekly loop.
+    """
+    if use_gpu:
+        if _probe_gpu():
+            print(f"[{label}] GPU: CUDA confirmed")
+        else:
+            use_gpu = False
+            print(f"[{label}] GPU: falling back to CPU")
+
+    Xs = primary_scaler.transform(X)
+
+    # Collect OOS predictions from purged CV (same splits as primary)
+    cv = PurgedTimeSeriesCV(n_splits=5, gap=48)
+    oos_preds = np.full(len(y), np.nan, dtype=np.float32)
+
+    for fold, (tr, val) in enumerate(cv.split(Xs), 1):
+        if len(np.unique(y[val])) < 2:
+            continue
+        m_temp = make_xgb_model(use_gpu)
+        m_temp.fit(Xs[tr], y[tr], eval_set=[(Xs[val], y[val])], verbose=False)
+        oos_preds[val] = m_temp.predict_proba(Xs[val])[:, 1]
+
+    valid = np.isfinite(oos_preds)
+    if valid.sum() < 200:
+        print(f"  [{label}] Insufficient OOS data ({valid.sum()} rows) — skipping meta")
+        return None, None
+
+    # Meta-label: 1 if CV-predicted direction matches actual alpha_label
+    meta_y = ((oos_preds[valid] >= 0.5).astype(float) == y[valid]).astype(float)
+
+    # Augmented features: scaled X + primary OOS probability
+    X_meta = np.column_stack([Xs[valid], oos_preds[valid]])
+    meta_scaler = RobustScaler()
+    X_meta_s = meta_scaler.fit_transform(X_meta)
+
+    meta = make_xgb_model(use_gpu)
+    meta.set_params(n_estimators=500, max_depth=4, min_child_weight=50)
+
+    split = int(len(X_meta_s) * 0.9)
+    meta.fit(
+        X_meta_s[:split], meta_y[:split],
+        eval_set=[(X_meta_s[split:], meta_y[split:])],
+        verbose=False,
+    )
+
+    val_acc = float((meta.predict(X_meta_s[split:]) == meta_y[split:]).mean())
+    print(f"  [{label}] Meta-model: accuracy={val_acc*100:.1f}% on {valid.sum():,} OOS rows")
+    return meta, meta_scaler
