@@ -66,6 +66,10 @@ echo  [INFO] Spyder not found
 :SPYDER_DONE
 echo.
 
+:: -- Step 3.5: Force UTF-8 console encoding ----------------------------------
+set PYTHONUTF8=1
+set PYTHONIOENCODING=utf-8
+
 :: ── Step 4: Install packages ─────────────────────────────────────────────────
 echo  [Setup] Checking packages...
 python -c "import xgboost, numpy, pandas, sklearn, scipy, matplotlib, pyarrow, psutil, statsmodels" 2>nul

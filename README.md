@@ -280,7 +280,19 @@ High-conviction trades dominate the portfolio return. Low-conviction trades are 
 
 ## Running the Engine
 
-### Option 1 — Kaggle (GPU T4, recommended)
+### Option 1 — Windows One-Click (recommended for local)
+
+Just double-click **`RUN_AZALYST.bat`** — it handles everything automatically:
+
+- Detects Python installation and GPU availability
+- **Auto-installs all missing packages** from `requirements.txt` on first run
+- Validates data files in `./data/`
+- Sets UTF-8 encoding to prevent Windows console crashes
+- Launches the full engine pipeline
+
+> No manual `pip install` needed. The `.bat` file checks every package and installs anything missing before starting the engine.
+
+### Option 2 — Kaggle (GPU T4, recommended for cloud)
 
 1. Open `azalyst-alpha-research-engine.ipynb` on Kaggle → **Copy & Edit**
 2. Settings → Accelerator → **GPU T4 x2**
@@ -288,7 +300,7 @@ High-conviction trades dominate the portfolio return. Low-conviction trades are 
 4. Click **Run All**
 5. Download `azalyst_v2_results.zip` from Output tab
 
-### Option 2 — VSCode Jupyter (Local GPU — RTX 2050 / any NVIDIA)
+### Option 3 — VSCode Jupyter (Local GPU — RTX 2050 / any NVIDIA)
 
 Open `azalyst_local_gpu_notebook.ipynb` directly in **VSCode Jupyter** for an interactive,
 cell-by-cell experience on your local machine:
@@ -315,11 +327,11 @@ python build_feature_cache.py --data-dir ./data --out-dir ./feature_cache
 python azalyst_weekly_loop.py --feature-dir ./feature_cache --results-dir ./results --gpu
 ```
 
-### Option 3 — CPU only
+### Option 4 — CPU only
 
 Same commands above without `--gpu`. Uses all CPU cores automatically.
 
-### Option 4 — GitHub Actions (automated CI/CD)
+### Option 5 — GitHub Actions (automated CI/CD)
 
 Push to `main` — runs automatically. Set three repo secrets:
 
@@ -329,7 +341,7 @@ Push to `main` — runs automatically. Set three repo secrets:
 | `KAGGLE_KEY` | Kaggle API key |
 | `KAGGLE_DATASET` | `username/dataset-name` |
 
-### Option 5 — Core research pipeline
+### Option 6 — Core research pipeline
 
 ```bash
 python azalyst_orchestrator.py --data-dir ./data --out-dir ./azalyst_output
@@ -477,6 +489,9 @@ timestamp | open | high | low | close | volume
 
 ## Installation
 
+**Easiest:** Just double-click `RUN_AZALYST.bat` — it auto-installs all missing packages on first run.
+
+**Manual:**
 ```bash
 pip install -r requirements.txt
 ```
