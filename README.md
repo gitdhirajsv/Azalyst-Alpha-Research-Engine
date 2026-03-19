@@ -326,6 +326,18 @@ python azalyst_orchestrator.py --data-dir ./data --out-dir ./azalyst_output
 
 ## Bug Fixes
 
+### v2.2 — Notebook: Stale Feature Cache Detection (Cell 6)
+
+**Problem:** After `frac_diff_close` was added in v2.1, the feature cache contained 443 files with 56 columns. Cell 6 only checked whether enough *files* existed (≥ 90% threshold) — it never validated *column* presence. So the rebuild was silently skipped and the pipeline continued with a cache missing `frac_diff_close`.
+
+**Fix:** Cell 6 now reads a sample cached file and checks every column listed in `FEATURE_COLS`. If any column is missing it prints `[REBUILD] Cache stale -- missing cols: [...]`, deletes all stale files, and triggers a full rebuild before continuing.
+
+### v2.2 — Notebook: OOM / Freeze When Loading Feature Store (Cell 7)
+
+**Problem:** Cell 7 loaded all 443 symbol files simultaneously — 443 × ~47,779 rows × 57 columns ≈ 21 million rows. This exceeded available RAM on most machines (8–16 GB), causing the notebook to freeze silently after printing `Found 443 cached symbol files`.
+
+**Fix:** Cell 7 now probes the first file to estimate total rows, computes `LOAD_STRIDE = max(1, total_est // 4_000_000)`, and applies `df.iloc[::LOAD_STRIDE]` per symbol during loading. This caps the pooled dataset at ~4 million rows (~1 GB). If the guard activates you will see `[MEM GUARD] ~21M est. rows -> LOAD_STRIDE=5 (load ~4.2M rows)`. Training quality is preserved because the 4M-row cap still feeds into the 2M-row `MAX_TRAIN_ROWS` VRAM guard.
+
 ### v2.1 — Position-Tracked Fee Simulation
 
 **Problem:** Old simulation charged 0.2% round-trip fee on every position at every 5-min bar. With ~340 symbols and 288 bars/day, this created ~50,000 phantom "trades" per week — massive fee drag that turned a positive-IC model into -5% annual return.
