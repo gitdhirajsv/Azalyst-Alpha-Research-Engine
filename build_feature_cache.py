@@ -5,7 +5,7 @@
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
 FIXES vs original:
-  - Renamed future_ret_4h → future_ret  (aligns with Kaggle notebook + local GPU script)
+  - Renamed future_ret_4h → future_ret  (aligns with notebook + local GPU script)
   - Removed per-symbol alpha_label computation — WRONG to compute per symbol.
     Cross-sectional alpha_label (did coin outperform median at time t?) requires
     ALL symbols pooled together. It is now computed inside build_training_matrix()
@@ -78,7 +78,7 @@ def _process_symbol(args: Tuple) -> Tuple[str, bool, str]:
         feats = build_features(df, timeframe=resample)
 
         # ── FIX: column is now 'future_ret' (not 'future_ret_4h') ─────────────
-        # This aligns with azalyst_local_gpu.py and the Kaggle notebook.
+        # This aligns with azalyst_local_gpu.py and the notebook.
         feats["future_ret"] = np.log(df["close"].shift(-hor) / df["close"])
 
         # ── FIX: do NOT compute alpha_label here ──────────────────────────────

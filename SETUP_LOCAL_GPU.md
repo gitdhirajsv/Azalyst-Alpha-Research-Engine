@@ -128,18 +128,16 @@ python azalyst_train_local.py --feature-dir ./feature_cache --out-dir ./results 
 
 ---
 
-## Expected Performance vs Kaggle T4
+## Expected Performance
 
-| | RTX 2050 (your laptop) | Kaggle T4 |
-|---|---|---|
-| VRAM | 4GB | 15GB |
-| VRAM bus | 64-bit | 256-bit |
-| Feature cache build | ~45 min | ~20 min |
-| Year 1+2 training | ~35 min | ~15 min |
-| Year 3 walk-forward | ~3 hours | ~1.5 hours |
-| Total | ~4-5 hours | ~2-3 hours |
-
-The RTX 2050 will be ~2-3x slower than the T4 mainly due to the 64-bit bus and 4GB VRAM limit forcing row capping. Results should be similar quality.
+| | RTX 2050 (your laptop) |
+|---|---|
+| VRAM | 4GB |
+| VRAM bus | 64-bit |
+| Feature cache build | ~45 min |
+| Year 1+2 training | ~35 min |
+| Year 3 walk-forward | ~3 hours |
+| Total | ~4-5 hours |
 
 ---
 

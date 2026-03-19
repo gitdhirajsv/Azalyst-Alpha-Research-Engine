@@ -292,22 +292,14 @@ Just double-click **`RUN_AZALYST.bat`** — it handles everything automatically:
 
 > No manual `pip install` needed. The `.bat` file checks every package and installs anything missing before starting the engine.
 
-### Option 2 — Kaggle (GPU T4, recommended for cloud)
+### Option 2 — VSCode Jupyter (Local GPU — RTX 2050 / any NVIDIA)
 
-1. Open `azalyst-alpha-research-engine.ipynb` on Kaggle → **Copy & Edit**
-2. Settings → Accelerator → **GPU T4 x2**
-3. Attach dataset `binance-data-5min-300-coins-3years`
-4. Click **Run All**
-5. Download `azalyst_v2_results.zip` from Output tab
-
-### Option 3 — VSCode Jupyter (Local GPU — RTX 2050 / any NVIDIA)
-
-Open `azalyst_local_gpu_notebook.ipynb` directly in **VSCode Jupyter** for an interactive,
+Open `azalyst-alpha-research-engine.ipynb` directly in **VSCode Jupyter** for an interactive,
 cell-by-cell experience on your local machine:
 
 1. Install the **Jupyter** extension in VSCode
 2. Place your `.parquet` data files in `./data/`
-3. Open `azalyst_local_gpu_notebook.ipynb` in VSCode
+3. Open `azalyst-alpha-research-engine.ipynb` in VSCode
 4. Select your Python environment (must have `requirements.txt` packages installed)
 5. Run **Cell 0** first to install all dependencies (`pip install -r requirements.txt`)
 6. Run remaining cells in order — the notebook auto-detects CUDA and caps VRAM at 2 M rows
@@ -316,32 +308,11 @@ cell-by-cell experience on your local machine:
 > It supports both the new `device='cuda'` XGBoost API and the legacy `tree_method='gpu_hist'`
 > API, with automatic CPU fallback.  See `SETUP_LOCAL_GPU.md` for full setup details.
 
-```bash
-# Alternatively, run the same pipeline from the command line:
-python azalyst_local_gpu.py
+### Option 3 — CPU only
 
-# Build feature cache (run once)
-python build_feature_cache.py --data-dir ./data --out-dir ./feature_cache
+Same as Option 2 — the notebook auto-detects hardware and falls back to CPU if no NVIDIA GPU is available.
 
-# Full walk-forward with meta-labeling
-python azalyst_weekly_loop.py --feature-dir ./feature_cache --results-dir ./results --gpu
-```
-
-### Option 4 — CPU only
-
-Same commands above without `--gpu`. Uses all CPU cores automatically.
-
-### Option 5 — GitHub Actions (automated CI/CD)
-
-Push to `main` — runs automatically. Set three repo secrets:
-
-| Secret | Value |
-|---|---|
-| `KAGGLE_USERNAME` | Your Kaggle username |
-| `KAGGLE_KEY` | Kaggle API key |
-| `KAGGLE_DATASET` | `username/dataset-name` |
-
-### Option 6 — Core research pipeline
+### Option 4 — Core research pipeline
 
 ```bash
 python azalyst_orchestrator.py --data-dir ./data --out-dir ./azalyst_output
@@ -404,8 +375,7 @@ python azalyst_orchestrator.py --data-dir ./data --out-dir ./azalyst_output
 | `azalyst_report.py` | Research report + live signal scanner |
 | `azalyst_auditor.py` | Binance copy-trader strategy auditor |
 | `monitor_dashboard.py` | Browser-based live monitor (`http://127.0.0.1:8080`) |
-| `azalyst-alpha-research-engine.ipynb` | Kaggle v2 notebook (dual T4 GPU) |
-| `azalyst_local_gpu_notebook.ipynb` | VSCode Jupyter notebook — local RTX 2050 GPU |
+| `azalyst-alpha-research-engine.ipynb` | VSCode Jupyter notebook — local RTX 2050 GPU |
 
 ---
 

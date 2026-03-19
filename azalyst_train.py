@@ -47,7 +47,7 @@ def _probe_gpu() -> bool:
     """
     Check whether XGBoost CUDA is actually available on this machine.
     Returns True if cuda:0 works, False otherwise.
-    This prevents crashes on CPU-only Kaggle sessions or when GPU is not
+    This prevents crashes on CPU-only environments or when GPU is not
     assigned even though --gpu flag was passed.
     """
     try:
@@ -87,8 +87,7 @@ def train_model(X, y, y_ret, feature_cols, label="", use_gpu=True):
     Final v2 training function.
 
     GPU is probed at the start of every call — if cuda:0 is unavailable
-    (CPU-only Kaggle session, no T4 assigned) it silently falls back to CPU
-    rather than crashing the whole pipeline.
+    it silently falls back to CPU rather than crashing the whole pipeline.
     """
     # FIX: always verify GPU before using it — don't trust the flag blindly.
     # Gemini's version hard-coded cuda:0 and never checked, crashing on CPU.

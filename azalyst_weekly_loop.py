@@ -17,7 +17,7 @@ Walk-Forward Architecture (from README)
           performance_year3.json, performance_year3.png
 
 FIXES vs original:
-  - future_ret_4h → future_ret  (aligns with build_feature_cache.py + Kaggle notebook)
+  - future_ret_4h → future_ret  (aligns with build_feature_cache.py + notebook)
   - alpha_label now recomputed cross-sectionally AFTER pooling all symbols
     (old code read the wrong per-symbol label from cache)
   - MAX_TRAIN_ROWS: 4_000_000 → 2_000_000  (RTX 2050 4GB VRAM guard)
@@ -51,7 +51,7 @@ TAKE_PROFIT_PCT  = 5.0
 HORIZON_BARS     = 48        # 4H equivalent in 5-min bars
 
 # FIX: was 4_000_000 — OOM on RTX 2050 4GB VRAM during quarterly retrain
-# Kaggle T4 (15GB) can use 4M; local RTX 2050 must stay at 2M.
+# T4 (15GB) can use 4M; local RTX 2050 must stay at 2M.
 MAX_TRAIN_ROWS   = 2_000_000
 
 
@@ -170,7 +170,7 @@ def build_training_matrix(data: dict, end_date, min_rows: int = 500):
     # ── Step 3: Compute alpha_label cross-sectionally ─────────────────────────
     # FIX: this is the correct way — at each timestamp, label = 1 if this
     # coin's future_ret > median of ALL coins' future_ret at that timestamp.
-    # This is what the Kaggle notebook does with groupby(index).transform.
+    # This is what the notebook does with groupby(index).transform.
     pooled["alpha_label"] = (
         pooled.groupby(pooled.index)["future_ret"]
         .transform(lambda x: (x > x.median()).astype(float))
@@ -438,7 +438,7 @@ def run_weekly_loop(
     models_dir = os.path.join(results_dir, "models")
     os.makedirs(models_dir, exist_ok=True)
 
-    # 1. Load feature store (all symbols, no cap — same as Kaggle)
+    # 1. Load feature store (all symbols, no cap)
     data = load_feature_store(feature_dir)
     if not data:
         print("[WeeklyLoop] ERROR: No data found in feature_dir")

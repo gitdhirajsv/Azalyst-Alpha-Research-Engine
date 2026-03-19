@@ -32,7 +32,7 @@ def _detect_gpu() -> str:
     """
     Auto-detect CUDA availability and return the correct device string.
     Returns 'cuda:0' if CUDA works, 'cpu' otherwise.
-    This prevents hard crashes on CPU-only Kaggle sessions.
+    This prevents hard crashes on CPU-only environments.
     """
     if not _XGB:
         return "cpu"
