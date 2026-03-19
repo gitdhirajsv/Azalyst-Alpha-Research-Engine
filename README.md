@@ -288,10 +288,24 @@ High-conviction trades dominate the portfolio return. Low-conviction trades are 
 4. Click **Run All**
 5. Download `azalyst_v2_results.zip` from Output tab
 
-### Option 2 — Local GPU (RTX 2050 / any NVIDIA)
+### Option 2 — VSCode Jupyter (Local GPU — RTX 2050 / any NVIDIA)
+
+Open `azalyst_local_gpu_notebook.ipynb` directly in **VSCode Jupyter** for an interactive,
+cell-by-cell experience on your local machine:
+
+1. Install the **Jupyter** extension in VSCode
+2. Place your `.parquet` data files in `./data/`
+3. Open `azalyst_local_gpu_notebook.ipynb` in VSCode
+4. Select your Python environment (must have `requirements.txt` packages installed)
+5. Run **Cell 0** first to install all dependencies (`pip install -r requirements.txt`)
+6. Run remaining cells in order — the notebook auto-detects CUDA and caps VRAM at 2 M rows
+
+> The notebook is pre-configured for **NVIDIA RTX 2050 (4 GB GDDR6) + Intel i5-11260H**.
+> It supports both the new `device='cuda'` XGBoost API and the legacy `tree_method='gpu_hist'`
+> API, with automatic CPU fallback.  See `SETUP_LOCAL_GPU.md` for full setup details.
 
 ```bash
-# Verify GPU works first
+# Alternatively, run the same pipeline from the command line:
 python azalyst_local_gpu.py
 
 # Build feature cache (run once)
@@ -300,8 +314,6 @@ python build_feature_cache.py --data-dir ./data --out-dir ./feature_cache
 # Full walk-forward with meta-labeling
 python azalyst_weekly_loop.py --feature-dir ./feature_cache --results-dir ./results --gpu
 ```
-
-See `SETUP_LOCAL_GPU.md` for RTX 2050 4GB VRAM tuning guide.
 
 ### Option 3 — CPU only
 
@@ -380,7 +392,8 @@ python azalyst_orchestrator.py --data-dir ./data --out-dir ./azalyst_output
 | `azalyst_report.py` | Research report + live signal scanner |
 | `azalyst_auditor.py` | Binance copy-trader strategy auditor |
 | `monitor_dashboard.py` | Browser-based live monitor (`http://127.0.0.1:8080`) |
-| `azalyst-alpha-research-engine.ipynb` | Kaggle v2 notebook |
+| `azalyst-alpha-research-engine.ipynb` | Kaggle v2 notebook (dual T4 GPU) |
+| `azalyst_local_gpu_notebook.ipynb` | VSCode Jupyter notebook — local RTX 2050 GPU |
 
 ---
 
