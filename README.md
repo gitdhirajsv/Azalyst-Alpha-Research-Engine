@@ -377,6 +377,20 @@ The package install step used `pip install ... --upgrade`, which forces pip to u
 
 ---
 
+### v2.3d — `build_feature_store()`: Silent Progress During Feature Cache Build (19 Mar 2026)
+
+**Problem:** When the engine launched and Step 0 (feature cache build) was running, the console showed no progress. With 443 symbols to process, the user saw only the opening `FEATURE STORE: 443 symbols found in data/` line, then nothing — making it impossible to tell if the engine was working or frozen.
+
+**Root cause:** `build_feature_store()` looped over all symbol files with no intermediate `print()` calls. It only printed a summary at the very end.
+
+**Fix:** Added per-symbol progress output in `azalyst_local_gpu.py`:
+- Every 10 validated (already-cached) symbols prints `[i/total] %  validated=N  (Xs)` 
+- Every newly *built* symbol prints immediately with symbol name, running cached count, and ETA
+
+**Status:** ✅ Applied — next run will show live progress through all 443 symbols with ETA.
+
+---
+
 ### v2.3c — RUN_AZALYST.bat: Launch Summary Always Showed "Terminal only" (19 Mar 2026)
 
 **Problem:** User selects `[2] Terminal + Spyder` but Launch Summary displayed `Output : Terminal only`.

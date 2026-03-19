@@ -230,7 +230,9 @@ def build_feature_store():
 
     count = 0
     rebuilt = 0
-    for fpath in symbol_files:
+    total = len(symbol_files)
+    t0_cache = time.time()
+    for i, fpath in enumerate(symbol_files, 1):
         cache_file = cache_path / f"{fpath.stem}.parquet"
 
         # Validate existing cache: must have exactly FEAT_COLS columns
@@ -239,6 +241,11 @@ def build_feature_store():
                 cols = pd.read_parquet(cache_file, columns=[]).columns.tolist()
                 if cols == FEAT_COLS:
                     count += 1
+                    if i % 10 == 0 or i == total:
+                        elapsed = time.time() - t0_cache
+                        pct = i / total * 100
+                        print(f"  [{i}/{total}] {pct:.0f}%  validated={count}  ({elapsed:.0f}s)")
+                        sys.stdout.flush()
                     continue
                 # Column mismatch (e.g. built by build_feature_cache.py with 58 cols)
                 cache_file.unlink()
@@ -269,6 +276,11 @@ def build_feature_store():
             feat_df.to_parquet(cache_file)
             count  += 1
             rebuilt += 1
+            elapsed = time.time() - t0_cache
+            remaining = total - i
+            eta = (elapsed / i * remaining) if i > 0 else 0
+            print(f"  [{i}/{total}] built {fpath.stem}  (total cached={count}  eta={eta:.0f}s)")
+            sys.stdout.flush()
 
         except Exception as e:
             print(f"  ⚠ {fpath.stem}: {e}")
