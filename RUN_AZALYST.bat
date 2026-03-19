@@ -5,6 +5,32 @@ color 0A
 chcp 65001 >nul 2>&1
 cd /d "%~dp0"
 
+:: -- Boost PATH with common Python install locations -------------------------
+for %%d in (
+    "%LOCALAPPDATA%\Programs\Python\Python313"
+    "%LOCALAPPDATA%\Programs\Python\Python313\Scripts"
+    "%LOCALAPPDATA%\Programs\Python\Python312"
+    "%LOCALAPPDATA%\Programs\Python\Python312\Scripts"
+    "%LOCALAPPDATA%\Programs\Python\Python311"
+    "%LOCALAPPDATA%\Programs\Python\Python311\Scripts"
+    "%LOCALAPPDATA%\Programs\Python\Python310"
+    "%LOCALAPPDATA%\Programs\Python\Python310\Scripts"
+    "%USERPROFILE%\AppData\Local\Programs\Python\Python313"
+    "%USERPROFILE%\AppData\Local\Programs\Python\Python313\Scripts"
+    "%USERPROFILE%\AppData\Local\Programs\Python\Python312"
+    "%USERPROFILE%\AppData\Local\Programs\Python\Python312\Scripts"
+    "%USERPROFILE%\AppData\Local\Programs\Python\Python311"
+    "%USERPROFILE%\AppData\Local\Programs\Python\Python311\Scripts"
+    "%USERPROFILE%\AppData\Local\Programs\Python\Python310"
+    "%USERPROFILE%\AppData\Local\Programs\Python\Python310\Scripts"
+    "C:\Python313" "C:\Python312" "C:\Python311" "C:\Python310"
+    "%ProgramFiles%\Python313" "%ProgramFiles%\Python312"
+    "%ProgramFiles%\Python311" "%ProgramFiles%\Python310"
+    "%ProgramData%\Anaconda3" "%ProgramData%\Anaconda3\Scripts"
+    "%USERPROFILE%\anaconda3" "%USERPROFILE%\anaconda3\Scripts"
+    "%USERPROFILE%\miniconda3" "%USERPROFILE%\miniconda3\Scripts"
+) do if exist %%d\python.exe set "PATH=%%~d;!PATH!"
+
 echo.
 echo  ============================================================
 echo    AZALYST ALPHA RESEARCH ENGINE  v3.1
@@ -14,26 +40,36 @@ echo.
 echo  System scan in progress...
 echo.
 
-:: ── Step 1: Python check ─────────────────────────────────────────────────────
+:: -- Step 1: UTF-8 + Python check --------------------------------------------
+set "PYTHONUTF8=1"
+set "PYTHONIOENCODING=utf-8"
+set "PYTHON_CMD="
 python --version >nul 2>&1
-if errorlevel 1 (
-    echo  [ERROR] Python not found in PATH.
-    echo  Install Python 3.10+ from https://python.org  (check Add to PATH)
-    echo.
-    pause
-    exit /b 1
-)
-for /f "tokens=2" %%v in ('python --version 2^>^&1') do set PY_VER=%%v
-echo  [OK] Python %PY_VER%
+if not errorlevel 1 ( set "PYTHON_CMD=python" & goto :PY_FOUND )
+py -3 --version >nul 2>&1
+if not errorlevel 1 ( set "PYTHON_CMD=py -3" & goto :PY_FOUND )
+echo  [ERROR] Python not found in PATH.
+echo  Install Python 3.10+ from https://python.org  (check Add to PATH)
+echo.
+pause
+exit /b 1
 
-:: ── Step 2: GPU detection ─────────────────────────────────────────────────────
+:PY_FOUND
+for /f "tokens=2" %%v in ('!PYTHON_CMD! --version 2^>^&1') do set PY_VER=%%v
+echo  [OK] Python %PY_VER% (!PYTHON_CMD!)
+
+:: -- Step 2: GPU detection ---------------------------------------------------
 set GPU_FOUND=0
 set GPU_NAME=None
-nvidia-smi --query-gpu=name --format=csv,noheader >nul 2>&1
+nvidia-smi >nul 2>&1
 if not errorlevel 1 (
-    for /f "tokens=*" %%g in ('nvidia-smi --query-gpu=name --format=csv,noheader 2^>nul') do (
-        set GPU_NAME=%%g
-        set GPU_FOUND=1
+    for /f "tokens=1-4 delims=:" %%a in ('nvidia-smi -L 2^>nul') do (
+        if "!GPU_FOUND!"=="0" (
+            set "GPU_NAME=%%b"
+            set "GPU_NAME=!GPU_NAME:~1!"
+            for /f "tokens=1 delims=(" %%n in ("!GPU_NAME!") do set "GPU_NAME=%%n"
+            set GPU_FOUND=1
+        )
     )
 )
 if "!GPU_FOUND!"=="1" (
@@ -42,13 +78,13 @@ if "!GPU_FOUND!"=="1" (
     echo  [INFO] No NVIDIA GPU - CPU mode
 )
 
-:: ── Step 3: Spyder detection ─────────────────────────────────────────────────
+:: -- Step 3: Spyder detection ------------------------------------------------
 set SPYDER_FOUND=0
 set SPYDER_CMD=spyder
 where spyder >nul 2>&1
 if not errorlevel 1 ( set SPYDER_FOUND=1 & echo  [OK] Spyder found & goto :SPYDER_DONE )
-python -c "import spyder" >nul 2>&1
-if not errorlevel 1 ( set SPYDER_FOUND=1 & set SPYDER_CMD=python -m spyder & echo  [OK] Spyder found (module) & goto :SPYDER_DONE )
+!PYTHON_CMD! -c "import spyder" >nul 2>&1
+if not errorlevel 1 ( set SPYDER_FOUND=1 & set "SPYDER_CMD=!PYTHON_CMD! -m spyder" & echo  [OK] Spyder found (module) & goto :SPYDER_DONE )
 for %%p in (
     "%LOCALAPPDATA%\Programs\Spyder\spyder.exe"
     "%LOCALAPPDATA%\Programs\Python\Python311\Scripts\spyder.exe"
@@ -66,28 +102,25 @@ echo  [INFO] Spyder not found
 :SPYDER_DONE
 echo.
 
-:: -- Step 3.5: Force UTF-8 console encoding ----------------------------------
-set PYTHONUTF8=1
-set PYTHONIOENCODING=utf-8
-
-:: ── Step 4: Install packages ─────────────────────────────────────────────────
+:: -- Step 4: Package check ---------------------------------------------------
 echo  [Setup] Checking packages...
-python -c "import xgboost, numpy, pandas, sklearn, scipy, matplotlib, pyarrow, psutil, statsmodels" 2>nul
+!PYTHON_CMD! -c "import xgboost, numpy, pandas, sklearn, scipy, matplotlib, pyarrow, psutil, statsmodels" >nul 2>&1
+if not errorlevel 1 goto :PKGS_OK
+echo  [Setup] Installing missing packages (one-time, ~2 min)...
+!PYTHON_CMD! -m pip install xgboost numpy pandas scikit-learn scipy matplotlib pyarrow psutil statsmodels --upgrade -q
 if errorlevel 1 (
-    echo  [Setup] Installing missing packages ^(one-time, ~2 min^)...
-    pip install "xgboost>=2.0.3" numpy pandas scikit-learn scipy matplotlib pyarrow psutil statsmodels --upgrade -q
-    if errorlevel 1 (
-        echo  [ERROR] Package install failed. Check internet connection.
-        pause
-        exit /b 1
-    )
-    echo  [OK] Packages installed
-) else (
-    echo  [OK] All packages present
+    echo  [ERROR] Package install failed. Check internet connection.
+    pause
+    exit /b 1
 )
+echo  [OK] Packages installed
+goto :PKGS_DONE
+:PKGS_OK
+echo  [OK] All packages present
+:PKGS_DONE
 echo.
 
-:: ── Pre-flight: data directory check ────────────────────────────────────────
+:: -- Pre-flight: data directory check ----------------------------------------
 if not exist "%~dp0data\" (
     echo  [ERROR] Data folder not found: %~dp0data
     echo  Create a 'data' subfolder next to this .bat file and add your .parquet files.
@@ -113,50 +146,50 @@ echo   CONFIGURATION
 echo ================================================================
 echo.
 
-:: ── Q1: GPU or CPU ───────────────────────────────────────────────────────────
+:: -- Q1: GPU or CPU ----------------------------------------------------------
 set COMPUTE_CHOICE=cpu
 set COMPUTE_LABEL=CPU
+if "!GPU_FOUND!"=="0" goto :Q1_CPU_ONLY
 
-if "!GPU_FOUND!"=="1" (
-    :Q1_LOOP
-    echo  [1/2] Select compute device:
-    echo.
-    echo        [1] GPU  - !GPU_NAME!  ^(faster ~4x^)
-    echo        [2] CPU  - All cores
-    echo.
-    set /p Q1="  Your choice ^(1/2^): "
-    if "!Q1!"=="1" ( set COMPUTE_CHOICE=gpu & set COMPUTE_LABEL=GPU ^(!GPU_NAME!^) & echo  [OK] GPU mode & goto :Q2 )
-    if "!Q1!"=="2" ( set COMPUTE_CHOICE=cpu & set COMPUTE_LABEL=CPU & echo  [OK] CPU mode & goto :Q2 )
-    echo  [!] Enter 1 or 2.
-    echo.
-    goto :Q1_LOOP
-) else (
-    echo  [1/2] Compute: CPU only ^(no GPU detected^)
-)
+:Q1_LOOP
+echo  [1/2] Select compute device:
+echo.
+echo        [1] GPU  - !GPU_NAME!  (faster ~4x)
+echo        [2] CPU  - All cores
+echo.
+set /p Q1="  Your choice (1/2): "
+if "!Q1!"=="1" ( set COMPUTE_CHOICE=gpu & set COMPUTE_LABEL=GPU & echo  [OK] GPU mode & goto :Q2 )
+if "!Q1!"=="2" ( set COMPUTE_CHOICE=cpu & set COMPUTE_LABEL=CPU & echo  [OK] CPU mode & goto :Q2 )
+echo  [!] Enter 1 or 2.
+echo.
+goto :Q1_LOOP
+
+:Q1_CPU_ONLY
+echo  [1/2] Compute: CPU only (no GPU detected)
 
 :Q2
 echo.
 
-:: ── Q2: Spyder ───────────────────────────────────────────────────────────────
+:: -- Q2: Spyder --------------------------------------------------------------
 set USE_SPYDER=0
+if "!SPYDER_FOUND!"=="0" goto :Q2_NO_SPYDER
 
-if "!SPYDER_FOUND!"=="1" (
-    :Q2_LOOP
-    echo  [2/2] Output mode:
-    echo.
-    echo        [1] Terminal only
-    echo        [2] Terminal + Spyder  ^(closing Spyder will NOT stop the pipeline^)
-    echo.
-    set /p Q2="  Your choice ^(1/2^): "
-    if "!Q2!"=="1" ( set USE_SPYDER=0 & echo  [OK] Terminal only & goto :Q2_DONE )
-    if "!Q2!"=="2" ( set USE_SPYDER=1 & echo  [OK] Terminal + Spyder & goto :Q2_DONE )
-    echo  [!] Enter 1 or 2.
-    echo.
-    goto :Q2_LOOP
-) else (
-    echo  [2/2] Output: Terminal only ^(Spyder not installed^)
-    echo         To install Spyder:  pip install spyder
-)
+:Q2_LOOP
+echo  [2/2] Output mode:
+echo.
+echo        [1] Terminal only
+echo        [2] Terminal + Spyder  (closing Spyder will NOT stop the pipeline)
+echo.
+set /p Q2="  Your choice (1/2): "
+if "!Q2!"=="1" ( set USE_SPYDER=0 & echo  [OK] Terminal only & goto :Q2_DONE )
+if "!Q2!"=="2" ( set USE_SPYDER=1 & echo  [OK] Terminal + Spyder & goto :Q2_DONE )
+echo  [!] Enter 1 or 2.
+echo.
+goto :Q2_LOOP
+
+:Q2_NO_SPYDER
+echo  [2/2] Output: Terminal only (Spyder not installed)
+echo         To install Spyder:  pip install spyder
 
 :Q2_DONE
 echo.
@@ -166,7 +199,8 @@ echo ================================================================
 echo   LAUNCH SUMMARY
 echo ================================================================
 echo.
-echo   Compute  : %COMPUTE_LABEL%
+echo   Compute  : !COMPUTE_LABEL!
+if "!COMPUTE_CHOICE!"=="gpu" echo   GPU      : !GPU_NAME!
 if "!USE_SPYDER!"=="1" (
     echo   Output   : Terminal + Spyder (live charts)
 ) else (
@@ -177,21 +211,21 @@ echo   Results  : %~dp0results\
 echo.
 echo ================================================================
 echo.
-set /p CONFIRM="  Start? ^(Y/N^): "
+set /p CONFIRM="  Start? (Y/N): "
 if /i not "!CONFIRM!"=="Y" ( echo  Cancelled. & timeout /t 2 /nobreak >nul & exit /b 0 )
 echo.
 
-:: ── Apply GPU env ─────────────────────────────────────────────────────────────
+:: -- Apply GPU env -----------------------------------------------------------
 if "!COMPUTE_CHOICE!"=="gpu" (
     set CUDA_VISIBLE_DEVICES=0
     set CUDA_DEVICE_ORDER=PCI_E_BUS_ID
     echo  [Setup] GPU mode: CUDA_VISIBLE_DEVICES=0
 )
 
-:: ── Power plan (non-critical) ─────────────────────────────────────────────────
+:: -- Power plan (non-critical) -----------------------------------------------
 powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c >nul 2>&1
 
-:: ── Launch Spyder (detached - closing it will NOT stop pipeline) ──────────────
+:: -- Launch Spyder (detached - closing it will NOT stop pipeline) ------------
 if "!USE_SPYDER!"=="1" (
     echo.
     echo ================================================================
@@ -204,8 +238,8 @@ if "!USE_SPYDER!"=="1" (
     echo.
     if "!SPYDER_CMD!"=="spyder" (
         start "" /B spyder --new-instance --workdir="%~dp0" 2>nul
-    ) else if "!SPYDER_CMD!"=="python -m spyder" (
-        start "" /B python -m spyder --new-instance --workdir="%~dp0" 2>nul
+    ) else if "!SPYDER_CMD!"=="!PYTHON_CMD! -m spyder" (
+        start "" /B !PYTHON_CMD! -m spyder --new-instance --workdir="%~dp0" 2>nul
     ) else (
         start "" !SPYDER_CMD! --new-instance --workdir="%~dp0" 2>nul
     )
@@ -219,7 +253,8 @@ echo ================================================================
 echo   RUNNING AZALYST PIPELINE
 echo ================================================================
 echo.
-echo  Compute  : %COMPUTE_LABEL%
+echo  Compute  : !COMPUTE_LABEL!
+if "!COMPUTE_CHOICE!"=="gpu" echo  GPU      : !GPU_NAME!
 echo  Started  : %date% %time%
 echo  Data     : %~dp0data\
 echo  Results  : %~dp0results\
@@ -228,14 +263,14 @@ echo ----------------------------------------------------------------
 echo.
 
 if "!COMPUTE_CHOICE!"=="gpu" (
-    python azalyst_local_gpu.py --gpu
+    !PYTHON_CMD! azalyst_local_gpu.py --gpu
 ) else (
-    python azalyst_engine.py --data-dir "%~dp0data" --out-dir "%~dp0results"
+    !PYTHON_CMD! azalyst_engine.py --data-dir "%~dp0data" --out-dir "%~dp0results"
 )
 
-set EXIT_CODE=%errorlevel%
+set EXIT_CODE=!errorlevel!
 
-:: ── Restore power plan ───────────────────────────────────────────────────────
+:: -- Restore power plan ------------------------------------------------------
 powercfg /setactive 381b4222-f694-41f0-9685-ff5bb260df2e >nul 2>&1
 
 echo.
