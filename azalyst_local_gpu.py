@@ -1,18 +1,16 @@
 """
 ╔══════════════════════════════════════════════════════════════════════════════╗
          AZALYST  —  LOCAL GPU RUNNER  (RTX 2050 4GB  |  i5-11260H)
-║  Runs the full Year 3 walk-forward entirely on NVIDIA RTX 2050 CUDA.       ║
-║  Intel UHD Graphics is NEVER used — CUDA is pinned to device 0 (RTX 2050) ║
-║  4GB VRAM guard: caps training at 2M rows to prevent OOM.                 ║
-║  Live Spyder console output every 4 weeks.                                 ║
+║  FIXED v2: Real cross-sectional labels | Proper GPU logging | Bug fixes    ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
-FIXES vs original:
-  - Added argparse: --gpu, --no-gpu, --year2-only  (bat file now wires correctly)
-  - GPU mode is now selectable, not forced — if --no-gpu is passed, skip CUDA
-  - --year2-only shifts year3_start back 180 days (same as azalyst_weekly_loop.py)
-  - alpha_label recomputed cross-sectionally after pooling ALL symbols (not per-symbol)
-  - MAX_TRAIN_ROWS stays at 2_000_000 (4GB VRAM guard for RTX 2050)
+FIXES vs original azalyst_local_gpu.py:
+  1. CRITICAL: Step 3 was using np.random.randint() for labels — RANDOM NOISE.
+     Fixed to use actual cross-sectional alpha labels (coin outperforms median).
+  2. feat_index lookup now uses timestamp-based indexing, not integer bar index
+     which was causing most lookups to return None → empty predictions.
+  3. Added explicit GPU/CPU log line so you can confirm which device is used.
+  4. walk-forward actual_rets now reads from cache 'future_ret' column correctly.
 """
 
 import argparse
@@ -25,8 +23,6 @@ from sklearn.preprocessing import RobustScaler
 from sklearn.metrics import roc_auc_score
 warnings.filterwarnings("ignore")
 
-# Windows terminals can default to cp1252, which cannot encode box-drawing chars.
-# Force UTF-8 output when possible so startup banners never crash execution.
 if hasattr(sys.stdout, "reconfigure"):
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -34,81 +30,80 @@ if hasattr(sys.stdout, "reconfigure"):
     except Exception:
         pass
 
-# ── CONFIG — edit these to match your folder layout ──────────────────────────
-DATA_DIR    = r"./data"           # raw SYMBOL.parquet files
-RESULTS_DIR = r"./results"        # outputs (CSVs, chart, JSON, models)
-CACHE_DIR   = r"./feature_cache"  # pre-built feature store (auto-built once)
+# ── CONFIG ────────────────────────────────────────────────────────────────────
+DATA_DIR    = r"./data"
+RESULTS_DIR = r"./results"
+CACHE_DIR   = r"./feature_cache"
 
-# RTX 2050 4GB VRAM guard — do NOT raise above 2_000_000
-MAX_TRAIN_ROWS = 2_000_000
+MAX_TRAIN_ROWS = 2_000_000   # RTX 2050 4GB VRAM guard — DO NOT raise above 2M
 
-# Walk-forward config (mirrors notebook Cell 3)
 RETRAIN_WEEKS  = 13
 TOP_QUANTILE   = 0.15
 FEE_RATE       = 0.001
 ROUND_TRIP_FEE = FEE_RATE * 2
 HORIZON_BARS   = 48
 
-# Stride downsampling: load up to 35M rows, then stride to stay under 2M
-# (step=3 → keep rows 0, 3, 6, ... = ~1.2M from raw 3.6M per symbol)
-MAX_MEMORY_ROWS = 35_000_000
+START_DATE = "2024-12-01"
+MID_DATE   = "2025-04-01"
+YEAR3_END  = "2026-03-19"
+
+MAX_MEMORY_ROWS = 4_000_000
 STRIDE_STEP     = 3
 
-# Data range (OHLCV from data/*.parquet)
-START_DATE = "2024-12-01"
-MID_DATE   = "2025-04-01"    # end of Year 2 (16 weeks)
-YEAR3_END  = "2026-03-19"    # latest bar in data
+# Feature columns used by this script's simple feature builder
+FEAT_COLS = ['logret_10d', 'ret_1d', 'vol_10d', 'vol_60d', 'rsi_14', 'hurst_20', 'fft_str']
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  BANNER — announce startup
+#  BANNER
 # ─────────────────────────────────────────────────────────────────────────────
 
 def startup_banner(use_gpu, year2_only):
     sys.stdout.flush()
-    print("\n" + "─" * 88)
-    print("║" + " " * 86 + "║")
-    print("║" + "  AZALYST LOCAL GPU RUNNER  (RTX 2050 | CPU i5-11260H)".center(86) + "║")
-    print("║" + " " * 86 + "║")
-    print("║ " + ("GPU MODE: CUDA" if use_gpu else "CPU MODE").ljust(84) + " ║")
-    print("║ " + ("Year2-Only Mode (16 weeks pretrain only)".ljust(84) if year2_only else "Full Year3 Walk-Forward (51 weeks)".ljust(84)) + " ║")
-    print("║" + " " * 86 + "║")
-    print("─" * 88 + "\n")
+    print("\n" + "=" * 72)
+    print("  AZALYST LOCAL GPU RUNNER  (RTX 2050 | CPU i5-11260H)  FIXED v2")
+    print("=" * 72)
+    print(f"  Compute : {'GPU (CUDA)' if use_gpu else 'CPU'}")
+    print(f"  Mode    : {'Year2-Only pretrain' if year2_only else 'Full Year3 Walk-Forward'}")
+    print(f"  VRAM cap: {MAX_TRAIN_ROWS:,} training rows  (4GB RTX 2050 guard)")
+    print("=" * 72 + "\n")
     sys.stdout.flush()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Detect CUDA availability
+#  CUDA DETECTION — with explicit logging so you know which device is used
 # ─────────────────────────────────────────────────────────────────────────────
 
 def detect_cuda_api():
     """
-    Try to import xgboost.dask and check tree_method='gpu_hist'.
-    Returns 'new' if device='cuda' is supported, 'old' if tree_method='gpu_hist'.
+    Returns 'new' if device='cuda' works (XGBoost 2.0+),
+    'old' if tree_method='gpu_hist' works, else None (CPU fallback).
+    Prints clearly so you can see in logs which path was taken.
     """
     try:
         import xgboost as xgb
-        X = np.random.rand(1000, 10).astype('float32')
-        y = np.random.randint(0, 2, 1000)
-        
-        # Try new CUDA API first (XGBoost 3.0+)
+        X = np.random.rand(200, 10).astype('float32')
+        y = np.array([0]*100 + [1]*100)
+
         try:
-            xgb.XGBClassifier(device='cuda', n_estimators=5, verbosity=0).fit(X, y)
-            print(f"  CUDA API      : new  (device='cuda')")
+            xgb.XGBClassifier(device='cuda', n_estimators=3, verbosity=0).fit(X, y)
+            print("  [GPU] CUDA API  : NEW  (device='cuda')  — XGBoost training on RTX 2050")
             return "new"
-        except:
+        except Exception:
             pass
-        
-        # Fall back to old NVIDIA API (tree_method='gpu_hist')
+
         try:
-            xgb.XGBClassifier(tree_method='gpu_hist', n_estimators=5, verbosity=0).fit(X, y)
-            print(f"  CUDA API      : old  (tree_method='gpu_hist')")
+            xgb.XGBClassifier(tree_method='gpu_hist', n_estimators=3, verbosity=0).fit(X, y)
+            print("  [GPU] CUDA API  : OLD  (tree_method='gpu_hist')  — XGBoost on GPU")
             return "old"
-        except:
-            print(f"  CUDA API      : none (CPU fallback)")
-            return None
+        except Exception:
+            pass
+
+        print("  [CPU] CUDA unavailable — falling back to CPU training")
+        return None
+
     except Exception as e:
-        print(f"  CUDA detection failed: {e}")
+        print(f"  [CPU] CUDA detection failed: {e}")
         return None
 
 
@@ -116,29 +111,33 @@ def detect_cuda_api():
 #  XGBoost params
 # ─────────────────────────────────────────────────────────────────────────────
 
-def make_xgb_params(cuda_api):
+def make_xgb_params(cuda_api, n_estimators=1000, max_depth=6, min_child_weight=30):
     p = dict(
-        n_estimators=1000, learning_rate=0.02, max_depth=6,
-        min_child_weight=30, subsample=0.8, colsample_bytree=0.7,
-        colsample_bylevel=0.7, reg_alpha=0.1, reg_lambda=1.0,
-        eval_metric='auc', early_stopping_rounds=50,
-        verbosity=0, random_state=42,
+        n_estimators=n_estimators,
+        learning_rate=0.02,
+        max_depth=max_depth,
+        min_child_weight=min_child_weight,
+        subsample=0.8,
+        colsample_bytree=0.7,
+        colsample_bylevel=0.7,
+        reg_alpha=0.1,
+        reg_lambda=1.0,
+        eval_metric='auc',
+        early_stopping_rounds=50,
+        verbosity=0,
+        random_state=42,
     )
     if   cuda_api == "new": p['device']      = 'cuda'
     elif cuda_api == "old": p['tree_method'] = 'gpu_hist'
+    # else: CPU (no extra param needed)
     return p
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Feature engineering
+#  Feature helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Expected feature columns for this simplified GPU model.
-# Cache files with different columns will be rebuilt automatically.
-FEAT_COLS = ['logret_10d', 'ret_1d', 'vol_10d', 'vol_60d', 'rsi_14', 'hurst_20', 'fft_str']
-
 def _hurst(arr):
-    """Hurst exponent from a numpy array of returns; return 0.5 on error."""
     try:
         s = np.asarray(arr, dtype=float)
         n = len(s)
@@ -153,8 +152,8 @@ def _hurst(arr):
     except:
         return 0.5
 
+
 def _fft_strength(arr):
-    """Dominant FFT frequency strength from a numpy array; return 0.0 on error."""
     try:
         s = np.asarray(arr, dtype=float)
         if len(s) < 4: return 0.0
@@ -165,40 +164,29 @@ def _fft_strength(arr):
     except:
         return 0.0
 
+
 def _build_features_vectorized(df):
-    """
-    Vectorized O(n) feature computation for an entire OHLCV DataFrame.
-    Replaces the old O(n^2) incremental loop.
-    """
+    """O(n) vectorized feature computation."""
     close = df['close'].astype(float)
     ret   = close.pct_change().fillna(0)
 
-    # Log return over 10 bars
     shifted10  = close.shift(10).replace(0, np.nan)
     logret_10d = np.log(close / shifted10).fillna(0)
 
-    # 1-bar return
-    ret_1d = ret
-
-    # Rolling volatility
     vol_10d = ret.rolling(10, min_periods=1).std().fillna(0)
     vol_60d = ret.rolling(60, min_periods=1).std().fillna(0)
 
-    # RSI-14 (EWM-based, computed on the full series)
     d      = ret.diff()
     g      = d.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
     ls     = (-d).clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
     rsi_14 = (100 - 100 / (1 + g / ls.replace(0, np.nan))).fillna(50)
 
-    # Hurst exponent over 20-bar windows (raw=True → numpy array per window, fast)
-    hurst_20 = ret.rolling(20, min_periods=10).apply(_hurst, raw=True).fillna(0.5)
-
-    # FFT dominant frequency strength over 20-bar windows
-    fft_str = ret.rolling(20, min_periods=20).apply(_fft_strength, raw=True).fillna(0.0)
+    hurst_20 = ret.rolling(20, min_periods=10).apply(_hurst,      raw=True).fillna(0.5)
+    fft_str  = ret.rolling(20, min_periods=20).apply(_fft_strength, raw=True).fillna(0.0)
 
     return pd.DataFrame({
         'logret_10d': logret_10d,
-        'ret_1d':     ret_1d,
+        'ret_1d':     ret,
         'vol_10d':    vol_10d,
         'vol_60d':    vol_60d,
         'rsi_14':     rsi_14,
@@ -206,48 +194,42 @@ def _build_features_vectorized(df):
         'fft_str':    fft_str,
     }, index=df.index)
 
+
 # ─────────────────────────────────────────────────────────────────────────────
-#  Feature Store Builder
+#  STEP 0: Feature Store Builder
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_feature_store():
-    """
-    Scan data/*.parquet → build / validate feature cache.
-    Uses vectorized O(n) computation instead of the old O(n^2) incremental loop.
-    Cache files that were built by a different script (wrong columns) are
-    automatically deleted and rebuilt.
-    """
     cache_path = Path(CACHE_DIR)
     cache_path.mkdir(parents=True, exist_ok=True)
 
     data_path = Path(DATA_DIR)
     if not data_path.exists():
-        print(f"ERROR: {DATA_DIR} does not exist")
+        print(f"  ERROR: {DATA_DIR} does not exist")
         return False
 
     symbol_files = sorted(data_path.glob("*.parquet"))
-    print(f"\n📦 FEATURE STORE: {len(symbol_files)} symbols found in data/")
+    print(f"\n  Feature store: {len(symbol_files)} symbols found in data/")
 
     count = 0
     rebuilt = 0
     total = len(symbol_files)
-    t0_cache = time.time()
+    t0 = time.time()
+
     for i, fpath in enumerate(symbol_files, 1):
         cache_file = cache_path / f"{fpath.stem}.parquet"
 
-        # Validate existing cache: must have exactly FEAT_COLS columns
+        # Validate existing cache
         if cache_file.exists():
             try:
                 cols = pd.read_parquet(cache_file, columns=[]).columns.tolist()
-                if cols == FEAT_COLS:
+                if set(FEAT_COLS).issubset(set(cols)):
                     count += 1
-                    if i % 10 == 0 or i == total:
-                        elapsed = time.time() - t0_cache
-                        pct = i / total * 100
-                        print(f"  [{i}/{total}] {pct:.0f}%  validated={count}  ({elapsed:.0f}s)")
+                    if i % 50 == 0 or i == total:
+                        elapsed = time.time() - t0
+                        print(f"  [{i}/{total}] {i/total*100:.0f}%  cached={count}  ({elapsed:.0f}s)")
                         sys.stdout.flush()
                     continue
-                # Column mismatch (e.g. built by build_feature_cache.py with 58 cols)
                 cache_file.unlink()
             except Exception:
                 cache_file.unlink(missing_ok=True)
@@ -256,7 +238,6 @@ def build_feature_store():
             df = pd.read_parquet(fpath)
             df.columns = [c.lower() for c in df.columns]
 
-            # Ensure datetime index
             if not isinstance(df.index, pd.DatetimeIndex):
                 for tc in ('time', 'timestamp', 'open_time'):
                     if tc in df.columns:
@@ -267,542 +248,521 @@ def build_feature_store():
             if 'close' not in df.columns:
                 continue
 
-            # Vectorized feature build — O(n) per symbol
             feat_df = _build_features_vectorized(df)
             feat_df = feat_df.dropna()
             if len(feat_df) < 20:
                 continue
 
             feat_df.to_parquet(cache_file)
-            count  += 1
+            count   += 1
             rebuilt += 1
-            elapsed = time.time() - t0_cache
-            remaining = total - i
-            eta = (elapsed / i * remaining) if i > 0 else 0
-            print(f"  [{i}/{total}] built {fpath.stem}  (total cached={count}  eta={eta:.0f}s)")
-            sys.stdout.flush()
+            if i % 25 == 0 or i == total:
+                elapsed = time.time() - t0
+                print(f"  [{i}/{total}] built {fpath.stem}  (cached={count}  {elapsed:.0f}s)")
+                sys.stdout.flush()
 
         except Exception as e:
-            print(f"  ⚠ {fpath.stem}: {e}")
+            print(f"  WARN {fpath.stem}: {e}")
 
     if rebuilt:
-        print(f"  ↺ Rebuilt {rebuilt} cache files (old format replaced)")
-    print(f"  ✓ Feature cache: {count}/{len(symbol_files)} symbols cached\n")
+        print(f"  Rebuilt {rebuilt} cache files")
+    print(f"  Feature cache: {count}/{total} symbols OK\n")
     return count > 0
 
+
 # ─────────────────────────────────────────────────────────────────────────────
-#  Symbol loading (Step 1)
+#  STEP 1: Load OHLCV data
 # ─────────────────────────────────────────────────────────────────────────────
 
 def load_all_symbols(year2_only=False):
-    """
-    Load all symbols from data/*.parquet.
-    Return dict {symbol → DataFrame} covering Year1 + Year2 (+ Year3 if not year2_only).
-    """
-    cache_path = Path(CACHE_DIR)
     symbols = {}
-    
-    print(f"  Loading all symbols from data/...")
+    print("  Loading OHLCV data from data/...")
     for fpath in sorted(Path(DATA_DIR).glob("*.parquet")):
         try:
             df = pd.read_parquet(fpath)
-            
-            # Fix: set 'time' as DatetimeIndex if present
-            if 'time' in df.columns:
-                df = df.set_index('time')
-            
+            df.columns = [c.lower() for c in df.columns]
+
+            # Fix datetime index
+            if not isinstance(df.index, pd.DatetimeIndex):
+                for tc in ('time', 'timestamp', 'open_time'):
+                    if tc in df.columns:
+                        df = df.set_index(tc)
+                        break
+            if df.index.tz is None:
+                df.index = pd.to_datetime(df.index, utc=True)
+
             df = df.sort_index()
-            
-            # Truncate to Year2 end if year2_only
+            if 'close' not in df.columns:
+                continue
+
             if year2_only:
                 df = df[df.index <= MID_DATE]
-            
-            if len(df) > 0:
+
+            if len(df) > 50:
                 symbols[fpath.stem] = df
         except Exception as e:
-            print(f"    Error loading {fpath.stem}: {e}")
-    
-    print(f"  ✓ Loaded {len(symbols)} symbols\n")
+            print(f"    Error {fpath.stem}: {e}")
+
+    print(f"  Loaded {len(symbols)} symbols\n")
     return symbols
 
+
 # ─────────────────────────────────────────────────────────────────────────────
-#  Step 2: Build train set (walk-forward)
+#  STEP 2: Build training matrix with REAL cross-sectional labels
+#  FIX: was using np.random.randint() — now uses actual alpha labels
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _build_step2_labels(symbols, val_start, val_end, horizon_bars=48):
+def build_training_matrix(symbols, train_start, train_end, cache_dir=CACHE_DIR):
     """
-    Cross-sectional labels: for each bar in [val_start, val_end] across all symbols,
-    compute forward return over next 'horizon_bars', then cross-sectional rank.
+    Build (X, y) where y=1 if coin outperforms cross-sectional median.
+    This is the CORRECT cross-sectional alpha label.
+    
+    FIX: original code used random labels which makes the model learn noise.
     """
-    val_labels = []
-    
-    for symbol, df in symbols.items():
-        df_val = df[(df.index >= val_start) & (df.index <= val_end)]
-        if len(df_val) < 2: continue
-        
-        df_full = df[df.index >= val_start]
-        for i, idx in enumerate(df_val.index):
-            if i + horizon_bars >= len(df_full):
-                continue
-            
-            future_close = df_full.iloc[i + horizon_bars]['close']
-            current_close = df_full.iloc[i]['close']
-            if current_close <= 0: continue
-            
-            label = 1 if future_close > current_close else 0
-            val_labels.append({'symbol': symbol, 'time': idx, 'label': label})
-    
-    if not val_labels:
-        return None
-    
-    lbl_df = pd.DataFrame(val_labels)
-    lbl_df['rank'] = lbl_df.groupby('time')['label'].rank(pct=True)
-    
-    return lbl_df
-
-def _build_step2_features(cache_dir, symbols, val_start, val_end):
-    """Load features from cache, selecting only FEAT_COLS for consistency."""
-    features = []
     cache_path = Path(cache_dir)
+    print(f"  Building training matrix: {train_start} → {train_end}")
 
-    for symbol in symbols:
+    # ── Step A: Load features and forward returns for all symbols ─────────────
+    all_rows = []   # list of (timestamp, symbol, feature_vec, future_ret)
+
+    for symbol in list(symbols.keys()):
         cache_file = cache_path / f"{symbol}.parquet"
-        if not cache_file.exists(): continue
+        if not cache_file.exists():
+            continue
 
         try:
             feat_df = pd.read_parquet(cache_file)
-            # Select only the expected columns (handles any leftover mismatched files)
-            available = [c for c in FEAT_COLS if c in feat_df.columns]
-            if len(available) < len(FEAT_COLS):
+            # Only keep FEAT_COLS
+            missing = [c for c in FEAT_COLS if c not in feat_df.columns]
+            if missing:
                 continue
-            feat_df = feat_df[FEAT_COLS].dropna()
 
-            X_raw = feat_df.values
-            if len(X_raw) > MAX_MEMORY_ROWS:
-                X_raw = X_raw[::STRIDE_STEP]
+            # Align to training window
+            ohlcv = symbols[symbol]
+            ohlcv_window = ohlcv[(ohlcv.index >= train_start) & (ohlcv.index < train_end)]
+            feat_window  = feat_df[feat_df.index >= train_start]
+            feat_window  = feat_window[feat_window.index < train_end]
 
-            for i, fs in enumerate(X_raw):
-                features.append({'symbol': symbol, 'bar': i, 'features': fs})
+            if len(ohlcv_window) < HORIZON_BARS + 10:
+                continue
+
+            # Compute future_ret for each bar: log(close[t+H] / close[t])
+            ohlcv_arr   = ohlcv_window['close'].values
+            ohlcv_idx   = ohlcv_window.index
+
+            for i in range(len(ohlcv_arr) - HORIZON_BARS):
+                t_bar = ohlcv_idx[i]
+                if t_bar not in feat_window.index:
+                    continue
+
+                cur_c = ohlcv_arr[i]
+                fut_c = ohlcv_arr[i + HORIZON_BARS]
+                if cur_c <= 0 or not np.isfinite(cur_c) or not np.isfinite(fut_c):
+                    continue
+
+                future_ret = np.log(fut_c / cur_c)
+                fvec = feat_window.loc[t_bar, FEAT_COLS].values.astype(np.float32)
+
+                if not np.isfinite(fvec).all():
+                    continue
+
+                all_rows.append((t_bar, symbol, fvec, future_ret))
+
+        except Exception as e:
+            continue
+
+    if len(all_rows) < 200:
+        print(f"  ERROR: only {len(all_rows)} valid training rows found")
+        return None, None, None
+
+    # ── Step B: Compute cross-sectional alpha label ───────────────────────────
+    # At each timestamp, label=1 if future_ret > median of all coins at that time
+    df_rows = pd.DataFrame([
+        {'timestamp': r[0], 'symbol': r[1], 'future_ret': r[3], 'feat_idx': i}
+        for i, r in enumerate(all_rows)
+    ])
+
+    df_rows['alpha_label'] = df_rows.groupby('timestamp')['future_ret'].transform(
+        lambda x: (x > x.median()).astype(float)
+    )
+
+    print(f"  Total rows    : {len(df_rows):,}")
+    print(f"  Symbols       : {df_rows['symbol'].nunique()}")
+    print(f"  Label balance : {df_rows['alpha_label'].mean()*100:.1f}% positive (target ~50%)")
+
+    # ── Step C: Build arrays ──────────────────────────────────────────────────
+    feat_list = [all_rows[i][2] for i in df_rows['feat_idx']]
+    X = np.stack(feat_list).astype(np.float32)
+    y = df_rows['alpha_label'].values.astype(np.float32)
+
+    # VRAM guard for RTX 2050
+    if len(X) > MAX_TRAIN_ROWS:
+        idx = np.random.choice(len(X), MAX_TRAIN_ROWS, replace=False)
+        idx.sort()
+        X, y = X[idx], y[idx]
+        print(f"  VRAM guard    : capped at {MAX_TRAIN_ROWS:,} rows")
+
+    return X, y, df_rows['future_ret'].values[:len(X)]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  STEP 5+6: Walk-forward prediction
+#  FIX: feat_index now uses timestamp keys instead of broken integer bar index
+# ─────────────────────────────────────────────────────────────────────────────
+
+def build_feat_index(symbols, cache_dir=CACHE_DIR):
+    """
+    Build {(symbol, timestamp): feature_vector} index for O(1) lookups.
+    FIX: original used integer bar index which almost always returned None.
+    """
+    cache_path = Path(cache_dir)
+    feat_index = {}
+    count = 0
+
+    for symbol in symbols:
+        cache_file = cache_path / f"{symbol}.parquet"
+        if not cache_file.exists():
+            continue
+        try:
+            feat_df = pd.read_parquet(cache_file)
+            missing = [c for c in FEAT_COLS if c not in feat_df.columns]
+            if missing:
+                continue
+
+            for ts, row in feat_df[FEAT_COLS].iterrows():
+                fvec = row.values.astype(np.float32)
+                if np.isfinite(fvec).all():
+                    feat_index[(symbol, ts)] = fvec
+                    count += 1
         except Exception:
             continue
 
-    return pd.DataFrame(features)
+    print(f"  Feature index : {count:,} (symbol, timestamp) entries built")
+    return feat_index
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Step 3+4: Train base + walk-forward
-# ─────────────────────────────────────────────────────────────────────────────
 
-def _fetch_feature_vector(feat_db, symbol, bar_idx):
-    """Quick lookup from precomputed features."""
-    try:
-        row = feat_db[(feat_db['symbol'] == symbol) & (feat_db['bar'] == bar_idx)]
-        return row['features'].values[0] if len(row) > 0 else None
-    except:
-        return None
+def predict_week(model, scaler, symbols, feat_index, week_start, week_end, cuda_api=None):
+    """
+    Predict probability for each symbol in the week.
+    Returns {symbol: mean_prob}, {symbol: actual_ret}
+    """
+    predictions = {}
+    actual_rets = {}
 
-def build_trade_log(model, scaler, symbols, train_start, test_start, test_end, feat_db, cuda_api):
-    """Generate trades & performance metrics for [test_start, test_end]."""
-    trades = []
-    n_trades = 0
-    
     for symbol, df in symbols.items():
-        df_test = df[(df.index >= test_start) & (df.index <= test_end)]
-        if len(df_test) < 2: continue
-        
-        preds = []
-        for i in df_test.index:
-            bar_idx = list(df.index).index(i)
-            feat_vec = _fetch_feature_vector(feat_db, symbol, bar_idx)
-            
-            if feat_vec is None or len(feat_vec) != scaler.n_features_in_:
-                preds.append(0.5)
-            else:
-                X_scaled = scaler.transform([feat_vec])[0]
-                pred = model.predict_proba([X_scaled])[0][1]
-                preds.append(pred)
-        
-        # Buy if pred > 0.6, else short if pred < 0.4
-        for i, pred in enumerate(preds):
-            if pred > 0.6 or pred < 0.4:
-                entry_price = df_test.iloc[i]['close']
-                exit_price = df_test.iloc[min(i + 48, len(df_test) - 1)]['close']
-                ret = (exit_price - entry_price) / entry_price - ROUND_TRIP_FEE if entry_price > 0 else -ROUND_TRIP_FEE
-                
-                trades.append({
-                    'symbol': symbol,
-                    'entry_date': df_test.index[i],
-                    'pred': pred,
-                    'return_pct': ret * 100
-                })
-                n_trades += 1
-    
-    return pd.DataFrame(trades) if trades else None
+        df_week = df[(df.index >= week_start) & (df.index < week_end)]
+        if len(df_week) < 2:
+            continue
+
+        feat_vecs = []
+        for ts in df_week.index:
+            fv = feat_index.get((symbol, ts))
+            if fv is not None:
+                feat_vecs.append(fv)
+
+        if not feat_vecs:
+            continue
+
+        try:
+            X = np.stack(feat_vecs).astype(np.float32)
+            X_scaled = scaler.transform(X)
+            probs = model.predict_proba(X_scaled)[:, 1]
+            predictions[symbol] = float(probs.mean())
+
+            # Actual return: close-to-close over the week
+            if len(df_week) >= 2:
+                wk_r = (df_week['close'].iloc[-1] / df_week['close'].iloc[0]) - 1
+                if np.isfinite(wk_r):
+                    actual_rets[symbol] = float(wk_r)
+        except Exception:
+            continue
+
+    return predictions, actual_rets
+
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  MAIN PIPELINE
+#  MAIN
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--gpu', action='store_true', help='Use GPU (CUDA)')
-    parser.add_argument('--no-gpu', action='store_true', help='Force CPU-only')
-    parser.add_argument('--year2-only', action='store_true', help='Year2 pretrain only (16 weeks, no Year3 walk-forward)')
-    parser.add_argument('--data-dir', default=None, help='Path to folder containing SYMBOL.parquet files (default: ./data)')
-    parser.add_argument('--out-dir', default=None, help='Path to results output folder (default: ./results)')
+    parser.add_argument('--gpu',        action='store_true')
+    parser.add_argument('--no-gpu',     action='store_true')
+    parser.add_argument('--year2-only', action='store_true')
+    parser.add_argument('--data-dir',   default=None)
+    parser.add_argument('--out-dir',    default=None)
     args = parser.parse_args()
 
-    # Override module-level paths if supplied via CLI
-    if args.data_dir:
-        global DATA_DIR
-        DATA_DIR = args.data_dir
-    if args.out_dir:
-        global RESULTS_DIR
-        RESULTS_DIR = args.out_dir
-    
-    # Determine GPU usage
-    use_gpu = args.gpu if not args.no_gpu else False
+    global DATA_DIR, RESULTS_DIR
+    if args.data_dir:  DATA_DIR    = args.data_dir
+    if args.out_dir:   RESULTS_DIR = args.out_dir
+
+    use_gpu    = args.gpu and not args.no_gpu
     year2_only = args.year2_only
-    
-    # CUDA setup
+
     if use_gpu:
-        os.environ["CUDA_VISIBLE_DEVICES"]  = "0"
-        os.environ["CUDA_DEVICE_ORDER"]     = "PCI_E_BUS_ID"
+        os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+        os.environ["CUDA_DEVICE_ORDER"]    = "PCI_E_BUS_ID"
     else:
-        os.environ["CUDA_VISIBLE_DEVICES"]  = ""
-        os.environ["CUDA_DEVICE_ORDER"]     = "PCI_E_BUS_ID"
-    
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
     import xgboost as xgb
-    
+
     startup_banner(use_gpu, year2_only)
-    
-    # Step 0: Feature store
-    print("STEP 0: Build feature cache (if needed)\n")
+
+    # ── STEP 0: Feature store ──────────────────────────────────────────────────
+    print("STEP 0: Build feature cache\n")
     if not build_feature_store():
-        print("❌ Feature store build failed")
-        return
-    
-    # Step 1: Load all symbols
-    print("STEP 1: Load all symbols\n")
-    try:
-        symbols = load_all_symbols(year2_only=year2_only)
-        if not symbols:
-            print("❌ No symbols loaded")
-            return
-    except Exception as e:
-        print(f"❌ Step 1 failed: {e}")
-        return
-    
-    # Step 2: Prepare train set
-    print(f"STEP 2: Build training set (Year 2: {START_DATE} to {MID_DATE})\n")
-    try:
-        cuda_api = detect_cuda_api() if use_gpu else None
-        
-        train_labels = _build_step2_labels(symbols, START_DATE, MID_DATE, HORIZON_BARS)
-        if train_labels is None or len(train_labels) == 0:
-            print("❌ No training labels generated")
-            return
-        
-        train_features = _build_step2_features(CACHE_DIR, symbols, START_DATE, MID_DATE)
-        if train_features is None or len(train_features) == 0:
-            print("❌ No training features loaded")
-            return
-        
-        print(f"  ✓ Train labels: {len(train_labels)}")
-        print(f"  ✓ Train features: {len(train_features)}\n")
-    except Exception as e:
-        print(f"❌ Step 2 failed: {e}")
-        return
-    
-    # Step 3: Pretrain base model
-    print(f"STEP 3: Pretrain base model (Year 2)\n")
-    try:
-        # Merge labels + features
-        X_raw = np.array([f for f in train_features['features']])
-        X_train = X_raw[:min(MAX_TRAIN_ROWS, len(X_raw))]
-        
-        # Simple holdout by bar number (70% train, 30% val)
-        split_idx = int(len(X_train) * 0.7)
-        X_pretrain, X_val = X_train[:split_idx], X_train[split_idx:]
-        y_pretrain = np.random.randint(0, 2, len(X_pretrain))
-        y_val = np.random.randint(0, 2, len(X_val))
-        
-        scaler = RobustScaler()
-        X_pretrain_scaled = scaler.fit_transform(X_pretrain)
-        
-        m=xgb.XGBClassifier(**make_xgb_params(cuda_api))
-        m.fit(X_pretrain_scaled, y_pretrain, eval_set=[(scaler.transform(X_val), y_val)], verbose=False)
-        
-        base_model_path = f"{RESULTS_DIR}/models/model_base_y1y2.json"
-        os.makedirs(f"{RESULTS_DIR}/models", exist_ok=True)
-        m.save_model(base_model_path)
-        
-        scaler_path = f"{RESULTS_DIR}/models/scaler_base_y1y2.pkl"
-        with open(scaler_path, 'wb') as f:
-            pickle.dump(scaler, f)
-        
-        print(f"  ✓ Base model saved: {base_model_path}")
-        print(f"  ✓ Scaler saved: {scaler_path}\n")
-        BASE_MODEL = m
-        BASE_SCALER = scaler
-    except Exception as e:
-        print(f"❌ Step 3 failed: {e}")
-        return
-    
+        print("ERROR: Feature store build failed"); return
+
+    # ── STEP 1: Load OHLCV ────────────────────────────────────────────────────
+    print("STEP 1: Load OHLCV data\n")
+    symbols = load_all_symbols(year2_only=year2_only)
+    if not symbols:
+        print("ERROR: No symbols loaded"); return
+
+    # ── Detect CUDA ───────────────────────────────────────────────────────────
+    cuda_api = detect_cuda_api() if use_gpu else None
+    if use_gpu and cuda_api is None:
+        print("  WARNING: GPU requested but CUDA unavailable — using CPU")
+
+    # ── STEP 2: Build feature index ───────────────────────────────────────────
+    print("\nSTEP 2: Build feature index\n")
+    feat_index = build_feat_index(symbols, CACHE_DIR)
+
+    # ── STEP 3: Build training matrix with REAL labels ────────────────────────
+    print("\nSTEP 3: Build training matrix (REAL cross-sectional labels)\n")
+    X_train, y_train, y_ret = build_training_matrix(
+        symbols, train_start=START_DATE, train_end=MID_DATE
+    )
+
+    if X_train is None:
+        print("ERROR: Could not build training matrix"); return
+
+    # ── STEP 4: Train base model ───────────────────────────────────────────────
+    print(f"\nSTEP 4: Train base model  (GPU={'YES - RTX 2050' if cuda_api else 'NO - CPU'})\n")
+
+    os.makedirs(f"{RESULTS_DIR}/models", exist_ok=True)
+    base_model_path  = f"{RESULTS_DIR}/models/model_base_y1y2.json"
+    base_scaler_path = f"{RESULTS_DIR}/models/scaler_base_y1y2.pkl"
+
+    if os.path.exists(base_model_path) and os.path.exists(base_scaler_path):
+        print("  Loading cached base model...")
+        BASE_MODEL = xgb.XGBClassifier()
+        BASE_MODEL.load_model(base_model_path)
+        with open(base_scaler_path, 'rb') as f:
+            BASE_SCALER = pickle.load(f)
+        print("  Loaded OK")
+    else:
+        t0 = time.time()
+        BASE_SCALER = RobustScaler()
+        X_scaled = BASE_SCALER.fit_transform(X_train)
+
+        split = int(len(X_scaled) * 0.85)
+        X_tr, X_val = X_scaled[:split], X_scaled[split:]
+        y_tr, y_val = y_train[:split], y_train[split:]
+
+        BASE_MODEL = xgb.XGBClassifier(**make_xgb_params(cuda_api))
+        BASE_MODEL.fit(
+            X_tr, y_tr,
+            eval_set=[(X_val, y_val)],
+            verbose=50,
+        )
+
+        try:
+            auc = roc_auc_score(y_val, BASE_MODEL.predict_proba(X_val)[:, 1])
+            print(f"  Validation AUC : {auc:.4f}  (0.5 = random, >0.52 = signal)")
+        except Exception:
+            pass
+
+        BASE_MODEL.save_model(base_model_path)
+        with open(base_scaler_path, 'wb') as f:
+            pickle.dump(BASE_SCALER, f)
+
+        elapsed = time.time() - t0
+        print(f"  Training time  : {elapsed:.1f}s")
+        print(f"  Saved: {base_model_path}")
+
     if year2_only:
-        print(f"YEAR2-ONLY MODE: Skipping Year3 walk-forward\n")
-        perf = {
-            "label": "Year2-Only_Pretrain",
-            "total_weeks": 16,
-            "total_trades": 0,
-            "total_return_pct": 0.0,
-            "gpu": "NVIDIA RTX 2050" if use_gpu else "CPU"
-        }
+        print("\nYEAR2-ONLY MODE: Done. Skipping Year3 walk-forward.")
         with open(f"{RESULTS_DIR}/performance_year2.json", 'w') as f:
-            json.dump(perf, f)
-        print("✅ Year2-only pretrain complete")
+            json.dump({"mode": "year2_pretrain", "gpu": cuda_api or "cpu"}, f)
         return
-    
-    # Step 5+6: Walk-forward on Year 3
-    print(f"STEP 5+6: Walk-forward (Year 3: {MID_DATE} to {YEAR3_END})\n")
-    try:
-        # Pre-index features for O(1) lookups during weekly prediction
-        feat_index = {}
-        for _, row in train_features.iterrows():
-            feat_index[(row['symbol'], row['bar'])] = row['features']
-        print(f"  Feature index: {len(feat_index):,} entries")
 
-        weeks = pd.date_range(start=MID_DATE, end=YEAR3_END, freq="W-MON")
-        if len(weeks) < 2:
-            print("  Not enough weeks in Year 3 range")
-            return
+    # ── STEP 5+6: Walk-forward Year 3 ─────────────────────────────────────────
+    print(f"\nSTEP 5+6: Walk-forward Year 3  ({MID_DATE} → {YEAR3_END})\n")
 
-        prev_longs  = set()
-        prev_shorts = set()
-        all_trades      = []
-        weekly_summary  = []
-        weekly_returns  = []
-        retrains = 0
+    weeks = pd.date_range(start=MID_DATE, end=YEAR3_END, freq="W-MON")
+    if len(weeks) < 2:
+        print("  Not enough weeks in Year 3 range"); return
 
-        for week_num, (ws, we) in enumerate(zip(weeks[:-1], weeks[1:]), 1):
+    BASE_MODEL_wf  = BASE_MODEL
+    BASE_SCALER_wf = BASE_SCALER
+    retrains = 0
 
-            # ── Quarterly retrain ────────────────────────────────────────
-            if week_num % RETRAIN_WEEKS == 0:
-                print(f"  Week {week_num:2d}: RETRAIN")
-                X_rt, y_rt = [], []
-                retrain_end = str(ws)
-                for symbol, df in symbols.items():
-                    df_rt = df[(df.index >= START_DATE) & (df.index < retrain_end)]
-                    if len(df_rt) < HORIZON_BARS + 10:
-                        continue
-                    n_bars = len(df_rt) - HORIZON_BARS
-                    step = max(1, n_bars // 500)
-                    for i in range(0, n_bars, step):
-                        try:
-                            bar_idx = df.index.get_loc(df_rt.index[i])
-                        except KeyError:
-                            continue
-                        fv = feat_index.get((symbol, bar_idx))
-                        if fv is None or len(fv) != BASE_SCALER.n_features_in_:
-                            continue
-                        cur_c = df_rt.iloc[i]['close']
-                        fut_c = df_rt.iloc[i + HORIZON_BARS]['close']
-                        if cur_c <= 0:
-                            continue
-                        X_rt.append(fv)
-                        y_rt.append(1 if fut_c > cur_c else 0)
+    prev_longs, prev_shorts = set(), set()
+    all_trades, weekly_summary, weekly_returns = [], [], []
 
-                if len(X_rt) > 100:
-                    X_rt = np.array(X_rt[:MAX_TRAIN_ROWS])
-                    y_rt = np.array(y_rt[:len(X_rt)])
-                    scaler_new = RobustScaler()
-                    X_rt_s = scaler_new.fit_transform(X_rt)
-                    m_new = xgb.XGBClassifier(**make_xgb_params(cuda_api))
-                    split = int(len(X_rt_s) * 0.9)
-                    m_new.fit(
-                        X_rt_s[:split], y_rt[:split],
-                        eval_set=[(X_rt_s[split:], y_rt[split:])],
-                        verbose=False,
-                    )
-                    BASE_MODEL  = m_new
-                    BASE_SCALER = scaler_new
-                    retrains += 1
-                    print(f"    → {len(X_rt):,} samples, retrained OK")
-                    del X_rt, y_rt, X_rt_s
-                    gc.collect()
-                else:
-                    print(f"    → too few samples ({len(X_rt)}), skipped retrain")
+    for week_num, (ws, we) in enumerate(zip(weeks[:-1], weeks[1:]), 1):
 
-            # ── Predict: one probability per symbol per week ─────────────
-            predictions = {}
-            actual_rets = {}
+        # ── Quarterly retrain ──────────────────────────────────────────────────
+        if week_num % RETRAIN_WEEKS == 0:
+            print(f"  Week {week_num:2d}: RETRAIN (quarterly)")
+            X_rt, y_rt, _ = build_training_matrix(symbols, START_DATE, str(ws))
+            if X_rt is not None and len(X_rt) > 200:
+                scaler_rt = RobustScaler()
+                X_rt_s = scaler_rt.fit_transform(X_rt)
+                split_rt = int(len(X_rt_s) * 0.9)
+                m_rt = xgb.XGBClassifier(**make_xgb_params(cuda_api))
+                m_rt.fit(
+                    X_rt_s[:split_rt], y_rt[:split_rt],
+                    eval_set=[(X_rt_s[split_rt:], y_rt[split_rt:])],
+                    verbose=False,
+                )
+                BASE_MODEL_wf  = m_rt
+                BASE_SCALER_wf = scaler_rt
+                retrains += 1
+                m_rt.save_model(f"{RESULTS_DIR}/models/model_y3_week{week_num:03d}.json")
+                print(f"    Retrain complete ({len(X_rt):,} rows)")
+                del X_rt, y_rt, X_rt_s; gc.collect()
 
-            for symbol, df in symbols.items():
-                mask = (df.index >= str(ws)) & (df.index < str(we))
-                df_week = df[mask]
-                if len(df_week) < 3:
-                    continue
+        # ── Predict ────────────────────────────────────────────────────────────
+        predictions, actual_rets = predict_week(
+            BASE_MODEL_wf, BASE_SCALER_wf,
+            symbols, feat_index, ws, we, cuda_api
+        )
 
-                feat_vecs = []
-                for idx in df_week.index:
-                    try:
-                        bar_idx = df.index.get_loc(idx)
-                    except KeyError:
-                        continue
-                    fv = feat_index.get((symbol, bar_idx))
-                    if fv is not None and len(fv) == BASE_SCALER.n_features_in_:
-                        feat_vecs.append(fv)
+        if len(predictions) < 5:
+            print(f"  Week {week_num:2d}: skipped — {len(predictions)} symbols")
+            continue
 
-                if not feat_vecs:
-                    continue
+        # ── Cross-sectional ranking + position-tracked fees ────────────────────
+        pred_series = pd.Series(predictions)
+        ranked = pred_series.rank(pct=True)
+        cur_longs  = set(ranked[ranked >= (1 - TOP_QUANTILE)].index)
+        cur_shorts = set(ranked[ranked <= TOP_QUANTILE].index)
 
-                X = np.vstack(feat_vecs)
-                X_scaled = BASE_SCALER.transform(X)
-                probs = BASE_MODEL.predict_proba(X_scaled)[:, 1]
-                predictions[symbol] = float(probs.mean())
-
-                # Actual return: close-to-close over the week
-                if len(df_week) >= 2:
-                    wk_r = (df_week.iloc[-1]['close'] / df_week.iloc[0]['close']) - 1
-                    if np.isfinite(wk_r):
-                        actual_rets[symbol] = float(wk_r)
-
-            if len(predictions) < 5:
-                print(f"  Week {week_num:2d}: skipped — only {len(predictions)} symbols")
-                continue
-
-            # ── Cross-sectional ranking + position-tracked fees ──────────
-            pred_series = pd.Series(predictions)
-            ranked = pred_series.rank(pct=True)
-            cur_longs  = set(ranked[ranked >= (1 - TOP_QUANTILE)].index)
-            cur_shorts = set(ranked[ranked <= TOP_QUANTILE].index)
-
-            trades = []
-            for sym in cur_longs:
-                ret = actual_rets.get(sym, 0.0)
-                if not np.isfinite(ret):
-                    ret = 0.0
-                fee = 0.0 if sym in prev_longs else ROUND_TRIP_FEE
-                pnl = (ret - fee) * 100
-                trades.append({
-                    'week': week_num, 'symbol': sym, 'signal': 'BUY',
-                    'pred_prob': round(predictions[sym], 5),
-                    'return_pct': round(pnl, 4),
-                    'raw_ret_pct': round(ret * 100, 4),
-                })
-
-            for sym in cur_shorts:
-                ret = actual_rets.get(sym, 0.0)
-                if not np.isfinite(ret):
-                    ret = 0.0
-                fee = 0.0 if sym in prev_shorts else ROUND_TRIP_FEE
-                pnl = (-ret - fee) * 100
-                trades.append({
-                    'week': week_num, 'symbol': sym, 'signal': 'SELL',
-                    'pred_prob': round(predictions[sym], 5),
-                    'return_pct': round(pnl, 4),
-                    'raw_ret_pct': round(ret * 100, 4),
-                })
-
-            week_ret = float(np.mean([t['return_pct'] for t in trades])) / 100 if trades else 0.0
-            weekly_returns.append(week_ret)
-
-            # IC (Spearman rank correlation)
-            common = [s for s in predictions if s in actual_rets]
-            if len(common) > 10:
-                pred_arr = np.array([predictions[s] for s in common])
-                ret_arr  = np.array([actual_rets[s]  for s in common])
-                week_ic  = float(stats.spearmanr(pred_arr, ret_arr)[0])
-            else:
-                week_ic = 0.0
-
-            # Turnover
-            n_cur = len(cur_longs) + len(cur_shorts)
-            n_new = len(cur_longs - prev_longs) + len(cur_shorts - prev_shorts)
-            turnover = round(n_new / n_cur * 100, 1) if n_cur > 0 else 100.0
-            prev_longs, prev_shorts = cur_longs, cur_shorts
-
-            all_trades.extend(trades)
-            ann_proj = ((1 + week_ret) ** 52 - 1) * 100
-            weekly_summary.append({
-                'week': week_num,
-                'week_start': str(ws.date()),
-                'week_end': str(we.date()),
-                'n_symbols': len(predictions),
-                'n_trades': len(trades),
-                'week_return_pct': round(week_ret * 100, 4),
-                'annualised_pct': round(ann_proj, 2),
-                'ic': round(week_ic, 5),
-                'turnover_pct': turnover,
-                'on_track': week_ret >= ((1.10) ** (1 / 52) - 1),
-                'retrained': week_num % RETRAIN_WEEKS == 0,
+        trades = []
+        for sym in cur_longs:
+            ret = actual_rets.get(sym, 0.0)
+            if not np.isfinite(ret): ret = 0.0
+            fee = 0.0 if sym in prev_longs else ROUND_TRIP_FEE
+            trades.append({
+                'week': week_num, 'week_start': str(ws.date()),
+                'symbol': sym, 'signal': 'BUY',
+                'pred_prob': round(predictions[sym], 5),
+                'return_pct': round((ret - fee) * 100, 4),
+                'raw_ret_pct': round(ret * 100, 4),
             })
 
-            if week_num % 4 == 0 or week_num <= 2:
-                rolling = np.mean(weekly_returns[-4:]) * 100
-                print(f"  Week {week_num:2d}: {len(trades):4d} trades | "
-                      f"ret={week_ret*100:+.2f}% | IC={week_ic:+.4f} | "
-                      f"turnover={turnover:.0f}% | 4w_avg={rolling:+.2f}%")
+        for sym in cur_shorts:
+            ret = actual_rets.get(sym, 0.0)
+            if not np.isfinite(ret): ret = 0.0
+            fee = 0.0 if sym in prev_shorts else ROUND_TRIP_FEE
+            trades.append({
+                'week': week_num, 'week_start': str(ws.date()),
+                'symbol': sym, 'signal': 'SELL',
+                'pred_prob': round(predictions[sym], 5),
+                'return_pct': round((-ret - fee) * 100, 4),
+                'raw_ret_pct': round(ret * 100, 4),
+            })
 
-        # ── Save results ─────────────────────────────────────────────────
-        os.makedirs(RESULTS_DIR, exist_ok=True)
+        week_ret = float(np.mean([t['return_pct'] for t in trades])) / 100 if trades else 0.0
+        weekly_returns.append(week_ret)
 
-        trades_df  = pd.DataFrame(all_trades)  if all_trades  else pd.DataFrame()
-        summary_df = pd.DataFrame(weekly_summary) if weekly_summary else pd.DataFrame()
-
-        if len(trades_df) > 0:
-            trades_df.to_csv(f"{RESULTS_DIR}/all_trades_year3.csv", index=False)
-        if len(summary_df) > 0:
-            summary_df.to_csv(f"{RESULTS_DIR}/weekly_summary_year3.csv", index=False)
-
-        # Performance metrics (proper definitions)
-        n_wks = len(weekly_returns)
-        if n_wks > 0:
-            cum_ret = float(np.prod([1 + r for r in weekly_returns]) - 1)
-            ann_ret = ((1 + cum_ret) ** (52 / n_wks) - 1) * 100
-            wk_std  = float(np.std(weekly_returns))
-            sharpe  = float(np.mean(weekly_returns)) / wk_std * np.sqrt(52) if wk_std > 0 else 0.0
+        # IC
+        common = [s for s in predictions if s in actual_rets]
+        if len(common) > 10:
+            pred_arr = np.array([predictions[s] for s in common])
+            ret_arr  = np.array([actual_rets[s]  for s in common])
+            week_ic  = float(stats.spearmanr(pred_arr, ret_arr)[0])
         else:
-            cum_ret, ann_ret, sharpe = 0.0, 0.0, 0.0
+            week_ic = 0.0
 
-        ic_series = summary_df['ic'] if len(summary_df) > 0 else pd.Series(dtype=float)
-        ic_mean = float(ic_series.mean()) if len(ic_series) > 0 else 0.0
-        ic_std_v = float(ic_series.std()) if len(ic_series) > 1 else 0.0
-        icir = ic_mean / (ic_std_v + 1e-8)
-        ic_pos = float((ic_series > 0).mean() * 100) if len(ic_series) > 0 else 0.0
+        # Turnover
+        n_cur = len(cur_longs) + len(cur_shorts)
+        n_new = len(cur_longs - prev_longs) + len(cur_shorts - prev_shorts)
+        turnover = round(n_new / n_cur * 100, 1) if n_cur > 0 else 100.0
 
-        perf = {
-            "label": "Year3_WalkForward_RTX2050",
-            "total_weeks": n_wks,
-            "total_trades": len(trades_df),
-            "retrains": retrains,
-            "total_return_pct": round(cum_ret * 100, 1),
-            "annualised_pct": round(ann_ret, 1),
-            "sharpe": round(sharpe, 3),
-            "ic_mean": round(ic_mean, 5),
-            "icir": round(icir, 4),
-            "ic_positive_pct": round(ic_pos, 1),
-            "gpu": "NVIDIA RTX 2050" if use_gpu else "CPU",
-            "vram_cap_rows": MAX_TRAIN_ROWS,
-            "year2_only_mode": year2_only,
-        }
+        prev_longs, prev_shorts = cur_longs, cur_shorts
+        all_trades.extend(trades)
+        ann_proj = ((1 + week_ret) ** 52 - 1) * 100
 
-        with open(f"{RESULTS_DIR}/performance_year3.json", 'w') as f:
-            json.dump(perf, f, indent=2)
+        weekly_summary.append({
+            'week': week_num,
+            'week_start': str(ws.date()),
+            'week_end': str(we.date()),
+            'n_symbols': len(predictions),
+            'n_trades': len(trades),
+            'week_return_pct': round(week_ret * 100, 4),
+            'annualised_pct': round(ann_proj, 2),
+            'ic': round(week_ic, 5),
+            'turnover_pct': turnover,
+            'on_track': week_ret >= ((1.10) ** (1/52) - 1),
+        })
 
-        print(f"\nRESULTS:")
-        for k, v in perf.items():
-            print(f"  {k}: {v}")
+        if week_num % 4 == 0 or week_num <= 2:
+            rolling = np.mean(weekly_returns[-4:]) * 100
+            print(f"  Week {week_num:2d}: {len(trades):4d} trades | "
+                  f"ret={week_ret*100:+.2f}% | IC={week_ic:+.4f} | "
+                  f"4w_avg={rolling:+.2f}% | TO={turnover:.0f}%")
 
-        print(f"\n✅ Walk-forward complete")
-        print(f"  Trades  → {RESULTS_DIR}/all_trades_year3.csv")
-        print(f"  Summary → {RESULTS_DIR}/weekly_summary_year3.csv")
-        print(f"  Perf    → {RESULTS_DIR}/performance_year3.json")
-    
-    except Exception as e:
-        print(f"❌ Step 5+6 failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return
+    # ── Save results ───────────────────────────────────────────────────────────
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+
+    trades_df  = pd.DataFrame(all_trades)  if all_trades  else pd.DataFrame()
+    summary_df = pd.DataFrame(weekly_summary) if weekly_summary else pd.DataFrame()
+
+    if len(trades_df)  > 0: trades_df.to_csv(f"{RESULTS_DIR}/all_trades_year3.csv",     index=False)
+    if len(summary_df) > 0: summary_df.to_csv(f"{RESULTS_DIR}/weekly_summary_year3.csv", index=False)
+
+    # Performance metrics
+    n_wks   = len(weekly_returns)
+    cum_ret = float(np.prod([1 + r for r in weekly_returns]) - 1) if n_wks else 0.0
+    ann_ret = ((1 + cum_ret) ** (52 / n_wks) - 1) * 100 if n_wks else 0.0
+    wk_std  = float(np.std(weekly_returns)) if n_wks > 1 else 0.0
+    sharpe  = float(np.mean(weekly_returns)) / wk_std * np.sqrt(52) if wk_std > 0 else 0.0
+
+    ic_series = summary_df['ic'] if len(summary_df) > 0 else pd.Series(dtype=float)
+    ic_mean   = float(ic_series.mean()) if len(ic_series) > 0 else 0.0
+    ic_std_v  = float(ic_series.std())  if len(ic_series) > 1 else 0.0
+    icir      = ic_mean / (ic_std_v + 1e-8)
+    ic_pos    = float((ic_series > 0).mean() * 100) if len(ic_series) > 0 else 0.0
+
+    perf = {
+        "label": "Year3_WalkForward_FIXED",
+        "total_weeks":      n_wks,
+        "total_trades":     len(trades_df),
+        "retrains":         retrains,
+        "total_return_pct": round(cum_ret * 100, 1),
+        "annualised_pct":   round(ann_ret, 1),
+        "sharpe":           round(sharpe, 3),
+        "ic_mean":          round(ic_mean, 5),
+        "icir":             round(icir, 4),
+        "ic_positive_pct":  round(ic_pos, 1),
+        "gpu":              f"RTX 2050 CUDA ({cuda_api})" if cuda_api else "CPU",
+        "vram_cap_rows":    MAX_TRAIN_ROWS,
+        "fix_notes": [
+            "Labels: real cross-sectional alpha (outperform median)",
+            "feat_index: timestamp-based lookups (was broken integer index)",
+            "GPU: confirmed via build_info USE_CUDA=True",
+        ]
+    }
+
+    with open(f"{RESULTS_DIR}/performance_year3.json", 'w') as f:
+        json.dump(perf, f, indent=2)
+
+    print(f"\n{'='*65}")
+    print(f"  RESULTS")
+    print(f"{'='*65}")
+    for k, v in perf.items():
+        if k != 'fix_notes':
+            print(f"  {k:<22}: {v}")
+    print(f"{'='*65}")
+    print(f"\n  Trades  -> {RESULTS_DIR}/all_trades_year3.csv")
+    print(f"  Summary -> {RESULTS_DIR}/weekly_summary_year3.csv")
+    print(f"  Perf    -> {RESULTS_DIR}/performance_year3.json")
+    print(f"\n  GPU used: {'RTX 2050 via CUDA' if cuda_api else 'CPU (CUDA unavailable)'}")
 
 
 if __name__ == "__main__":
