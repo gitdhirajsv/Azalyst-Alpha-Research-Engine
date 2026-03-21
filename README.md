@@ -1,4 +1,4 @@
-﻿# Azalyst Alpha Research Engine
+# Azalyst Alpha Research Engine
 
 An institutional-style quantitative research platform built as a personal project. Not a hedge fund. Not a financial product. Just a passion for systematic research.
 
@@ -237,7 +237,7 @@ High-conviction trades dominate the portfolio return. Low-conviction trades are 
 
 ## Running the Engine
 
-### Option 1 — Windows One-Click (recommended)
+### Option 1 — Windows One-Click (recommended for local)
 
 Double-click **`RUN_AZALYST.bat`** — guides through 3 prompts then runs fully unattended:
 
@@ -247,15 +247,28 @@ Double-click **`RUN_AZALYST.bat`** — guides through 3 prompts then runs fully 
 
 The batch file auto-detects Python, GPU availability, and auto-installs all missing packages on first run.
 
-### Option 2 — VSCode Jupyter (Local GPU)
+### Option 2 — Kaggle T4 Notebook (recommended for testing)
 
-Open `azalyst-alpha-research-engine.ipynb` in VSCode. Run Cell 0 first to install dependencies, then run remaining cells in order. Auto-detects CUDA and caps VRAM at 2M rows for RTX 2050 (4 GB GDDR6).
+Upload **`notebooks/azalyst_kaggle.ipynb`** to Kaggle. Attach the [Binance 5-min dataset](https://www.kaggle.com/datasets/dhirajsuryavanshi/binance-data-5min-300-coins-3years) and enable **GPU T4 x2**. Run all cells.
 
-### Option 3 — CPU Only
+- **Input**: `/kaggle/input/datasets/dhirajsuryavanshi/binance-data-5min-300-coins-3years`
+- **Output**: `/kaggle/working/azalyst_output`
+- **VRAM cap**: 4M rows (T4 16GB)
+- **Resource guards**: RAM monitoring, disk checks, periodic GC — stays within Kaggle's 30GB RAM / 57.6GB disk / 12hr session limits
 
-Same as Option 2 — the notebook auto-detects hardware and falls back to CPU.
+All 300+ symbols processed. Cross-sectional ranking (top/bottom 15%) uses the full universe.
 
-### Option 4 — Core research pipeline
+### Option 3 — Local Jupyter (RTX 2050 / any GPU)
+
+Open **`notebooks/azalyst_jupyter.ipynb`** in VSCode or Jupyter. Run Cell 0 to install dependencies, then run cells in order.
+
+- **Data**: `../data/` (relative to notebooks folder)
+- **Output**: `C:/Users/Administrator/Music/azalyst_jupyter_output/`
+- **VRAM cap**: 2M rows (RTX 2050 4GB)
+- Auto-detects CUDA with dual API support (`device='cuda'` or `tree_method='gpu_hist'`)
+- Falls back to CPU if no GPU detected
+
+### Option 4 — Core research pipeline (CLI)
 
 ```bash
 python azalyst_orchestrator.py --data-dir ./data --out-dir ./azalyst_output
@@ -338,6 +351,8 @@ timestamp | open | high | low | close | volume
 | `azalyst_auditor.py` | Binance copy-trader strategy auditor |
 | `monitor_dashboard.py` | Browser-based live monitor (`http://127.0.0.1:8080`) |
 | `azalyst-alpha-research-engine.ipynb` | VSCode Jupyter notebook — local GPU |
+| `notebooks/azalyst_kaggle.ipynb` | Self-contained Kaggle T4 notebook — resource-guarded, 4M rows, full pipeline |
+| `notebooks/azalyst_jupyter.ipynb` | Self-contained local Jupyter notebook — RTX 2050 optimised, 2M rows |
 
 ---
 
