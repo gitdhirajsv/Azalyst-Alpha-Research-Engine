@@ -6,7 +6,6 @@ chcp 65001 >nul 2>&1
 cd /d "%~dp0"
 
 :: -- Boost PATH with common Python install locations -------------------------
-:: Add base Python dirs AND their Scripts subfolders so spyder.exe is found
 for %%d in (
     "%LOCALAPPDATA%\Programs\Python\Python313"
     "%LOCALAPPDATA%\Programs\Python\Python312"
@@ -28,8 +27,8 @@ for %%d in (
 
 echo.
 echo  ============================================================
-echo    AZALYST ALPHA RESEARCH ENGINE  v3.1
-echo    XGBoost  ^|  20 Factors  ^|  Binance OHLCV 5m
+echo    AZALYST ALPHA RESEARCH ENGINE  v3.2
+echo    XGBoost  ^|  56 Factors  ^|  Binance OHLCV 5m
 echo  ============================================================
 echo.
 echo  System scan in progress...
@@ -53,13 +52,9 @@ exit /b 1
 for /f "tokens=2" %%v in ('!PYTHON_CMD! --version 2^>^&1') do set PY_VER=%%v
 echo  [OK] Python !PY_VER! (!PYTHON_CMD!)
 
-:: -- .venv fallback for running the pipeline (prefer global Python for installs)
-set "VENV_PYTHON="
-if exist "%~dp0.venv\Scripts\python.exe" set "VENV_PYTHON=%~dp0.venv\Scripts\python.exe"
-:: RUN_PYTHON = what actually executes the pipeline scripts
-:: PYTHON_CMD = used for pip installs (global Python preferred)
+:: -- Always use global Python - no .venv -------------------------------------
 set "RUN_PYTHON=!PYTHON_CMD!"
-if "!VENV_PYTHON!" neq "" set "RUN_PYTHON=!VENV_PYTHON!"
+echo  [OK] Run environment: global Python (no .venv)
 
 :: -- Step 2: GPU detection ---------------------------------------------------
 set GPU_FOUND=0
@@ -86,17 +81,13 @@ set SPYDER_FOUND=0
 set SPYDER_CMD=spyder
 set SPYDER_MODE=PATH
 
-:: 3a. Direct command in PATH (Scripts folder now boosted above)
 where spyder >nul 2>&1
 if not errorlevel 1 ( set SPYDER_FOUND=1 & set SPYDER_MODE=PATH & echo  [OK] Spyder found in PATH & goto :SPYDER_DONE )
 
-:: 3b. Importable as module in run-Python (quoted for paths with spaces)
 "!RUN_PYTHON!" -c "import spyder" >nul 2>&1
 if not errorlevel 1 ( set SPYDER_FOUND=1 & set SPYDER_MODE=MODULE & echo  [OK] Spyder found (module) & goto :SPYDER_DONE )
 
-:: 3c. Common explicit paths
 for %%p in (
-    "%~dp0.venv\Scripts\spyder.exe"
     "%LOCALAPPDATA%\Programs\Python\Python313\Scripts\spyder.exe"
     "%LOCALAPPDATA%\Programs\Python\Python312\Scripts\spyder.exe"
     "%LOCALAPPDATA%\Programs\Python\Python311\Scripts\spyder.exe"
@@ -115,14 +106,12 @@ for %%p in (
     if exist %%p ( set SPYDER_FOUND=1 & set SPYDER_MODE=EXE & set "SPYDER_CMD=%%~p" & echo  [OK] Spyder: %%p & goto :SPYDER_DONE )
 )
 
-:: 3d. Not found - auto-install into global Python (user preference)
 echo  [Setup] Spyder not found - installing now (one-time, ~3 min)...
 !PYTHON_CMD! -m pip install spyder -q
 if not errorlevel 1 (
     echo  [OK] Spyder installed successfully
     set SPYDER_FOUND=1
     set SPYDER_MODE=MODULE
-    :: add the fresh Scripts dir to PATH so 'spyder' works next time
     for /f "tokens=*" %%s in ('!PYTHON_CMD! -c "import sysconfig; print(sysconfig.get_path(chr(115)+chr(99)+chr(114)+chr(105)+chr(112)+chr(116)+chr(115)))" 2^>nul') do set "PATH=%%s;!PATH!"
     goto :SPYDER_DONE
 )
@@ -131,35 +120,55 @@ echo  [WARN] Spyder install failed - continuing without Spyder
 echo.
 
 :: -- Step 4: Package check ---------------------------------------------------
-echo  [Setup] Checking packages in run environment...
-"!RUN_PYTHON!" -c "import xgboost, numpy, pandas, sklearn, scipy, matplotlib, pyarrow, psutil, statsmodels" >nul 2>&1
+echo  [Setup] Checking packages...
+"!RUN_PYTHON!" -c "import xgboost, lightgbm, numpy, pandas, sklearn, scipy, matplotlib, pyarrow, psutil, statsmodels, polars, duckdb, requests, websockets, pytz, dotenv, sortedcontainers, binance, alphalens" >nul 2>&1
 if not errorlevel 1 goto :PKGS_OK
-echo  [Setup] Installing missing packages into global Python (one-time, ~2 min)...
-:: Note: no --upgrade to avoid RECORD-file errors on packages installed outside pip
-!PYTHON_CMD! -m pip install xgboost numpy pandas scikit-learn scipy matplotlib pyarrow psutil statsmodels -q
-if errorlevel 1 (
-    echo  [WARN] Some packages failed via global pip - trying run-env pip...
-    "!RUN_PYTHON!" -m pip install xgboost numpy pandas scikit-learn scipy matplotlib pyarrow psutil statsmodels -q
+if exist "%~dp0requirements.txt" (
+    echo  [Setup] Installing requirements.txt (one-time, ~2 min)...
+    "!RUN_PYTHON!" -m pip install --disable-pip-version-check -r "%~dp0requirements.txt" -q
     if errorlevel 1 (
-        echo  [ERROR] Package install failed in both environments.
-        echo         Check internet connection, then run:
-        echo           pip install xgboost numpy pandas scikit-learn scipy matplotlib pyarrow psutil statsmodels
+        echo  [ERROR] requirements.txt install failed.
+        echo         Run manually: "!RUN_PYTHON!" -m pip install -r "%~dp0requirements.txt"
         echo.
         pause
         exit /b 1
     )
+    echo  [OK] requirements.txt installed
+) else (
+    echo  [Setup] Installing missing core packages (one-time, ~2 min)...
+    "!RUN_PYTHON!" -m pip install --disable-pip-version-check xgboost numpy pandas scikit-learn scipy matplotlib pyarrow psutil statsmodels lightgbm polars duckdb requests websockets pytz python-dotenv sortedcontainers python-binance alphalens-reloaded -q
+    if errorlevel 1 (
+        echo  [ERROR] Package install failed.
+        echo.
+        pause
+        exit /b 1
+    )
+    echo  [OK] Core packages installed
 )
-echo  [OK] Packages installed
 goto :PKGS_DONE
 :PKGS_OK
 echo  [OK] All packages present
 :PKGS_DONE
 echo.
 
+:: -- Step 5: XGBoost CUDA readiness ------------------------------------------
+set CUDA_READY=0
+if "!GPU_FOUND!"=="1" (
+    echo  [Setup] Verifying XGBoost CUDA...
+    "!RUN_PYTHON!" -c "import numpy as np, xgboost as xgb; X=np.random.rand(256, 8).astype('float32'); y=np.array([0, 1] * 128); xgb.XGBClassifier(device='cuda', n_estimators=2, max_depth=2, verbosity=0).fit(X, y)" >nul 2>&1
+    if not errorlevel 1 (
+        set CUDA_READY=1
+        echo  [OK] XGBoost CUDA ready  (RTX 2050 - capped at 2M rows)
+    ) else (
+        echo  [WARN] GPU detected but CUDA probe failed - may fall back to CPU
+    )
+    echo.
+)
+
 :: -- Pre-flight: data directory check ----------------------------------------
 if not exist "%~dp0data\" (
     echo  [ERROR] Data folder not found: %~dp0data
-    echo  Create a 'data' subfolder next to this .bat file and add your .parquet files.
+    echo  Create a 'data' subfolder and add your .parquet files.
     echo.
     pause
     exit /b 1
@@ -190,11 +199,21 @@ if "!GPU_FOUND!"=="0" goto :Q1_CPU_ONLY
 :Q1_LOOP
 echo  [1/2] Select compute device:
 echo.
-echo        [1] GPU  - !GPU_NAME!  (faster ~4x)
+if "!CUDA_READY!"=="1" (
+    echo        [1] GPU  - !GPU_NAME!  (XGBoost CUDA ready, ~4x faster)
+) else (
+    echo        [1] GPU  - !GPU_NAME!  (hardware found, CUDA probe failed)
+)
 echo        [2] CPU  - All cores
 echo.
 set /p Q1="  Your choice (1/2): "
-if "!Q1!"=="1" ( set "COMPUTE_CHOICE=gpu" & set "COMPUTE_LABEL=GPU" & echo  [OK] GPU mode & goto :Q2 )
+if "!Q1!"=="1" (
+    set "COMPUTE_CHOICE=gpu"
+    set "COMPUTE_LABEL=GPU"
+    echo  [OK] GPU mode
+    if "!CUDA_READY!"=="0" echo  [WARN] CUDA probe failed - Python may fall back to CPU
+    goto :Q2
+)
 if "!Q1!"=="2" ( set "COMPUTE_CHOICE=cpu" & set "COMPUTE_LABEL=CPU" & echo  [OK] CPU mode & goto :Q2 )
 echo  [!] Enter 1 or 2.
 echo.
@@ -224,7 +243,7 @@ echo.
 goto :Q2_LOOP
 
 :Q2_NO_SPYDER
-echo  [2/2] Output: Terminal only (Spyder install was skipped or failed)
+echo  [2/2] Output: Terminal only (Spyder not found)
 
 :Q2_DONE
 echo.
@@ -236,11 +255,13 @@ echo ================================================================
 echo.
 echo   Compute  : !COMPUTE_LABEL!
 if "!COMPUTE_CHOICE!"=="gpu" echo   GPU      : !GPU_NAME!
+if "!COMPUTE_CHOICE!"=="gpu" if "!CUDA_READY!"=="0" echo   Note     : CUDA probe failed - may fall back to CPU
 if "!USE_SPYDER!"=="1" (
     echo   Output   : Terminal + Spyder (live charts)
 ) else (
     echo   Output   : Terminal only
 )
+echo   Python   : global (no .venv)
 echo   Data dir : %~dp0data\
 echo   Results  : %~dp0results\
 echo.
@@ -260,7 +281,7 @@ if "!COMPUTE_CHOICE!"=="gpu" (
 :: -- Power plan (non-critical) -----------------------------------------------
 powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c >nul 2>&1
 
-:: -- Launch Spyder (detached - closing it will NOT stop pipeline) ------------
+:: -- Launch Spyder (detached) ------------------------------------------------
 if "!USE_SPYDER!"=="1" (
     echo.
     echo ================================================================
@@ -290,6 +311,7 @@ echo ================================================================
 echo.
 echo  Compute  : !COMPUTE_LABEL!
 if "!COMPUTE_CHOICE!"=="gpu" echo  GPU      : !GPU_NAME!
+echo  Python   : global (no .venv)
 echo  Started  : %date% %time%
 echo  Data     : %~dp0data\
 echo  Results  : %~dp0results\
@@ -317,9 +339,10 @@ if "!EXIT_CODE!"=="0" (
     echo  Pipeline completed successfully!
     echo.
     echo  Output files saved to %~dp0results\
-    echo    ic_analysis.csv          - Factor IC / ICIR scores
-    echo    backtest_pnl.csv         - Daily PnL with fees
-    echo    performance_summary.csv  - Sharpe, Sortino, Calmar
+    echo    weekly_summary_year3.csv - Week-by-week IC and returns
+    echo    all_trades_year3.csv     - Every simulated trade
+    echo    performance_year3.json   - Sharpe, IC, ICIR summary
+    echo    performance_year3.png    - 4-panel chart
     echo.
 ) else (
     color 0C
@@ -328,7 +351,7 @@ if "!EXIT_CODE!"=="0" (
     echo.
     echo  Common fixes:
     echo    No .parquet files?   Add them to %~dp0data\
-    echo    Missing packages?    pip install xgboost numpy pandas scikit-learn scipy matplotlib pyarrow psutil statsmodels
+    echo    Missing packages?    pip install -r requirements.txt
     echo    Python not found?    Reinstall Python 3.10+ with "Add to PATH" checked
     echo.
 )

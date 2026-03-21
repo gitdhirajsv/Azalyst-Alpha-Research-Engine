@@ -6,7 +6,7 @@ def extract_data():
     data = {}
     
     # Root directory
-    root = "d:/Personal Files/Azalyst Alpha Research Engine"
+    root = "D:/Azalyst Alpha Research Engine"
     output_dir = os.path.join(root, "azalyst_output")
     
     # 1. Performance Metrics

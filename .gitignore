@@ -1,50 +1,97 @@
+# ══════════════════════════════════════════════════════════════
+# AZALYST ALPHA RESEARCH ENGINE — .gitignore
+# ══════════════════════════════════════════════════════════════
+
+# ── Python bytecode ──
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
-*.bak
+*.pyd
 
-# Data and output directories
+# ── Virtual environments ──
+.venv/
+venv/
+ENV/
+env/
+.conda/
+
+# ── Data & output directories (large files, never commit) ──
 data/
+results/
 feature_cache/
 models/
 pipeline_checkpoints/
 azalyst_output/
 .azalyst_locks/
-.ipynb_checkpoints/
-.spyder_azalyst/
 
-# Logs
+# ── Jupyter checkpoints ──
+.ipynb_checkpoints/
+
+# ── Logs and debug output ──
 *.log
 *.sqlite
 *.sqlite3
+*_out.txt
+*_log.txt
+*_err.txt
+*debug*.txt
+out*.txt
+err*.txt
+output.txt
+responses.txt
+answers.txt
+gpu_run_output.txt
+gpu_live_run.txt
+pipeline_output.txt
+crash_log.txt
+trace_output.txt
+ANALYSIS_COMPLETE.txt
+simple_test.txt
+fortest.txt
+chcp_test.txt
+chcp_echo_test.txt
+fresh_run*.txt
+full_debug*.txt
+firebase-debug.log
 
-# Environment
-.env
-.venv
-venv/
-ENV/
-env/
+# ── Temp and backup files ──
+.tmp/
+.tmp.driveupload/
+*.bak
+*.tmp
+*.swp
+*~
+Untitled-*.txt
+Untitled-*.bat
+median
+
+# ── Debug/test batch scripts ──
+debug*.bat
+test*.bat
+test_pkg.bat
+
+# ── IDE and editor ──
 .idea/
 .vscode/
+.spyder_azalyst/
+*.sublime-project
+*.sublime-workspace
 
-# Local run artifacts
+# ── Environment files ──
+.env
+.env.*
+
+# ── Local run artifacts ──
 checkpoint.json
 batch_checkpoint.json
 learning_log.csv
 paper_trades.csv
 performance_metrics.csv
 team_log.txt
-
-# Debug and test output files
-*_out.txt
-output.txt
-responses.txt
-gpu_run_output.txt
-pipeline_output.txt
-gpu_live_run.txt
 _b64_*.txt
-debug*.bat
-test_pkg.bat
-test*.bat
-results/
+
+# ── OS files ──
+Thumbs.db
+Desktop.ini
+.DS_Store
