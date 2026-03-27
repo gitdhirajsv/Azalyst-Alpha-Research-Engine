@@ -83,9 +83,14 @@ def load_feature_store(feature_dir: str, max_symbols: int = None) -> dict:
         try:
             df = pd.read_parquet(f)
             if not isinstance(df.index, pd.DatetimeIndex):
-                df.index = pd.to_datetime(df.index, utc=True)
+                if pd.api.types.is_integer_dtype(df.index):
+                    df.index = pd.to_datetime(df.index, unit='ms', utc=True)
+                else:
+                    df.index = pd.to_datetime(df.index, utc=True)
             elif df.index.tz is None:
                 df.index = df.index.tz_localize("UTC")
+            if df.index.max().year < 2018:
+                continue   # 1970 timestamp — skip symbol
             if len(df) > 200:
                 data[f.stem] = df
         except Exception as e:

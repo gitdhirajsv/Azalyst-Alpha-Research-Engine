@@ -50,10 +50,12 @@ def _process_symbol(args: Tuple) -> Tuple[str, bool, str]:
             if ts_col:
                 df.index = pd.to_datetime(
                     df[ts_col],
-                    unit="ms" if df[ts_col].dtype == np.int64 else None,
+                    unit="ms" if pd.api.types.is_integer_dtype(df[ts_col]) else None,
                     utc=True,
                 )
                 df = df.drop(columns=[ts_col])
+            elif pd.api.types.is_integer_dtype(df.index):
+                df.index = pd.to_datetime(df.index, unit='ms', utc=True)
             else:
                 df.index = pd.to_datetime(df.index, utc=True)
 
@@ -61,6 +63,10 @@ def _process_symbol(args: Tuple) -> Tuple[str, bool, str]:
             df.index = df.index.tz_localize("UTC")
 
         df = df.sort_index()
+
+        # ── 1970 timestamp check ─────────────────────────────────────────────
+        if df.index.max().year < 2018:
+            return symbol, False, f"1970 timestamp bug: max={df.index.max()}"
 
         # ── Resample if needed ────────────────────────────────────────────────
         if resample not in ("5min", "5t"):

@@ -239,12 +239,21 @@ def build_feature_store():
             df.columns = [c.lower() for c in df.columns]
 
             if not isinstance(df.index, pd.DatetimeIndex):
-                for tc in ('time', 'timestamp', 'open_time'):
-                    if tc in df.columns:
-                        df = df.set_index(tc)
-                        break
+                ts_col = next((c for c in ('time', 'timestamp', 'open_time') if c in df.columns), None)
+                if ts_col:
+                    unit = 'ms' if pd.api.types.is_integer_dtype(df[ts_col]) else None
+                    df.index = pd.to_datetime(df[ts_col], unit=unit, utc=True)
+                    df = df.drop(columns=[ts_col])
+                elif pd.api.types.is_integer_dtype(df.index):
+                    df.index = pd.to_datetime(df.index, unit='ms', utc=True)
+                else:
+                    df.index = pd.to_datetime(df.index, utc=True)
+            elif df.index.tz is None:
+                df.index = df.index.tz_localize('UTC')
 
             df = df.sort_index()
+            if df.index.max().year < 2018:
+                continue   # 1970 timestamp — skip symbol
             if 'close' not in df.columns:
                 continue
 
@@ -284,14 +293,21 @@ def load_all_symbols(year2_only=False):
 
             # Fix datetime index
             if not isinstance(df.index, pd.DatetimeIndex):
-                for tc in ('time', 'timestamp', 'open_time'):
-                    if tc in df.columns:
-                        df = df.set_index(tc)
-                        break
-            if df.index.tz is None:
-                df.index = pd.to_datetime(df.index, utc=True)
+                ts_col = next((c for c in ('time', 'timestamp', 'open_time') if c in df.columns), None)
+                if ts_col:
+                    unit = 'ms' if pd.api.types.is_integer_dtype(df[ts_col]) else None
+                    df.index = pd.to_datetime(df[ts_col], unit=unit, utc=True)
+                    df = df.drop(columns=[ts_col])
+                elif pd.api.types.is_integer_dtype(df.index):
+                    df.index = pd.to_datetime(df.index, unit='ms', utc=True)
+                else:
+                    df.index = pd.to_datetime(df.index, utc=True)
+            elif df.index.tz is None:
+                df.index = df.index.tz_localize('UTC')
 
             df = df.sort_index()
+            if df.index.max().year < 2018:
+                continue   # 1970 timestamp — skip symbol
             if 'close' not in df.columns:
                 continue
 

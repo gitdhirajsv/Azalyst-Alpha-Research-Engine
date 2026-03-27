@@ -130,10 +130,17 @@ class DataLoader:
                 pass  # already fine
             else:
                 # last resort: parse the row index
-                df.index = pd.to_datetime(df.index, utc=True)
+                if pd.api.types.is_integer_dtype(df.index):
+                    df.index = pd.to_datetime(df.index, unit='ms', utc=True)
+                else:
+                    df.index = pd.to_datetime(df.index, utc=True)
 
             df.index = pd.to_datetime(df.index, utc=True)
             df = df.sort_index()
+
+            # ── 1970 timestamp check ─────────────────────────────────────────
+            if df.index.max().year < 2018:
+                return symbol, None   # 1970 timestamp still present, skip symbol
 
             # ── validate schema ─────────────────────────────────────────────
             missing = DataLoader.REQUIRED_COLS - set(df.columns)
