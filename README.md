@@ -19,7 +19,7 @@ An institutional-style quantitative research platform built as a personal projec
 
 Azalyst Alpha Research Engine is a research infrastructure project for discovering and validating systematic alpha signals in cryptocurrency markets. It is designed as a rigorous quantitative research system — not a trading bot, not a signal service, not a financial product.
 
-At a high level, the engine processes 3+ years of 5-minute OHLCV data across 300+ Binance pairs, engineers 56 cross-sectional features (including WorldQuant-inspired alphas, microstructure signals, and fractionally differentiated price), trains a two-stage XGBoost model using purged K-Fold cross-validation, and validates it strictly out-of-sample on a full year of data it never saw during training. Every signal, every metric, and every trade simulation is logged and explainable.
+At a high level, the engine processes 3+ years of 5-minute OHLCV data across 444 Binance pairs, engineers 56 cross-sectional features (including WorldQuant-inspired alphas, microstructure signals, and fractionally differentiated price), trains a two-stage XGBoost model using purged K-Fold cross-validation, and validates it strictly out-of-sample on a full year of data it never saw during training. Every signal, every metric, and every trade simulation is logged and explainable.
 
 The project exists for a single reason: most open-source crypto research is toy-level — fit a moving average, overfit on in-sample, declare victory. Azalyst is the antithesis. These methods mirror how the top systematic funds structure research, not because we are a fund, but because they are the only honest way to know if your signal is real.
 
@@ -63,7 +63,7 @@ Primary dependencies:
   DATA LAYER              FEATURE ENGINE             SIGNAL SOURCES   
                                                                       
  Polars+DuckDB    56 cross-sectional  Factor scores     
- 300+ coins              features, TF-aware         ML return prob    
+ 444 coins               features, TF-aware         ML return prob    
  26M+ rows               Frac. diff (AFML)          Pump/dump filter  
  3-year 5min             Hurst + FFT                StatArb z-scores  
               
@@ -183,7 +183,7 @@ Year 3 only (never seen during training)
     
 
   Each week:                                                  
-    1. Predict   — rank all symbols by outperformance prob    
+    1. Predict   — rank all 444 symbols by outperformance prob
     2. Meta-size — scale positions by meta-model confidence   
     3. Trade     — long top 15%, short bottom 15%             
     4. Fees      — position-tracked (only new entries pay)    
@@ -247,16 +247,30 @@ Double-click **`RUN_AZALYST.bat`** — guides through 3 prompts then runs fully 
 
 The batch file auto-detects Python, GPU availability, and auto-installs all missing packages on first run.
 
-### Option 2 — Kaggle T4 Notebook (recommended for testing)
+### Option 2 — Kaggle (recommended for full 444-coin run)
 
-Upload **`notebooks/azalyst_kaggle.ipynb`** to Kaggle. Attach the [Binance 5-min dataset](https://www.kaggle.com/datasets/dhirajsuryavanshi/binance-data-5min-300-coins-3years) and enable **GPU T4 x2**. Run all cells.
+The Kaggle pipeline is split into two notebooks to stay within Kaggle's 20GB RAM / 20GB disk limits. Run them in order.
 
-- **Input**: `/kaggle/input/datasets/dhirajsuryavanshi/binance-data-5min-300-coins-3years`
-- **Output**: `/kaggle/working/azalyst_output`
-- **VRAM cap**: 4M rows (T4 16GB)
-- **Resource guards**: RAM monitoring, disk checks, periodic GC — stays within Kaggle's 30GB RAM / 57.6GB disk / 12hr session limits
+**Step 1 — Build Feature Cache** (`notebooks/azalyst_1_feature_cache.ipynb`)
 
-All 300+ symbols processed. Cross-sectional ranking (top/bottom 15%) uses the full universe.
+Upload to Kaggle. Attach the [Binance 5-min dataset](https://www.kaggle.com/datasets/dhirajsuryavanshi/binance-data-5min-300-coins-3years) as input. Enable **Internet** (required for Kaggle API uploads).
+
+- Loops all 444 symbols automatically across 9 batches of 50 — no manual re-runs
+- Builds all 56 features per coin, uploads each `.parquet` to your Kaggle Dataset (`azalyst-feature-cache`)
+- Re-run safe: already-uploaded coins are automatically skipped
+- **Runtime**: ~3 hours | **Output**: `your-username/azalyst-feature-cache` Kaggle Dataset
+
+**Step 2 — Train + Backtest** (`notebooks/azalyst_2_train.ipynb`)
+
+Upload to Kaggle. Attach `your-username/azalyst-feature-cache` as input dataset. Enable **GPU T4**.
+
+- Loads all 444 cached feature files — trains XGBoost on Years 1+2
+- Walk-forward backtest on Year 3 — cross-sectional ranking (top/bottom 15%) uses the full 444-coin universe
+- Quarterly retrain + meta-labeling confidence sizing throughout Year 3
+- **VRAM cap**: 4M rows (T4 16GB) | **RAM guard**: stride-sampling keeps usage under 30GB
+- **Output**: `/kaggle/working/azalyst_output/azalyst_results.zip`
+
+> **Run order**: Notebook 1 must fully complete before running Notebook 2. After Notebook 1 finishes, go to your Kaggle Dataset page and confirm all files are present, then attach it to Notebook 2.
 
 ### Option 3 — Local Jupyter (RTX 2050 / any GPU)
 
@@ -303,7 +317,7 @@ Place Binance 5-minute parquet files in `data/`:
 timestamp | open | high | low | close | volume
 ```
 
-300+ symbols  3 years  5-min bars  26M rows.
+444 symbols  3 years  5-min bars  26M+ rows.
 
 ---
 
@@ -350,9 +364,14 @@ timestamp | open | high | low | close | volume
 | `azalyst_report.py` | Research report + live signal scanner |
 | `azalyst_auditor.py` | Binance copy-trader strategy auditor |
 | `monitor_dashboard.py` | Browser-based live monitor (`http://127.0.0.1:8080`) |
-| `azalyst-alpha-research-engine.ipynb` | VSCode Jupyter notebook — local GPU |
-| `notebooks/azalyst_kaggle.ipynb` | Self-contained Kaggle T4 notebook — resource-guarded, 4M rows, full pipeline |
-| `notebooks/azalyst_jupyter.ipynb` | Self-contained local Jupyter notebook — RTX 2050 optimised, 2M rows |
+
+### Notebooks
+
+| File | Purpose |
+|---|---|
+| `notebooks/azalyst_jupyter.ipynb` | Local GPU notebook — RTX 2050 optimised, 2M row VRAM cap, full pipeline in one run |
+| `notebooks/azalyst_1_feature_cache.ipynb` | Kaggle Step 1 — builds 56 features for all 444 coins, uploads to Kaggle Dataset in 9 automatic batches |
+| `notebooks/azalyst_2_train.ipynb` | Kaggle Step 2 — loads feature cache, trains model, runs Year 3 walk-forward on full 444-coin universe |
 
 ---
 
@@ -398,7 +417,7 @@ IC > 0.05 with ICIR > 1.0 is institutional-quality signal strength. See Grinold 
 | VRAM guard | 2M rows (RTX 2050)  4M rows (T4) |
 | Train/test | Year 1+2 / Year 3 (strict OOS) |
 | Retrain | Every 13 weeks (quarterly) |
-| Universe | 300+ coins, cross-sectional pooling |
+| Universe | 444 coins, cross-sectional pooling |
 | Horizon | 4H (48  5-min bars) |
 | Portfolio | Long top 15%, short bottom 15% |
 | Fees | 0.2% round-trip, position-tracked |
@@ -439,6 +458,7 @@ IC > 0.05 with ICIR > 1.0 is institutional-quality signal strength. See Grinold 
 **OOM / freeze during loading:** reduce `MAX_TRAIN_ROWS` in config or use `LOAD_STRIDE` guard (auto-activates at >8M rows).
 **Spyder not found:** the BAT auto-installs Spyder via pip if not detected — check `azalyst.log` for install output.
 **Pipeline closes immediately:** confirm Python path has no spaces; use `RUN_AZALYST.bat` which handles quoted paths automatically.
+**Kaggle dataset shows 1 file after Notebook 1:** the `kaggle_list_files()` counter is cosmetic — check your actual dataset page. All uploaded files will be visible there regardless of what the log shows.
 
 ---
 
