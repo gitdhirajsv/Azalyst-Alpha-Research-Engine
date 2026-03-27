@@ -247,30 +247,40 @@ Double-click **`RUN_AZALYST.bat`** — guides through 3 prompts then runs fully 
 
 The batch file auto-detects Python, GPU availability, and auto-installs all missing packages on first run.
 
-### Option 2 — Kaggle (recommended for full 444-coin run)
+### Option 2 — Kaggle + Google Drive (recommended for full 444-coin run)
 
-The Kaggle pipeline is split into two notebooks to stay within Kaggle's 20GB RAM / 20GB disk limits. Run them in order.
+The Kaggle pipeline is split into two notebooks. Feature files are stored in **Google Drive** as the intermediate cache — this sidesteps Kaggle's 20GB disk/output limit entirely (444 coins × ~20MB compressed = ~9GB total). Run them in order.
+
+#### One-time Google Drive setup (before first run)
+1. Go to [console.cloud.google.com](https://console.cloud.google.com) → create a project → enable **Google Drive API**
+2. Create a **Service Account** → Keys → Add Key → JSON → download the key file
+3. In Google Drive, create a folder named `azalyst-feature-cache` — copy the folder ID from the URL
+4. Share the folder with the service account email (ends in `@...iam.gserviceaccount.com`) — **Editor** access
+5. In both Kaggle notebooks → **Add-ons → Secrets** → add secret `GDRIVE_SERVICE_KEY` (paste full JSON key contents)
+6. Set `GDRIVE_FOLDER_ID` in Cell 1 of both notebooks to your folder ID
 
 **Step 1 — Build Feature Cache** (`notebooks/azalyst_1_feature_cache.ipynb`)
 
-Upload to Kaggle. Attach the [Binance 5-min dataset](https://www.kaggle.com/datasets/dhirajsuryavanshi/binance-data-5min-300-coins-3years) as input. Enable **Internet** (required for Kaggle API uploads).
+Upload to Kaggle. Attach the [Binance 5-min dataset](https://www.kaggle.com/datasets/dhirajsuryavanshi/binance-data-5min-300-coins-3years) as input. Enable **Internet**.
 
 - Loops all 444 symbols automatically across 9 batches of 50 — no manual re-runs
-- Builds all 56 features per coin, uploads each `.parquet` to your Kaggle Dataset (`azalyst-feature-cache`)
-- Re-run safe: already-uploaded coins are automatically skipped
-- **Runtime**: ~3 hours | **Output**: `your-username/azalyst-feature-cache` Kaggle Dataset
+- Builds 56 features per coin with `zstd` compression (~20MB per file vs ~80MB uncompressed)
+- Uploads each `.parquet` directly to Google Drive, then deletes the local copy — disk never exceeds ~400MB
+- Resume-safe: files already in Drive are automatically skipped on re-run
+- **Runtime**: ~3–4 hours | **Output**: 444 `.parquet` files in your Google Drive folder
 
 **Step 2 — Train + Backtest** (`notebooks/azalyst_2_train.ipynb`)
 
-Upload to Kaggle. Attach `your-username/azalyst-feature-cache` as input dataset. Enable **GPU T4**.
+Upload to Kaggle. Enable **GPU T4**. Add `GDRIVE_SERVICE_KEY` secret (same as above).
 
-- Loads all 444 cached feature files — trains XGBoost on Years 1+2
+- Downloads the full feature cache from Google Drive into `/kaggle/working/feature_cache/` (~9GB)
+- Trains XGBoost base model + Meta-labeling model on Years 1+2
 - Walk-forward backtest on Year 3 — cross-sectional ranking (top/bottom 15%) uses the full 444-coin universe
 - Quarterly retrain + meta-labeling confidence sizing throughout Year 3
 - **VRAM cap**: 4M rows (T4 16GB) | **RAM guard**: stride-sampling keeps usage under 30GB
 - **Output**: `/kaggle/working/azalyst_output/azalyst_results.zip`
 
-> **Run order**: Notebook 1 must fully complete before running Notebook 2. After Notebook 1 finishes, go to your Kaggle Dataset page and confirm all files are present, then attach it to Notebook 2.
+> **Run order**: Notebook 1 must fully complete before running Notebook 2. After Notebook 1 finishes, confirm all ~444 files appear in your Google Drive folder, then run Notebook 2.
 
 ### Option 3 — Local Jupyter (RTX 2050 / any GPU)
 
@@ -370,8 +380,8 @@ timestamp | open | high | low | close | volume
 | File | Purpose |
 |---|---|
 | `notebooks/azalyst_jupyter.ipynb` | Local GPU notebook — RTX 2050 optimised, 2M row VRAM cap, full pipeline in one run |
-| `notebooks/azalyst_1_feature_cache.ipynb` | Kaggle Step 1 — builds 56 features for all 444 coins, uploads to Kaggle Dataset in 9 automatic batches |
-| `notebooks/azalyst_2_train.ipynb` | Kaggle Step 2 — loads feature cache, trains model, runs Year 3 walk-forward on full 444-coin universe |
+| `notebooks/azalyst_1_feature_cache.ipynb` | Kaggle Step 1 — builds 56 features for all 444 coins with zstd compression, uploads each file to Google Drive immediately, deletes local copy to stay within disk limits |
+| `notebooks/azalyst_2_train.ipynb` | Kaggle Step 2 — downloads feature cache from Google Drive, trains model, runs Year 3 walk-forward on full 444-coin universe |
 
 ---
 
@@ -458,7 +468,7 @@ IC > 0.05 with ICIR > 1.0 is institutional-quality signal strength. See Grinold 
 **OOM / freeze during loading:** reduce `MAX_TRAIN_ROWS` in config or use `LOAD_STRIDE` guard (auto-activates at >8M rows).
 **Spyder not found:** the BAT auto-installs Spyder via pip if not detected — check `azalyst.log` for install output.
 **Pipeline closes immediately:** confirm Python path has no spaces; use `RUN_AZALYST.bat` which handles quoted paths automatically.
-**Kaggle dataset shows 1 file after Notebook 1:** the `kaggle_list_files()` counter is cosmetic — check your actual dataset page. All uploaded files will be visible there regardless of what the log shows.
+**Google Drive shows fewer files than expected after Notebook 1:** re-run Notebook 1 — the skip logic checks Drive on each batch, so it will resume from where it stopped without re-uploading existing files.
 
 ---
 
