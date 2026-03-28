@@ -17,3 +17,5 @@ websockets
 psutil
 sortedcontainers
 alphalens-reloaded
+shap
+pytest

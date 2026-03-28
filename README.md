@@ -212,6 +212,89 @@ REGIME DETECTOR (4-state)
 
 ---
 
+## v4 Engine — Regime-Aware Walk-Forward
+
+The v4 engine (`azalyst_v4_engine.py`) is a complete rewrite addressing the IC inversion problem observed in v3. Key changes:
+
+### Expanding Training Window
+
+Instead of fixed Y1+Y2 training, the model expands its training window over time:
+
+```
+Walk Week 1:   Train on Y1                    → Predict Y2 Week 1
+Walk Week 13:  Train on Y1 + Y2[:13wk]        → Predict Y2 Week 14
+Walk Week 26:  Train on Y1 + Y2[:26wk]        → Predict Y2 Week 27
+...
+Walk Week 52:  Train on Y1 + Y2               → Predict Y3 Week 1
+Walk Week 65:  Train on Y1 + Y2 + Y3[:13wk]   → Predict Y3 Week 14
+```
+
+### Regime-Aware Feature Selection
+
+Every 2 weeks, the engine computes cross-sectional Spearman IC for each of the 56 features. Features with consistently negative IC (rolling 8-week mean < -0.02) are dropped from the next retraining cycle. Minimum 20 features always retained.
+
+### Risk Integration
+
+The `RiskManager` module (VaR, CVaR, HRP, MVO) is wired directly into the walk-forward loop. Position sizing is scaled down when portfolio VaR exceeds the risk cap (3% default). Meta-labeling confidence is multiplied by the risk scale factor.
+
+### Drawdown Kill-Switch
+
+If cumulative max drawdown exceeds -15% (configurable via `--max-dd`), all trading halts for 4 weeks. The engine resumes automatically after the cooling period.
+
+### SHAP Explainability
+
+After every training cycle (base + quarterly retrains), TreeExplainer computes SHAP values for all active features. Results are saved to both `results/shap/` CSVs and the SQLite database for cross-run comparison.
+
+### SQLite Persistence
+
+All pipeline outputs are stored in `results/azalyst.db` via the `AzalystDB` class:
+- **runs** — start/end timestamps, config, status
+- **trades** — every simulated trade with meta-sizing
+- **weekly_metrics** — IC, returns, drawdown, regime per week
+- **model_artifacts** — paths, AUC, IC, ICIR per training cycle
+- **shap_values** — feature importance rankings per model
+- **feature_ic** — per-feature IC history for selection tracking
+- **performance_summary** — final aggregated metrics per run
+
+### Running v4
+
+```bash
+# GPU run
+python azalyst_v4_engine.py --gpu
+
+# CPU run with custom drawdown limit
+python azalyst_v4_engine.py --max-dd -0.10
+
+# Skip SHAP for faster iteration
+python azalyst_v4_engine.py --gpu --no-shap
+
+# Custom run ID
+python azalyst_v4_engine.py --gpu --run-id experiment_01
+```
+
+### v4 Outputs
+
+| File | Description |
+|---|---|
+| `results/all_trades_v4.csv` | All simulated trades with meta-sizing |
+| `results/weekly_summary_v4.csv` | Week-by-week IC, returns, regime, drawdown |
+| `results/performance_v4.json` | Final metrics incl. Y2 vs Y3 split analysis |
+| `results/azalyst.db` | SQLite database with full run history |
+| `results/shap/shap_importance_v4_*.csv` | SHAP feature importance per training |
+| `results/models/model_v4_*.json` | XGBoost models (base + quarterly retrains) |
+
+---
+
+## Testing
+
+```bash
+pytest -v tests/test_azalyst.py
+```
+
+Tests cover: SQLite persistence, feature engineering, risk module, v4 engine components, signal combiner, and integration roundtrip.
+
+---
+
 ## Execution Simulation
 
 ### Position-Tracked Fee Model
@@ -361,6 +444,8 @@ timestamp | open | high | low | close | volume
 |---|---|
 | `azalyst_orchestrator.py` | End-to-end research pipeline |
 | `azalyst_local_gpu.py` | GPU test + standalone walk-forward runner (RTX 2050) |
+| `azalyst_v4_engine.py` | **v4 engine** — regime-aware walk-forward, expanding window, risk integration, kill-switch, SHAP, SQLite |
+| `azalyst_db.py` | SQLite persistence layer — trades, metrics, SHAP, model artifacts |
 | `azalyst_data.py` | Polars + DuckDB high-performance data layer |
 | `azalyst_execution.py` | Order book simulation, smart order routing, VWAP/TWAP |
 | `azalyst_tf_utils.py` | Timeframe-aware bar count utilities |

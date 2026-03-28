@@ -289,7 +289,7 @@ if "!USE_SPYDER!"=="1" (
     echo ================================================================
     echo.
     echo  Spyder opens in background. Once loaded:
-    echo    - Open azalyst_spyder_monitor.py and press F5 for live charts
+    echo    - Open monitor_dashboard.py and press F5 for live charts
     echo    - Closing Spyder will NOT stop the pipeline
     echo.
     if "!SPYDER_MODE!"=="PATH" (
@@ -315,8 +315,8 @@ echo  Python   : global (no .venv)
 echo  Started  : %date% %time%
 echo  Data     : %~dp0data\
 echo  Results  : %~dp0results\
-set "GPU_SCRIPT=%~dp0azalyst_local_gpu.py"
-set "CPU_SCRIPT=%~dp0azalyst_engine.py"
+set "GPU_SCRIPT=%~dp0azalyst_v4_engine.py"
+set "CPU_SCRIPT=%~dp0azalyst_v4_engine.py"
 if "!COMPUTE_CHOICE!"=="gpu" (
     for %%I in ("!GPU_SCRIPT!") do echo  Script   : %%~fI  [%%~tI]
 ) else (
@@ -327,9 +327,9 @@ echo ----------------------------------------------------------------
 echo.
 
 if "!COMPUTE_CHOICE!"=="gpu" (
-    "!RUN_PYTHON!" "!GPU_SCRIPT!" --gpu --data-dir "%~dp0data" --out-dir "%~dp0results"
+    "!RUN_PYTHON!" "!GPU_SCRIPT!" --gpu --data-dir "%~dp0data" --feature-dir "%~dp0feature_cache" --out-dir "%~dp0results"
 ) else (
-    "!RUN_PYTHON!" "!CPU_SCRIPT!" --data-dir "%~dp0data" --out-dir "%~dp0results"
+    "!RUN_PYTHON!" "!CPU_SCRIPT!" --data-dir "%~dp0data" --feature-dir "%~dp0feature_cache" --out-dir "%~dp0results"
 )
 
 set EXIT_CODE=!errorlevel!
@@ -346,10 +346,10 @@ if "!EXIT_CODE!"=="0" (
     echo  Pipeline completed successfully!
     echo.
     echo  Output files saved to %~dp0results\
-    echo    weekly_summary_year3.csv - Week-by-week IC and returns
-    echo    all_trades_year3.csv     - Every simulated trade
-    echo    performance_year3.json   - Sharpe, IC, ICIR summary
-    echo    performance_year3.png    - 4-panel chart
+    echo    weekly_summary_v4.csv    - Week-by-week IC and returns
+    echo    all_trades_v4.csv        - Every simulated trade
+    echo    performance_v4.json      - Sharpe, IC, ICIR summary
+    echo    azalyst.db               - SQLite database (full history)
     echo.
 ) else (
     color 0C
