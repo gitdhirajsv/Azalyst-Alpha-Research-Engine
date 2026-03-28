@@ -27,7 +27,7 @@ for %%d in (
 
 echo.
 echo  ============================================================
-echo    AZALYST ALPHA RESEARCH ENGINE  v3.2
+echo    AZALYST ALPHA RESEARCH ENGINE  v4.0
 echo    XGBoost  ^|  56 Factors  ^|  Binance OHLCV 5m
 echo  ============================================================
 echo.
@@ -327,9 +327,9 @@ echo ----------------------------------------------------------------
 echo.
 
 if "!COMPUTE_CHOICE!"=="gpu" (
-    "!RUN_PYTHON!" "!GPU_SCRIPT!" --gpu --data-dir "%~dp0data" --feature-dir "%~dp0feature_cache" --out-dir "%~dp0results"
+    "!RUN_PYTHON!" -u "!GPU_SCRIPT!" --gpu --data-dir "%~dp0data" --feature-dir "%~dp0feature_cache" --out-dir "%~dp0results"
 ) else (
-    "!RUN_PYTHON!" "!CPU_SCRIPT!" --data-dir "%~dp0data" --feature-dir "%~dp0feature_cache" --out-dir "%~dp0results"
+    "!RUN_PYTHON!" -u "!CPU_SCRIPT!" --data-dir "%~dp0data" --feature-dir "%~dp0feature_cache" --out-dir "%~dp0results"
 )
 
 set EXIT_CODE=!errorlevel!

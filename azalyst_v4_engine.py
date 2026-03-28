@@ -557,7 +557,8 @@ def train_model(X, y, y_ret, cuda_api, features_used, label=""):
 
     final = xgb.XGBClassifier(**make_xgb_params(cuda_api))
     split = int(len(Xs) * 0.9)
-    final.fit(Xs[:split], y[:split], eval_set=[(Xs[split:], y[split:])], verbose=False)
+    final.fit(Xs[:split], y[:split], eval_set=[(Xs[split:], y[split:])],
+              verbose=100)
 
     importance = pd.Series(final.feature_importances_, index=features_used,
                            name="importance").sort_values(ascending=False)
@@ -877,12 +878,14 @@ def main():
     os.makedirs(f"{RESULTS_DIR}/models", exist_ok=True)
 
     print(f"\n  Training base model (GPU={'YES' if cuda_api else 'NO'})...")
+    sys.stdout.flush()
     t0 = time.time()
     base_model, base_scaler, importance, mean_auc, mean_ic, icir = train_model(
         X_train, y_train, y_ret, cuda_api, active_features, label="base_y1"
     )
     print(f"  AUC={mean_auc:.4f}  IC={mean_ic:.4f}  ICIR={icir:.4f}  "
           f"({time.time()-t0:.1f}s)")
+    sys.stdout.flush()
 
     base_model.save_model(f"{RESULTS_DIR}/models/model_v4_base.json")
     with open(f"{RESULTS_DIR}/models/scaler_v4_base.pkl", "wb") as f:
@@ -905,6 +908,7 @@ def main():
 
     # Meta model
     print("\n  Training meta-labeling model...")
+    sys.stdout.flush()
     meta_model, meta_scaler = train_meta_model(
         base_model, base_scaler, X_train, y_train, cuda_api,
         active_features, label="meta_y1"
@@ -929,6 +933,7 @@ def main():
     print(f"\nSTEP 4+5: Walk-forward  ({walk_start.date()} -> {global_max.date()})\n")
     print(f"  Y2 zone (good): {walk_start.date()} -> {y2_end.date()}")
     print(f"  Y3 zone (flip): {y2_end.date()} -> {global_max.date()}\n")
+    sys.stdout.flush()
 
     weeks = pd.date_range(start=walk_start, end=global_max, freq="W-MON")
     if len(weeks) < 2:
@@ -1096,12 +1101,11 @@ def main():
         db.insert_weekly_metric(run_id, metric)
         db.insert_trades(run_id, trades)
 
-        if week_num % 4 == 0 or week_num <= 2:
-            rolling = np.mean(weekly_returns[-4:]) * 100
-            print(f"  Week {week_num:3d} [{zone}]: {len(trades):4d} trades | "
-                  f"ret={week_ret*100:+.2f}% | IC={week_ic:+.4f} | "
-                  f"cum={cum_ret*100:+.1f}% | DD={max_dd*100:.1f}% | "
-                  f"{regime}")
+        print(f"  Week {week_num:3d} [{zone}]: {len(trades):4d} trades | "
+              f"ret={week_ret*100:+.2f}% | IC={week_ic:+.4f} | "
+              f"cum={cum_ret*100:+.1f}% | DD={max_dd*100:.1f}% | "
+              f"{regime}")
+        sys.stdout.flush()
 
     # ── Save results ──────────────────────────────────────────────────────────
     trades_df = pd.DataFrame(all_trades)
