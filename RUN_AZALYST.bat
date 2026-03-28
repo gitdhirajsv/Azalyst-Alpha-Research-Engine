@@ -315,14 +315,21 @@ echo  Python   : global (no .venv)
 echo  Started  : %date% %time%
 echo  Data     : %~dp0data\
 echo  Results  : %~dp0results\
+set "GPU_SCRIPT=%~dp0azalyst_local_gpu.py"
+set "CPU_SCRIPT=%~dp0azalyst_engine.py"
+if "!COMPUTE_CHOICE!"=="gpu" (
+    for %%I in ("!GPU_SCRIPT!") do echo  Script   : %%~fI  [%%~tI]
+) else (
+    for %%I in ("!CPU_SCRIPT!") do echo  Script   : %%~fI  [%%~tI]
+)
 echo.
 echo ----------------------------------------------------------------
 echo.
 
 if "!COMPUTE_CHOICE!"=="gpu" (
-    "!RUN_PYTHON!" azalyst_local_gpu.py --gpu --data-dir "%~dp0data" --out-dir "%~dp0results"
+    "!RUN_PYTHON!" "!GPU_SCRIPT!" --gpu --data-dir "%~dp0data" --out-dir "%~dp0results"
 ) else (
-    "!RUN_PYTHON!" azalyst_engine.py --data-dir "%~dp0data" --out-dir "%~dp0results"
+    "!RUN_PYTHON!" "!CPU_SCRIPT!" --data-dir "%~dp0data" --out-dir "%~dp0results"
 )
 
 set EXIT_CODE=!errorlevel!

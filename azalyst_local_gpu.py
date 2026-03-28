@@ -449,6 +449,149 @@ def build_training_matrix(symbols: dict[str, pd.DataFrame],
 #  STEP 4: Train model (Purged K-Fold + RobustScaler)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def build_training_matrix_optimized(symbols: dict[str, pd.DataFrame],
+                                    train_end) -> tuple:
+    """
+    Memory-safe replacement for build_training_matrix().
+
+    It keeps the cross-sectional median logic exact, but avoids concatenating
+    a full 50M+ row feature frame before the later VRAM guard trims it down.
+    """
+    print(f"  Building training matrix up to {pd.Timestamp(train_end).date()}...")
+
+    eligible_symbols: list[str] = []
+    future_ret_by_symbol: dict[str, pd.Series] = {}
+    total_candidate_rows = 0
+
+    for sym, df in symbols.items():
+        try:
+            if "future_ret" not in df.columns:
+                continue
+
+            train_mask = df.index < train_end
+            row_count = int(train_mask.sum())
+            if row_count < HORIZON_BARS + 50:
+                continue
+
+            eligible_symbols.append(sym)
+            future_ret_by_symbol[sym] = df.loc[train_mask, "future_ret"]
+            total_candidate_rows += row_count
+        except Exception:
+            pass
+
+    if not future_ret_by_symbol:
+        print("  ERROR: no valid symbol data found")
+        return None, None, None
+
+    print(f"  Candidate pool: {total_candidate_rows:,} rows × {len(eligible_symbols)} symbols")
+
+    # Only align future_ret cross-sectionally; this wide panel is small enough
+    # to fit comfortably and gives the exact per-timestamp median label target.
+    future_ret_matrix = pd.concat(future_ret_by_symbol, axis=1, sort=True)
+    timestamp_medians = future_ret_matrix.median(axis=1, skipna=True).astype(np.float32)
+    del future_ret_matrix, future_ret_by_symbol
+    gc.collect()
+
+    rng = np.random.default_rng(42)
+    sample_prob = min(1.0, MAX_TRAIN_ROWS / max(total_candidate_rows, 1))
+    if sample_prob < 1.0:
+        print(f"  Early row sampling: {sample_prob*100:.2f}% of rows before feature materialization")
+
+    initial_rows = min(
+        total_candidate_rows,
+        int(MAX_TRAIN_ROWS * 1.05) if sample_prob < 1.0 else total_candidate_rows,
+    )
+    feat = np.empty((max(initial_rows, 1), len(FEATURE_COLS)), dtype=np.float32)
+    labels = np.empty(max(initial_rows, 1), dtype=np.float32)
+    rets = np.empty(max(initial_rows, 1), dtype=np.float32)
+    timestamps = np.empty(max(initial_rows, 1), dtype=np.int64)
+    cursor = 0
+
+    def ensure_capacity(required_rows: int) -> None:
+        nonlocal feat, labels, rets, timestamps
+        if required_rows <= len(labels):
+            return
+
+        new_rows = max(required_rows, int(len(labels) * 1.25))
+        feat_new = np.empty((new_rows, len(FEATURE_COLS)), dtype=np.float32)
+        labels_new = np.empty(new_rows, dtype=np.float32)
+        rets_new = np.empty(new_rows, dtype=np.float32)
+        timestamps_new = np.empty(new_rows, dtype=np.int64)
+
+        feat_new[:cursor] = feat[:cursor]
+        labels_new[:cursor] = labels[:cursor]
+        rets_new[:cursor] = rets[:cursor]
+        timestamps_new[:cursor] = timestamps[:cursor]
+
+        feat = feat_new
+        labels = labels_new
+        rets = rets_new
+        timestamps = timestamps_new
+
+    for sym in eligible_symbols:
+        try:
+            df = symbols[sym]
+            train_mask = df.index < train_end
+            subset = df.loc[train_mask, FEATURE_COLS + ["future_ret"]]
+            if len(subset) < HORIZON_BARS + 50:
+                continue
+
+            feat_arr = subset[FEATURE_COLS].to_numpy(dtype=np.float32, copy=False)
+            ret_arr = subset["future_ret"].to_numpy(dtype=np.float32, copy=False)
+            med_arr = timestamp_medians.reindex(subset.index).to_numpy(dtype=np.float32, copy=False)
+
+            valid = np.isfinite(feat_arr).all(axis=1) & np.isfinite(ret_arr) & np.isfinite(med_arr)
+            if sample_prob < 1.0:
+                valid &= rng.random(len(valid)) < sample_prob
+
+            keep = np.flatnonzero(valid)
+            if len(keep) == 0:
+                continue
+
+            end = cursor + len(keep)
+            ensure_capacity(end)
+
+            feat[cursor:end] = feat_arr[keep]
+            labels[cursor:end] = (ret_arr[keep] > med_arr[keep]).astype(np.float32)
+            rets[cursor:end] = ret_arr[keep]
+            timestamps[cursor:end] = subset.index.asi8[keep]
+            cursor = end
+        except Exception:
+            pass
+
+    feat = feat[:cursor]
+    labels = labels[:cursor]
+    rets = rets[:cursor]
+    timestamps = timestamps[:cursor]
+
+    if len(feat) < 50:
+        print("  ERROR: fewer than 50 valid rows after cleaning")
+        return None, None, None
+
+    if len(feat) > MAX_TRAIN_ROWS:
+        idx = rng.choice(len(feat), MAX_TRAIN_ROWS, replace=False)
+        feat = feat[idx]
+        labels = labels[idx]
+        rets = rets[idx]
+        timestamps = timestamps[idx]
+        print(f"  VRAM guard: capped at {MAX_TRAIN_ROWS:,} rows")
+
+    order = np.argsort(timestamps, kind="mergesort")
+    feat = feat[order]
+    labels = labels[order]
+    rets = rets[order]
+
+    print(f"  Training matrix: {len(feat):,} rows × {len(FEATURE_COLS)} features  |  "
+          f"Label balance: {labels.mean()*100:.1f}% positive (target ~50%)")
+
+    del timestamp_medians, timestamps
+    gc.collect()
+    return feat, labels, rets
+
+
+build_training_matrix = build_training_matrix_optimized
+
+
 class PurgedTimeSeriesCV:
     def __init__(self, n_splits=5, gap=48):
         self.n_splits = n_splits
@@ -464,6 +607,29 @@ class PurgedTimeSeriesCV:
             if val_end > n:
                 break
             yield np.arange(0, train_end), np.arange(val_start, val_end)
+
+
+def _artifact_feature_count(obj) -> int | None:
+    value = getattr(obj, "n_features_in_", None)
+    if value is not None:
+        try:
+            return int(value)
+        except Exception:
+            pass
+
+    get_booster = getattr(obj, "get_booster", None)
+    if callable(get_booster):
+        try:
+            return int(get_booster().num_features())
+        except Exception:
+            pass
+
+    return None
+
+
+def _artifact_matches_features(obj, expected_features: int) -> bool:
+    actual = _artifact_feature_count(obj)
+    return actual is None or actual == expected_features
 
 
 def train_model(X, y, y_ret, cuda_api, label=""):
@@ -739,14 +905,49 @@ def main():
     print(f"\nSTEP 4: Train base model  "
           f"(GPU={'YES - RTX 2050 CUDA' if cuda_api else 'NO - CPU'})\n")
 
+    expected_base_features = len(FEATURE_COLS)
+    base_retrained = False
+
     if os.path.exists(base_model_path) and os.path.exists(base_scaler_path):
         print("  Loading cached base model...")
-        BASE_MODEL = xgb.XGBClassifier()
-        BASE_MODEL.load_model(base_model_path)
-        with open(base_scaler_path, "rb") as f:
-            BASE_SCALER = pickle.load(f)
-        print("  Loaded OK")
+        try:
+            BASE_MODEL = xgb.XGBClassifier()
+            BASE_MODEL.load_model(base_model_path)
+            with open(base_scaler_path, "rb") as f:
+                BASE_SCALER = pickle.load(f)
+
+            model_features = _artifact_feature_count(BASE_MODEL)
+            scaler_features = _artifact_feature_count(BASE_SCALER)
+            if not _artifact_matches_features(BASE_MODEL, expected_base_features):
+                raise ValueError(
+                    f"base model expects {model_features} features, current config uses {expected_base_features}"
+                )
+            if not _artifact_matches_features(BASE_SCALER, expected_base_features):
+                raise ValueError(
+                    f"base scaler expects {scaler_features} features, current config uses {expected_base_features}"
+                )
+
+            print("  Loaded OK")
+        except Exception as e:
+            print(f"  Cached base artifacts are stale/incompatible: {e}")
+            print("  Re-training base model with current feature set...")
+            base_retrained = True
+            t0 = time.time()
+            BASE_MODEL, BASE_SCALER, importance, mean_auc, mean_ic, icir = train_model(
+                X_train, y_train, y_ret, cuda_api, label="base_y1y2"
+            )
+            BASE_MODEL.save_model(base_model_path)
+            with open(base_scaler_path, "wb") as f:
+                pickle.dump(BASE_SCALER, f)
+            importance.to_csv(f"{RESULTS_DIR}/feature_importance_base.csv")
+            print(f"  AUC={mean_auc:.4f}  IC={mean_ic:.4f}  ICIR={icir:.4f}  "
+                  f"({time.time()-t0:.1f}s)")
+            with open(f"{RESULTS_DIR}/train_summary.json", "w") as f:
+                json.dump({"mean_auc": round(mean_auc, 5), "mean_ic": round(mean_ic, 5),
+                           "icir": round(icir, 5), "n_rows": int(len(X_train)),
+                           "use_gpu": cuda_api is not None}, f, indent=2)
     else:
+        base_retrained = True
         t0 = time.time()
         BASE_MODEL, BASE_SCALER, importance, mean_auc, mean_ic, icir = train_model(
             X_train, y_train, y_ret, cuda_api, label="base_y1y2"
@@ -766,12 +967,44 @@ def main():
     meta_model_path  = f"{RESULTS_DIR}/models/meta_model_base.pkl"
     meta_scaler_path = f"{RESULTS_DIR}/models/meta_scaler_base.pkl"
     META_MODEL = META_SCALER = None
+    expected_meta_features = len(FEATURE_COLS) + 1
 
-    if os.path.exists(meta_model_path) and os.path.exists(meta_scaler_path):
+    if (not base_retrained and os.path.exists(meta_model_path)
+            and os.path.exists(meta_scaler_path)):
         print("  Loading cached meta model...")
-        with open(meta_model_path, "rb") as f: META_MODEL = pickle.load(f)
-        with open(meta_scaler_path, "rb") as f: META_SCALER = pickle.load(f)
+        try:
+            with open(meta_model_path, "rb") as f:
+                META_MODEL = pickle.load(f)
+            with open(meta_scaler_path, "rb") as f:
+                META_SCALER = pickle.load(f)
+
+            model_features = _artifact_feature_count(META_MODEL)
+            scaler_features = _artifact_feature_count(META_SCALER)
+            if not _artifact_matches_features(META_MODEL, expected_meta_features):
+                raise ValueError(
+                    f"meta model expects {model_features} features, current config uses {expected_meta_features}"
+                )
+            if not _artifact_matches_features(META_SCALER, expected_meta_features):
+                raise ValueError(
+                    f"meta scaler expects {scaler_features} features, current config uses {expected_meta_features}"
+                )
+
+            print("  Loaded OK")
+        except Exception as e:
+            print(f"  Cached meta artifacts are stale/incompatible: {e}")
+            print("  Re-training meta-labeling model with current feature set...")
+            META_MODEL = META_SCALER = None
+            META_MODEL, META_SCALER = train_meta_model(
+                BASE_MODEL, BASE_SCALER, X_train, y_train, cuda_api, label="meta_base"
+            )
+            if META_MODEL is not None:
+                with open(meta_model_path, "wb") as f:
+                    pickle.dump(META_MODEL, f)
+                with open(meta_scaler_path, "wb") as f:
+                    pickle.dump(META_SCALER, f)
     else:
+        if base_retrained and os.path.exists(meta_model_path):
+            print("  Base model refreshed - rebuilding dependent meta model cache...")
         print("  Training meta-labeling model...")
         META_MODEL, META_SCALER = train_meta_model(
             BASE_MODEL, BASE_SCALER, X_train, y_train, cuda_api, label="meta_base"
