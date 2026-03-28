@@ -37,23 +37,61 @@ echo.
 :: -- Step 1: UTF-8 + Python check --------------------------------------------
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
-set "PYTHON_CMD="
-python --version >nul 2>&1
-if not errorlevel 1 ( set "PYTHON_CMD=python" & goto :PY_FOUND )
-py -3 --version >nul 2>&1
-if not errorlevel 1 ( set "PYTHON_CMD=py -3" & goto :PY_FOUND )
+set "PYTHON_EXE="
+set "PYTHON_ARGS="
+set "PYTHON_LABEL="
+call :TRY_PYTHON python
+if defined PYTHON_EXE goto :PY_FOUND
+call :TRY_PYTHON py -3
+if defined PYTHON_EXE goto :PY_FOUND
+for %%p in (
+    "%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
+    "%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
+    "%LOCALAPPDATA%\Programs\Python\Python311\python.exe"
+    "%LOCALAPPDATA%\Programs\Python\Python310\python.exe"
+    "%USERPROFILE%\AppData\Local\Programs\Python\Python313\python.exe"
+    "%USERPROFILE%\AppData\Local\Programs\Python\Python312\python.exe"
+    "%USERPROFILE%\AppData\Local\Programs\Python\Python311\python.exe"
+    "%USERPROFILE%\AppData\Local\Programs\Python\Python310\python.exe"
+    "%USERPROFILE%\.local\bin\python3.14.exe"
+    "%USERPROFILE%\.local\bin\python3.13.exe"
+    "%USERPROFILE%\.local\bin\python3.12.exe"
+    "%USERPROFILE%\.local\bin\python3.11.exe"
+    "%USERPROFILE%\.local\bin\python.exe"
+    "C:\Python313\python.exe"
+    "C:\Python312\python.exe"
+    "C:\Python311\python.exe"
+    "C:\Python310\python.exe"
+    "%ProgramFiles%\Python313\python.exe"
+    "%ProgramFiles%\Python312\python.exe"
+    "%ProgramFiles%\Python311\python.exe"
+    "%ProgramFiles%\Python310\python.exe"
+    "%ProgramData%\Anaconda3\python.exe"
+    "%USERPROFILE%\anaconda3\python.exe"
+    "%USERPROFILE%\miniconda3\python.exe"
+) do (
+    if not defined PYTHON_EXE if exist "%%~fp" (
+        set "PYTHON_EXE=%%~fp"
+        set "PYTHON_ARGS="
+    )
+)
+if not defined PYTHON_EXE (
 echo  [ERROR] Python not found in PATH.
-echo  Install Python 3.10+ from https://python.org  (check Add to PATH)
+echo  Install Python 3.10+ from https://python.org  ^(check Add to PATH^)
 echo.
 pause
 exit /b 1
+)
 
 :PY_FOUND
-for /f "tokens=2" %%v in ('!PYTHON_CMD! --version 2^>^&1') do set PY_VER=%%v
-echo  [OK] Python !PY_VER! (!PYTHON_CMD!)
+if defined PYTHON_ARGS (
+    set "PYTHON_LABEL=!PYTHON_EXE! !PYTHON_ARGS!"
+) else (
+    set "PYTHON_LABEL=!PYTHON_EXE!"
+)
+echo  [OK] Python detected: !PYTHON_LABEL!
 
 :: -- Always use global Python - no .venv -------------------------------------
-set "RUN_PYTHON=!PYTHON_CMD!"
 echo  [OK] Run environment: global Python (no .venv)
 
 :: -- Step 2: GPU detection ---------------------------------------------------
@@ -84,8 +122,8 @@ set SPYDER_MODE=PATH
 where spyder >nul 2>&1
 if not errorlevel 1 ( set SPYDER_FOUND=1 & set SPYDER_MODE=PATH & echo  [OK] Spyder found in PATH & goto :SPYDER_DONE )
 
-"!RUN_PYTHON!" -c "import spyder" >nul 2>&1
-if not errorlevel 1 ( set SPYDER_FOUND=1 & set SPYDER_MODE=MODULE & echo  [OK] Spyder found (module) & goto :SPYDER_DONE )
+call :RUN_PYTHON -c "import spyder" >nul 2>&1
+if not errorlevel 1 ( set SPYDER_FOUND=1 & set SPYDER_MODE=MODULE & echo  [OK] Spyder found ^(module^) & goto :SPYDER_DONE )
 
 for %%p in (
     "%LOCALAPPDATA%\Programs\Python\Python313\Scripts\spyder.exe"
@@ -107,12 +145,11 @@ for %%p in (
 )
 
 echo  [Setup] Spyder not found - installing now (one-time, ~3 min)...
-!PYTHON_CMD! -m pip install spyder -q
+call :RUN_PYTHON -m pip install spyder -q
 if not errorlevel 1 (
     echo  [OK] Spyder installed successfully
     set SPYDER_FOUND=1
     set SPYDER_MODE=MODULE
-    for /f "tokens=*" %%s in ('!PYTHON_CMD! -c "import sysconfig; print(sysconfig.get_path(chr(115)+chr(99)+chr(114)+chr(105)+chr(112)+chr(116)+chr(115)))" 2^>nul') do set "PATH=%%s;!PATH!"
     goto :SPYDER_DONE
 )
 echo  [WARN] Spyder install failed - continuing without Spyder
@@ -121,22 +158,22 @@ echo.
 
 :: -- Step 4: Package check ---------------------------------------------------
 echo  [Setup] Checking packages...
-"!RUN_PYTHON!" -c "import xgboost, lightgbm, numpy, pandas, sklearn, scipy, matplotlib, pyarrow, psutil, statsmodels, polars, duckdb, requests, websockets, pytz, dotenv, sortedcontainers, binance, alphalens, shap" >nul 2>&1
+call :RUN_PYTHON -c "import xgboost, lightgbm, numpy, pandas, sklearn, scipy, matplotlib, pyarrow, psutil, statsmodels, polars, duckdb, requests, websockets, pytz, dotenv, sortedcontainers, binance, alphalens, shap" >nul 2>&1
 if not errorlevel 1 goto :PKGS_OK
 if exist "%~dp0requirements.txt" (
-    echo  [Setup] Installing requirements.txt (one-time, ~2 min)...
-    "!RUN_PYTHON!" -m pip install --disable-pip-version-check -r "%~dp0requirements.txt" -q
+    echo  [Setup] Installing requirements.txt ^(one-time, ~2 min^)...
+    call :RUN_PYTHON -m pip install --disable-pip-version-check -r "%~dp0requirements.txt" -q
     if errorlevel 1 (
         echo  [ERROR] requirements.txt install failed.
-        echo         Run manually: "!RUN_PYTHON!" -m pip install -r "%~dp0requirements.txt"
+        echo         Run manually: "!PYTHON_EXE!" !PYTHON_ARGS! -m pip install -r "%~dp0requirements.txt"
         echo.
         pause
         exit /b 1
     )
     echo  [OK] requirements.txt installed
 ) else (
-    echo  [Setup] Installing missing core packages (one-time, ~2 min)...
-    "!RUN_PYTHON!" -m pip install --disable-pip-version-check xgboost numpy pandas scikit-learn scipy matplotlib pyarrow psutil statsmodels lightgbm polars duckdb requests websockets pytz python-dotenv sortedcontainers python-binance alphalens-reloaded shap -q
+    echo  [Setup] Installing missing core packages ^(one-time, ~2 min^)...
+    call :RUN_PYTHON -m pip install --disable-pip-version-check xgboost numpy pandas scikit-learn scipy matplotlib pyarrow psutil statsmodels lightgbm polars duckdb requests websockets pytz python-dotenv sortedcontainers python-binance alphalens-reloaded shap -q
     if errorlevel 1 (
         echo  [ERROR] Package install failed.
         echo.
@@ -155,10 +192,10 @@ echo.
 set CUDA_READY=0
 if "!GPU_FOUND!"=="1" (
     echo  [Setup] Verifying XGBoost CUDA...
-    "!RUN_PYTHON!" -c "import numpy as np, xgboost as xgb; X=np.random.rand(256, 8).astype('float32'); y=np.array([0, 1] * 128); xgb.XGBClassifier(device='cuda', n_estimators=2, max_depth=2, verbosity=0).fit(X, y)" >nul 2>&1
+    call :RUN_PYTHON -c "import numpy as np, xgboost as xgb; X=np.random.rand(256, 8).astype('float32'); y=np.array([0, 1] * 128); xgb.XGBClassifier(device='cuda', n_estimators=2, max_depth=2, verbosity=0).fit(X, y)" >nul 2>&1
     if not errorlevel 1 (
         set CUDA_READY=1
-        echo  [OK] XGBoost CUDA ready  (RTX 2050 - capped at 2M rows)
+        echo  [OK] XGBoost CUDA ready  ^(RTX 2050 - capped at 2M rows^)
     ) else (
         echo  [WARN] GPU detected but CUDA probe failed - may fall back to CPU
     )
@@ -200,9 +237,9 @@ if "!GPU_FOUND!"=="0" goto :Q1_CPU_ONLY
 echo  [1/2] Select compute device:
 echo.
 if "!CUDA_READY!"=="1" (
-    echo        [1] GPU  - !GPU_NAME!  (XGBoost CUDA ready, ~4x faster)
+    echo        [1] GPU  - !GPU_NAME!  ^(XGBoost CUDA ready, ~4x faster^)
 ) else (
-    echo        [1] GPU  - !GPU_NAME!  (hardware found, CUDA probe failed)
+    echo        [1] GPU  - !GPU_NAME!  ^(hardware found, CUDA probe failed^)
 )
 echo        [2] CPU  - All cores
 echo.
@@ -257,7 +294,7 @@ echo   Compute  : !COMPUTE_LABEL!
 if "!COMPUTE_CHOICE!"=="gpu" echo   GPU      : !GPU_NAME!
 if "!COMPUTE_CHOICE!"=="gpu" if "!CUDA_READY!"=="0" echo   Note     : CUDA probe failed - may fall back to CPU
 if "!USE_SPYDER!"=="1" (
-    echo   Output   : Terminal + Spyder (live charts)
+    echo   Output   : Terminal + Spyder ^(live charts^)
 ) else (
     echo   Output   : Terminal only
 )
@@ -295,7 +332,7 @@ if "!USE_SPYDER!"=="1" (
     if "!SPYDER_MODE!"=="PATH" (
         start "" /B spyder --new-instance --workdir="%~dp0" 2>nul
     ) else if "!SPYDER_MODE!"=="MODULE" (
-        start "" /B "!RUN_PYTHON!" -m spyder --new-instance --workdir="%~dp0" 2>nul
+        start "" /B "!PYTHON_EXE!" !PYTHON_ARGS! -m spyder --new-instance --workdir="%~dp0" 2>nul
     ) else (
         start "" "!SPYDER_CMD!" --new-instance --workdir="%~dp0" 2>nul
     )
@@ -327,9 +364,9 @@ echo ----------------------------------------------------------------
 echo.
 
 if "!COMPUTE_CHOICE!"=="gpu" (
-    "!RUN_PYTHON!" -u "!GPU_SCRIPT!" --gpu --data-dir "%~dp0data" --feature-dir "%~dp0feature_cache" --out-dir "%~dp0results"
+    call :RUN_PYTHON -u "!GPU_SCRIPT!" --gpu --data-dir "%~dp0data" --feature-dir "%~dp0feature_cache" --out-dir "%~dp0results"
 ) else (
-    "!RUN_PYTHON!" -u "!CPU_SCRIPT!" --data-dir "%~dp0data" --feature-dir "%~dp0feature_cache" --out-dir "%~dp0results"
+    call :RUN_PYTHON -u "!CPU_SCRIPT!" --data-dir "%~dp0data" --feature-dir "%~dp0feature_cache" --out-dir "%~dp0results"
 )
 
 set EXIT_CODE=!errorlevel!
@@ -349,14 +386,14 @@ if "!EXIT_CODE!"=="0" (
     echo    weekly_summary_v4.csv    - Week-by-week IC and returns
     echo    all_trades_v4.csv        - Every simulated trade
     echo    performance_v4.json      - Sharpe, IC, ICIR summary
-    echo    azalyst.db               - SQLite database (full history)
+    echo    azalyst.db               - SQLite database ^(full history^)
     echo.
-    echo  Checkpoint cleared (run finished cleanly).
+    echo  Checkpoint cleared ^(run finished cleanly^).
     echo.
 ) else (
     color 0C
     echo.
-    echo  [ERROR] Pipeline failed (exit code !EXIT_CODE!)
+    echo  [ERROR] Pipeline failed ^(exit code !EXIT_CODE!^)
     echo.
     echo  Common fixes:
     echo    No .parquet files?   Add them to %~dp0data\
@@ -376,3 +413,40 @@ echo.
 echo  Press any key to close...
 pause >nul
 exit /b !EXIT_CODE!
+
+:RUN_PYTHON
+if not "!PYTHON_EXE:\=!"=="!PYTHON_EXE!" (
+    if defined PYTHON_ARGS (
+        call "!PYTHON_EXE!" !PYTHON_ARGS! %*
+    ) else (
+        call "!PYTHON_EXE!" %*
+    )
+) else (
+    if defined PYTHON_ARGS (
+        call !PYTHON_EXE! !PYTHON_ARGS! %*
+    ) else (
+        call !PYTHON_EXE! %*
+    )
+)
+exit /b %errorlevel%
+
+:TRY_PYTHON
+set "TRY_PYTHON_EXE=%~1"
+if not "!TRY_PYTHON_EXE:\=!"=="!TRY_PYTHON_EXE!" (
+    if "%~2"=="" (
+        call "!TRY_PYTHON_EXE!" --version >nul 2>&1
+    ) else (
+        call "!TRY_PYTHON_EXE!" %~2 --version >nul 2>&1
+    )
+) else (
+    if "%~2"=="" (
+        call !TRY_PYTHON_EXE! --version >nul 2>&1
+    ) else (
+        call !TRY_PYTHON_EXE! %~2 --version >nul 2>&1
+    )
+)
+if not errorlevel 1 (
+    set "PYTHON_EXE=%~1"
+    set "PYTHON_ARGS=%~2"
+)
+exit /b 0
