@@ -117,8 +117,9 @@ The scripts automatically:
 
 ### If you get OOM errors:
 ```bash
-# Add --resample 1D flag (fewer rows, less RAM)
-python azalyst_train_local.py --feature-dir ./feature_cache --out-dir ./results --gpu --resample 1D
+# Rebuild a lower-frequency cache, then train against that cache
+python build_feature_cache.py --data-dir ./data --out-dir ./feature_cache_1d --workers 4 --resample 1D --overwrite
+python azalyst_train_local.py --feature-dir ./feature_cache_1d --out-dir ./results --gpu
 ```
 
 ### Close these before running:
@@ -146,7 +147,7 @@ python azalyst_train_local.py --feature-dir ./feature_cache --out-dir ./results 
 | File | What it does |
 |---|---|
 | `azalyst_local_gpu.py` | **Run first** — tests RTX 2050 CUDA |
-| `azalyst_train_local.py` | Year 1+2 training with 4GB VRAM guard |
+| `azalyst_train_local.py` | Year 1+2 training compatibility wrapper (calls `azalyst_local_gpu.py --year2-only`) |
 | `build_feature_cache.py` | Build feature cache (run once) |
 | `azalyst_weekly_loop.py` | Walk-forward Year 3 |
 

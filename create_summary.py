@@ -1,7 +1,7 @@
 content = '''# Machine Learning Pipeline Analysis Summary
 ## Azalyst Alpha Research Engine v2.1
 
-**File Analyzed**: azalyst-alpha-research-engine.ipynb
+**File Analyzed**: azalyst_local_gpu.py
 **Analysis Date**: 2026-03-19
 **System**: Cross-Sectional Cryptocurrency Alpha Research with XGBoost CUDA
 

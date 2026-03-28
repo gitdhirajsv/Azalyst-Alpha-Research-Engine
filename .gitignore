@@ -58,6 +58,8 @@ firebase-debug.log
 # ── Temp and backup files ──
 .tmp/
 .tmp.driveupload/
+.uv-cache/
+.parquetcheck/
 *.bak
 *.tmp
 *.swp

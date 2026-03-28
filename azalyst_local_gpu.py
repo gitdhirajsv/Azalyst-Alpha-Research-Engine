@@ -33,6 +33,11 @@ from scipy import stats
 from sklearn.preprocessing import RobustScaler
 from sklearn.metrics import roc_auc_score
 
+try:
+    import pyarrow.parquet as pq
+except Exception:
+    pq = None
+
 warnings.filterwarnings("ignore")
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -90,6 +95,40 @@ def _fix_timestamp(df: pd.DataFrame) -> pd.DataFrame:
     if df.index.max().year < 2018:
         raise ValueError(f"1970 timestamp still present: max={df.index.max()}")
     return df
+
+
+def _required_cache_columns() -> list[str]:
+    return FEATURE_COLS + ["future_ret"]
+
+
+def _read_parquet_columns(path: Path) -> list[str]:
+    """
+    Read parquet column names from metadata when possible so cache validation
+    stays fast even when each symbol file is large.
+    """
+    if pq is not None:
+        return list(pq.read_schema(path).names)
+    return pd.read_parquet(path).columns.tolist()
+
+
+def inspect_feature_store() -> tuple[int, int, int]:
+    """Return (total_files, valid_files, stale_or_corrupt_files)."""
+    cache_path = Path(CACHE_DIR)
+    files = sorted(cache_path.glob("*.parquet"))
+    required = set(_required_cache_columns())
+    valid = invalid = 0
+
+    for fpath in files:
+        try:
+            cols = set(_read_parquet_columns(fpath))
+            if required.issubset(cols):
+                valid += 1
+            else:
+                invalid += 1
+        except Exception:
+            invalid += 1
+
+    return len(files), valid, invalid
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -211,9 +250,9 @@ def build_feature_store() -> bool:
         # Validate existing cache — must have all 56 FEATURE_COLS + future_ret
         if cache_file.exists():
             try:
-                cached_cols = pd.read_parquet(cache_file, columns=[]).columns.tolist()
-                required = FEATURE_COLS + ["future_ret"]
-                if all(c in cached_cols for c in required):
+                cached_cols = set(_read_parquet_columns(cache_file))
+                required = set(_required_cache_columns())
+                if required.issubset(cached_cols):
                     count += 1
                     if i % 50 == 0 or i == total:
                         print(f"  [{i}/{total}] {i/total*100:.0f}%  cached={count}  "
@@ -279,11 +318,16 @@ def load_feature_store() -> dict[str, pd.DataFrame]:
     symbols: dict[str, pd.DataFrame] = {}
     cache_path = Path(CACHE_DIR)
     files = sorted(cache_path.glob("*.parquet"))
+    required = set(_required_cache_columns())
 
     print(f"  Loading {len(files)} symbols from feature cache...")
     for fpath in files:
         try:
             df = pd.read_parquet(fpath)
+            missing = sorted(required.difference(df.columns))
+            if missing:
+                print(f"  [WARN] {fpath.stem}: missing {len(missing)} required columns")
+                continue
             # Ensure UTC DatetimeIndex
             if not isinstance(df.index, pd.DatetimeIndex):
                 df.index = pd.to_datetime(df.index, utc=True)
@@ -604,11 +648,19 @@ def main():
     parser.add_argument("--year2-only", action="store_true",
                         help="Pretrain only (no Year 3 walk-forward)")
     parser.add_argument("--data-dir",   default=None)
+    parser.add_argument("--feature-dir", default=None,
+                        help="Directory containing cached feature parquet files")
     parser.add_argument("--out-dir",    default=None)
+    parser.add_argument("--rebuild-cache", action="store_true",
+                        help="Force a rebuild of the feature cache from raw data")
+    parser.add_argument("--resample", default=None,
+                        help="Compatibility flag. Rebuild the cache with build_feature_cache.py "
+                             "if you need a different timeframe.")
     args = parser.parse_args()
 
-    global DATA_DIR, RESULTS_DIR
+    global DATA_DIR, RESULTS_DIR, CACHE_DIR
     if args.data_dir:  DATA_DIR    = args.data_dir
+    if args.feature_dir: CACHE_DIR = args.feature_dir
     if args.out_dir:   RESULTS_DIR = args.out_dir
 
     use_gpu    = args.gpu and not args.no_gpu
@@ -624,10 +676,36 @@ def main():
 
     startup_banner(use_gpu, year2_only)
 
-    # STEP 0: Feature store (full 56-feature build_features())
-    print("STEP 0: Build feature cache (56 features)\n")
-    if not build_feature_store():
-        print("ERROR: Feature store build failed"); return
+    if args.resample:
+        print(f"  NOTE: --resample={args.resample} is not applied by the trainer itself.")
+        print("  Build a separate cache with build_feature_cache.py --resample and")
+        print(f"  point --feature-dir at that cache if you need a different timeframe.\n")
+
+    # STEP 0: Inspect / repair feature store
+    print("STEP 0: Inspect feature cache\n")
+    if args.rebuild_cache:
+        print(f"  Rebuilding cache in {CACHE_DIR} from raw data in {DATA_DIR}...")
+        if not build_feature_store():
+            print("ERROR: Feature store build failed")
+            return
+    else:
+        total_cache, valid_cache, invalid_cache = inspect_feature_store()
+        if total_cache == 0:
+            print(f"  No cache files found in {CACHE_DIR} - building now...")
+            if not build_feature_store():
+                print("ERROR: Feature store build failed")
+                return
+        elif invalid_cache:
+            print(f"  Found {total_cache} cache files in {CACHE_DIR} "
+                  f"({valid_cache} valid, {invalid_cache} stale/corrupt)")
+            print("  Attempting to rebuild only the stale/corrupt cache entries...")
+            if not build_feature_store():
+                if valid_cache == 0:
+                    print("ERROR: Feature store repair failed and no valid cache remains")
+                    return
+                print("  WARNING: Cache repair failed - continuing with valid cached symbols")
+        else:
+            print(f"  Found {valid_cache} valid cache files in {CACHE_DIR} - skipping rebuild")
 
     # Detect CUDA
     cuda_api = detect_cuda_api() if use_gpu else None
