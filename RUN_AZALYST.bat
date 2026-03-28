@@ -121,7 +121,7 @@ echo.
 
 :: -- Step 4: Package check ---------------------------------------------------
 echo  [Setup] Checking packages...
-"!RUN_PYTHON!" -c "import xgboost, lightgbm, numpy, pandas, sklearn, scipy, matplotlib, pyarrow, psutil, statsmodels, polars, duckdb, requests, websockets, pytz, dotenv, sortedcontainers, binance, alphalens" >nul 2>&1
+"!RUN_PYTHON!" -c "import xgboost, lightgbm, numpy, pandas, sklearn, scipy, matplotlib, pyarrow, psutil, statsmodels, polars, duckdb, requests, websockets, pytz, dotenv, sortedcontainers, binance, alphalens, shap" >nul 2>&1
 if not errorlevel 1 goto :PKGS_OK
 if exist "%~dp0requirements.txt" (
     echo  [Setup] Installing requirements.txt (one-time, ~2 min)...
@@ -136,7 +136,7 @@ if exist "%~dp0requirements.txt" (
     echo  [OK] requirements.txt installed
 ) else (
     echo  [Setup] Installing missing core packages (one-time, ~2 min)...
-    "!RUN_PYTHON!" -m pip install --disable-pip-version-check xgboost numpy pandas scikit-learn scipy matplotlib pyarrow psutil statsmodels lightgbm polars duckdb requests websockets pytz python-dotenv sortedcontainers python-binance alphalens-reloaded -q
+    "!RUN_PYTHON!" -m pip install --disable-pip-version-check xgboost numpy pandas scikit-learn scipy matplotlib pyarrow psutil statsmodels lightgbm polars duckdb requests websockets pytz python-dotenv sortedcontainers python-binance alphalens-reloaded shap -q
     if errorlevel 1 (
         echo  [ERROR] Package install failed.
         echo.
