@@ -771,6 +771,41 @@ def compute_drawdown(weekly_returns: list) -> float:
     return float(dd.min())
 
 
+# ── CHECKPOINT ────────────────────────────────────────────────────────────────
+
+def _ckpt_path(results_dir):
+    return os.path.join(results_dir, "checkpoint_v4_latest.json")
+
+
+def save_checkpoint(results_dir, state):
+    """
+    Atomically write walk-forward state to a JSON checkpoint.
+    Uses temp-file + os.replace so a crash never corrupts the checkpoint.
+    """
+    path = _ckpt_path(results_dir)
+    os.makedirs(results_dir, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(state, f, indent=2, default=str)
+    os.replace(tmp, path)
+
+
+def load_checkpoint(results_dir):
+    """Load checkpoint if it exists. Returns dict or None."""
+    path = _ckpt_path(results_dir)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path) as f:
+            ckpt = json.load(f)
+        print(f"  [CHECKPOINT] Found  run_id={ckpt.get('run_id')}  "
+              f"last_week={ckpt.get('last_week')}  ts={ckpt.get('ts', '?')}")
+        return ckpt
+    except Exception as e:
+        print(f"  [CHECKPOINT] Could not load ({e}) — starting fresh")
+        return None
+
+
 # ── MAIN ENGINE ───────────────────────────────────────────────────────────────
 
 def main():
@@ -787,6 +822,8 @@ def main():
                         help="Skip SHAP computation (faster)")
     parser.add_argument("--run-id", default=None,
                         help="Custom run ID (default: auto-generated)")
+    parser.add_argument("--no-resume", dest="no_resume", action="store_true",
+                        help="Ignore existing checkpoint and start a fresh run")
     args = parser.parse_args()
 
     global DATA_DIR, RESULTS_DIR, CACHE_DIR
@@ -821,15 +858,23 @@ def main():
     print(f"  Persistence  : SQLite (results/azalyst.db)")
     print("=" * 72 + "\n")
 
-    # ── Init DB ───────────────────────────────────────────────────────────────
+    # ── Init DB + checkpoint detection ───────────────────────────────────────
     os.makedirs(RESULTS_DIR, exist_ok=True)
     db = AzalystDB(f"{RESULTS_DIR}/azalyst.db")
-    run_id = args.run_id or f"v4_{time.strftime('%Y%m%d_%H%M%S')}"
-    db.start_run(run_id, {
-        "version": "v4", "gpu": use_gpu, "features": len(FEATURE_COLS),
-        "max_dd_kill": dd_kill, "shap": not args.no_shap,
-        "retrain_weeks": RETRAIN_WEEKS,
-    })
+    ckpt = None if args.no_resume else load_checkpoint(RESULTS_DIR)
+    resuming = ckpt is not None
+    if resuming:
+        run_id = ckpt["run_id"]
+        print(f"\n  [CHECKPOINT] Resuming run_id={run_id}  "
+              f"from week {ckpt['last_week'] + 1}\n")
+        sys.stdout.flush()
+    else:
+        run_id = args.run_id or f"v4_{time.strftime('%Y%m%d_%H%M%S')}"
+        db.start_run(run_id, {
+            "version": "v4", "gpu": use_gpu, "features": len(FEATURE_COLS),
+            "max_dd_kill": dd_kill, "shap": not args.no_shap,
+            "retrain_weeks": RETRAIN_WEEKS,
+        })
     risk_mgr = RiskManager()
 
     # ── Step 0: Feature cache ─────────────────────────────────────────────────
@@ -866,67 +911,85 @@ def main():
     print("\nSTEP 2: Date splits (v4: walk Y2+Y3)\n")
     global_min, global_max, y1_end, y2_end = get_date_splits(symbols)
 
-    # ── Step 3: Initial training on Y1 ────────────────────────────────────────
-    print("\nSTEP 3: Initial training on Y1\n")
-    active_features = list(FEATURE_COLS)  # start with all
-    X_train, y_train, y_ret = build_training_matrix(symbols, y1_end, active_features)
-    if X_train is None:
-        print("ERROR: Could not build training matrix")
-        db.finish_run(run_id, "failed")
-        return
-
+    # ── Step 3: Initial training on Y1 (skip if resuming) ────────────────────
     os.makedirs(f"{RESULTS_DIR}/models", exist_ok=True)
+    if resuming:
+        print("\nSTEP 3: Skipping — loading models from checkpoint...\n")
+        active_features = ckpt["active_features"]
+        base_model = xgb.XGBClassifier()
+        base_model.load_model(ckpt["current_model_path"])
+        with open(ckpt["current_scaler_path"], "rb") as f:
+            base_scaler = pickle.load(f)
+        meta_model, meta_scaler = None, None
+        if ckpt.get("current_meta_path") and os.path.exists(ckpt["current_meta_path"]):
+            with open(ckpt["current_meta_path"], "rb") as f:
+                meta_model = pickle.load(f)
+        if ckpt.get("current_meta_scaler_path") and \
+                os.path.exists(ckpt["current_meta_scaler_path"]):
+            with open(ckpt["current_meta_scaler_path"], "rb") as f:
+                meta_scaler = pickle.load(f)
+        print(f"  Model : {ckpt['current_model_path']}")
+        print(f"  Scaler: {ckpt['current_scaler_path']}")
+        sys.stdout.flush()
+    else:
+        print("\nSTEP 3: Initial training on Y1\n")
+        active_features = list(FEATURE_COLS)  # start with all
+        X_train, y_train, y_ret = build_training_matrix(symbols, y1_end, active_features)
+        if X_train is None:
+            print("ERROR: Could not build training matrix")
+            db.finish_run(run_id, "failed")
+            return
 
-    print(f"\n  Training base model (GPU={'YES' if cuda_api else 'NO'})...")
-    sys.stdout.flush()
-    t0 = time.time()
-    base_model, base_scaler, importance, mean_auc, mean_ic, icir = train_model(
-        X_train, y_train, y_ret, cuda_api, active_features, label="base_y1"
-    )
-    print(f"  AUC={mean_auc:.4f}  IC={mean_ic:.4f}  ICIR={icir:.4f}  "
-          f"({time.time()-t0:.1f}s)")
-    sys.stdout.flush()
+        print(f"\n  Training base model (GPU={'YES' if cuda_api else 'NO'})...")
+        sys.stdout.flush()
+        t0 = time.time()
+        base_model, base_scaler, importance, mean_auc, mean_ic, icir = train_model(
+            X_train, y_train, y_ret, cuda_api, active_features, label="base_y1"
+        )
+        print(f"  AUC={mean_auc:.4f}  IC={mean_ic:.4f}  ICIR={icir:.4f}  "
+              f"({time.time()-t0:.1f}s)")
+        sys.stdout.flush()
 
-    base_model.save_model(f"{RESULTS_DIR}/models/model_v4_base.json")
-    with open(f"{RESULTS_DIR}/models/scaler_v4_base.pkl", "wb") as f:
-        pickle.dump(base_scaler, f)
-    importance.to_csv(f"{RESULTS_DIR}/feature_importance_v4_base.csv")
+        base_model.save_model(f"{RESULTS_DIR}/models/model_v4_base.json")
+        with open(f"{RESULTS_DIR}/models/scaler_v4_base.pkl", "wb") as f:
+            pickle.dump(base_scaler, f)
+        importance.to_csv(f"{RESULTS_DIR}/feature_importance_v4_base.csv")
 
-    db.insert_model_artifact(run_id, "base_y1", 0,
-                             f"{RESULTS_DIR}/models/model_v4_base.json",
-                             f"{RESULTS_DIR}/models/scaler_v4_base.pkl",
-                             mean_auc, mean_ic, icir, len(active_features))
+        db.insert_model_artifact(run_id, "base_y1", 0,
+                                 f"{RESULTS_DIR}/models/model_v4_base.json",
+                                 f"{RESULTS_DIR}/models/scaler_v4_base.pkl",
+                                 mean_auc, mean_ic, icir, len(active_features))
 
-    # SHAP
-    if not args.no_shap:
-        print("\n  Computing SHAP values...")
-        Xs = base_scaler.transform(X_train)
-        shap_vals = compute_shap(base_model, Xs, active_features)
-        if shap_vals:
-            save_shap_csv(shap_vals, f"{RESULTS_DIR}/models/", "v4_base")
-            db.insert_shap_values(run_id, "base_y1", shap_vals)
+        # SHAP
+        if not args.no_shap:
+            print("\n  Computing SHAP values...")
+            Xs = base_scaler.transform(X_train)
+            shap_vals = compute_shap(base_model, Xs, active_features)
+            if shap_vals:
+                save_shap_csv(shap_vals, f"{RESULTS_DIR}/models/", "v4_base")
+                db.insert_shap_values(run_id, "base_y1", shap_vals)
 
-    # Meta model
-    print("\n  Training meta-labeling model...")
-    sys.stdout.flush()
-    meta_model, meta_scaler = train_meta_model(
-        base_model, base_scaler, X_train, y_train, cuda_api,
-        active_features, label="meta_y1"
-    )
-    if meta_model is not None:
-        with open(f"{RESULTS_DIR}/models/meta_v4_base.pkl", "wb") as f:
-            pickle.dump(meta_model, f)
-        with open(f"{RESULTS_DIR}/models/meta_scaler_v4_base.pkl", "wb") as f:
-            pickle.dump(meta_scaler, f)
+        # Meta model
+        print("\n  Training meta-labeling model...")
+        sys.stdout.flush()
+        meta_model, meta_scaler = train_meta_model(
+            base_model, base_scaler, X_train, y_train, cuda_api,
+            active_features, label="meta_y1"
+        )
+        if meta_model is not None:
+            with open(f"{RESULTS_DIR}/models/meta_v4_base.pkl", "wb") as f:
+                pickle.dump(meta_model, f)
+            with open(f"{RESULTS_DIR}/models/meta_scaler_v4_base.pkl", "wb") as f:
+                pickle.dump(meta_scaler, f)
 
-    with open(f"{RESULTS_DIR}/train_summary_v4.json", "w") as f:
-        json.dump({"mean_auc": round(mean_auc, 5), "mean_ic": round(mean_ic, 5),
-                   "icir": round(icir, 5), "n_rows": int(len(X_train)),
-                   "n_features": len(active_features),
-                   "use_gpu": cuda_api is not None}, f, indent=2)
+        with open(f"{RESULTS_DIR}/train_summary_v4.json", "w") as f:
+            json.dump({"mean_auc": round(mean_auc, 5), "mean_ic": round(mean_ic, 5),
+                       "icir": round(icir, 5), "n_rows": int(len(X_train)),
+                       "n_features": len(active_features),
+                       "use_gpu": cuda_api is not None}, f, indent=2)
 
-    del X_train, y_train, y_ret
-    gc.collect()
+        del X_train, y_train, y_ret
+        gc.collect()
 
     # ── Step 4+5: Walk-forward Y2+Y3 ─────────────────────────────────────────
     walk_start = y1_end
@@ -945,16 +1008,45 @@ def main():
     current_scaler = base_scaler
     current_meta = meta_model
     current_meta_scaler = meta_scaler
-    retrains = 0
+    # Paths needed so checkpoint can reload the latest model after interruption
+    current_model_path = f"{RESULTS_DIR}/models/model_v4_base.json"
+    current_scaler_path = f"{RESULTS_DIR}/models/scaler_v4_base.pkl"
+    current_meta_path = f"{RESULTS_DIR}/models/meta_v4_base.pkl"
+    current_meta_scaler_path = f"{RESULTS_DIR}/models/meta_scaler_v4_base.pkl"
 
-    prev_longs, prev_shorts = set(), set()
-    all_trades = []
-    weekly_summary = []
-    weekly_returns = []
-    feature_ic_history: Dict[str, List[float]] = {}
-    kill_switch_hit = False
+    if resuming:
+        retrains = ckpt["retrains"]
+        prev_longs = set(ckpt["prev_longs"])
+        prev_shorts = set(ckpt["prev_shorts"])
+        all_trades = ckpt["all_trades"]
+        weekly_summary = ckpt["weekly_summary"]
+        weekly_returns = ckpt["weekly_returns"]
+        feature_ic_history = {k: list(v)
+                              for k, v in ckpt.get("feature_ic_history", {}).items()}
+        kill_switch_hit = ckpt.get("kill_switch_hit", False)
+        resume_from_week = ckpt["last_week"]
+        current_model_path = ckpt.get("current_model_path", current_model_path)
+        current_scaler_path = ckpt.get("current_scaler_path", current_scaler_path)
+        current_meta_path = ckpt.get("current_meta_path", current_meta_path)
+        current_meta_scaler_path = ckpt.get("current_meta_scaler_path",
+                                            current_meta_scaler_path)
+        print(f"  Restored {len(weekly_returns)} weeks of history, "
+              f"{len(all_trades)} trades. Resuming from week {resume_from_week + 1}.\n")
+        sys.stdout.flush()
+    else:
+        retrains = 0
+        prev_longs, prev_shorts = set(), set()
+        all_trades = []
+        weekly_summary = []
+        weekly_returns = []
+        feature_ic_history: Dict[str, List[float]] = {}
+        kill_switch_hit = False
+        resume_from_week = 0
 
     for week_num, (ws, we) in enumerate(zip(weeks[:-1], weeks[1:]), 1):
+        if week_num <= resume_from_week:
+            continue  # already completed in a previous interrupted run
+
         # ── Kill-switch check ─────────────────────────────────────────────────
         current_dd = compute_drawdown(weekly_returns)
         if current_dd < dd_kill:
@@ -1012,13 +1104,18 @@ def main():
                 )
                 current_model, current_scaler = m_new, s_new
                 m_new.save_model(f"{RESULTS_DIR}/models/model_v4_week{week_num:03d}.json")
+                with open(f"{RESULTS_DIR}/models/scaler_v4_week{week_num:03d}.pkl", "wb") as f:
+                    pickle.dump(s_new, f)
+                current_model_path = f"{RESULTS_DIR}/models/model_v4_week{week_num:03d}.json"
+                current_scaler_path = f"{RESULTS_DIR}/models/scaler_v4_week{week_num:03d}.pkl"
                 imp_new.to_csv(f"{RESULTS_DIR}/feature_importance_v4_week{week_num:03d}.csv")
                 print(f"    AUC={auc_n:.4f}  IC={ic_n:.4f}  ICIR={icir_n:.4f}  "
                       f"({time.time()-t0:.1f}s)")
 
                 db.insert_model_artifact(run_id, f"retrain_w{week_num:03d}", week_num,
-                                         f"{RESULTS_DIR}/models/model_v4_week{week_num:03d}.json",
-                                         "", auc_n, ic_n, icir_n, len(active_features))
+                                         current_model_path,
+                                         current_scaler_path,
+                                         auc_n, ic_n, icir_n, len(active_features))
 
                 # SHAP on retrained model
                 if not args.no_shap:
@@ -1036,6 +1133,12 @@ def main():
                 )
                 if meta_new is not None:
                     current_meta, current_meta_scaler = meta_new, meta_s_new
+                    with open(f"{RESULTS_DIR}/models/meta_v4_week{week_num:03d}.pkl", "wb") as f:
+                        pickle.dump(meta_new, f)
+                    with open(f"{RESULTS_DIR}/models/meta_scaler_v4_week{week_num:03d}.pkl", "wb") as f:
+                        pickle.dump(meta_s_new, f)
+                    current_meta_path = f"{RESULTS_DIR}/models/meta_v4_week{week_num:03d}.pkl"
+                    current_meta_scaler_path = f"{RESULTS_DIR}/models/meta_scaler_v4_week{week_num:03d}.pkl"
 
                 retrains += 1
                 del X_rt, y_rt, y_ret_rt
@@ -1106,6 +1209,26 @@ def main():
               f"cum={cum_ret*100:+.1f}% | DD={max_dd*100:.1f}% | "
               f"{regime}")
         sys.stdout.flush()
+
+        # ── Checkpoint (atomic write after every completed week) ───────────────
+        save_checkpoint(RESULTS_DIR, {
+            "run_id": run_id,
+            "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "last_week": week_num,
+            "weekly_returns": weekly_returns,
+            "weekly_summary": weekly_summary,
+            "all_trades": all_trades,
+            "prev_longs": list(prev_longs),
+            "prev_shorts": list(prev_shorts),
+            "retrains": retrains,
+            "active_features": active_features,
+            "feature_ic_history": {k: list(v) for k, v in feature_ic_history.items()},
+            "kill_switch_hit": kill_switch_hit,
+            "current_model_path": current_model_path,
+            "current_scaler_path": current_scaler_path,
+            "current_meta_path": current_meta_path,
+            "current_meta_scaler_path": current_meta_scaler_path,
+        })
 
     # ── Save results ──────────────────────────────────────────────────────────
     trades_df = pd.DataFrame(all_trades)
@@ -1205,6 +1328,11 @@ def main():
     print(f"  Database -> {RESULTS_DIR}/azalyst.db")
     print(f"  GPU used : {'RTX 2050 CUDA' if cuda_api else 'CPU'}")
 
+    # Remove checkpoint — run fully completed
+    ckpt_file = _ckpt_path(RESULTS_DIR)
+    if os.path.exists(ckpt_file):
+        os.remove(ckpt_file)
+        print("  [CHECKPOINT] Cleared — run complete")
     db.close()
 
 

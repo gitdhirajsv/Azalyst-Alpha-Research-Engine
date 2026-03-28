@@ -351,6 +351,8 @@ if "!EXIT_CODE!"=="0" (
     echo    performance_v4.json      - Sharpe, IC, ICIR summary
     echo    azalyst.db               - SQLite database (full history)
     echo.
+    echo  Checkpoint cleared (run finished cleanly).
+    echo.
 ) else (
     color 0C
     echo.
@@ -361,6 +363,12 @@ if "!EXIT_CODE!"=="0" (
     echo    Missing packages?    pip install -r requirements.txt
     echo    Python not found?    Reinstall Python 3.10+ with "Add to PATH" checked
     echo.
+    if exist "%~dp0results\checkpoint_v4_latest.json" (
+        echo  Checkpoint found in results\  - just run this BAT again to resume
+        echo  from where it stopped. To force a fresh start instead:
+        echo    python azalyst_v4_engine.py --gpu --no-resume
+        echo.
+    )
 )
 
 echo  Finished: %date% %time%
