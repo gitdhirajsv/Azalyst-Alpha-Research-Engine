@@ -536,11 +536,30 @@ def train_model(X, y, y_ret, cuda_api, features_used, label=""):
     cv = PurgedTimeSeriesCV(n_splits=5, gap=48)
     aucs, ics = [], []
 
+    # Allow per-call GPU→CPU downgrade on OOM
+    _effective_cuda = cuda_api
+
+    def _fit_with_fallback(model, Xtr, ytr, Xval, yval, verbose=False):
+        nonlocal _effective_cuda
+        try:
+            model.fit(Xtr, ytr, eval_set=[(Xval, yval)], verbose=verbose)
+        except Exception as e:
+            err = str(e).lower()
+            if _effective_cuda and ("memory" in err or "cuda" in err
+                                    or "out of memory" in err):
+                print(f"  [WARN] GPU OOM during {label} — falling back to CPU")
+                _effective_cuda = None
+                model = xgb.XGBClassifier(**make_xgb_params(None))
+                model.fit(Xtr, ytr, eval_set=[(Xval, yval)], verbose=verbose)
+            else:
+                raise
+        return model
+
     for fold, (tr, val) in enumerate(cv.split(Xs), 1):
         if len(np.unique(y[val])) < 2:
             continue
-        m = xgb.XGBClassifier(**make_xgb_params(cuda_api))
-        m.fit(Xs[tr], y[tr], eval_set=[(Xs[val], y[val])], verbose=False)
+        m = xgb.XGBClassifier(**make_xgb_params(_effective_cuda))
+        m = _fit_with_fallback(m, Xs[tr], y[tr], Xs[val], y[val])
         probs = m.predict_proba(Xs[val])[:, 1]
         try:
             aucs.append(roc_auc_score(y[val], probs))
@@ -555,10 +574,10 @@ def train_model(X, y, y_ret, cuda_api, features_used, label=""):
     mean_ic = float(np.mean(ics)) if ics else 0.0
     icir = float(np.mean(ics) / (np.std(ics) + 1e-8)) if len(ics) > 1 else 0.0
 
-    final = xgb.XGBClassifier(**make_xgb_params(cuda_api))
+    final = xgb.XGBClassifier(**make_xgb_params(_effective_cuda))
     split = int(len(Xs) * 0.9)
-    final.fit(Xs[:split], y[:split], eval_set=[(Xs[split:], y[split:])],
-              verbose=100)
+    final = _fit_with_fallback(final, Xs[:split], y[:split], Xs[split:], y[split:],
+                               verbose=100)
 
     importance = pd.Series(final.feature_importances_, index=features_used,
                            name="importance").sort_values(ascending=False)
@@ -571,12 +590,24 @@ def train_meta_model(base_model, base_scaler, X, y, cuda_api, features_used,
     Xs = base_scaler.transform(X)
     cv = PurgedTimeSeriesCV(n_splits=5, gap=48)
     oos_preds = np.full(len(y), np.nan, dtype=np.float32)
+    _effective_cuda = cuda_api
 
     for fold, (tr, val) in enumerate(cv.split(Xs), 1):
         if len(np.unique(y[val])) < 2:
             continue
-        m_temp = xgb.XGBClassifier(**make_xgb_params(cuda_api))
-        m_temp.fit(Xs[tr], y[tr], eval_set=[(Xs[val], y[val])], verbose=False)
+        m_temp = xgb.XGBClassifier(**make_xgb_params(_effective_cuda))
+        try:
+            m_temp.fit(Xs[tr], y[tr], eval_set=[(Xs[val], y[val])], verbose=False)
+        except Exception as e:
+            err = str(e).lower()
+            if _effective_cuda and ("memory" in err or "cuda" in err
+                                    or "out of memory" in err):
+                print(f"  [WARN] GPU OOM in meta {label} fold {fold} — CPU fallback")
+                _effective_cuda = None
+                m_temp = xgb.XGBClassifier(**make_xgb_params(None))
+                m_temp.fit(Xs[tr], y[tr], eval_set=[(Xs[val], y[val])], verbose=False)
+            else:
+                raise
         oos_preds[val] = m_temp.predict_proba(Xs[val])[:, 1]
 
     valid = np.isfinite(oos_preds)
@@ -589,12 +620,25 @@ def train_meta_model(base_model, base_scaler, X, y, cuda_api, features_used,
     meta_scaler = RobustScaler()
     X_meta_s = meta_scaler.fit_transform(X_meta)
 
-    meta_params = make_xgb_params(cuda_api)
+    meta_params = make_xgb_params(_effective_cuda)
     meta_params.update(n_estimators=500, max_depth=4, min_child_weight=50)
     meta = xgb.XGBClassifier(**meta_params)
     split = int(len(X_meta_s) * 0.9)
-    meta.fit(X_meta_s[:split], meta_y[:split],
-             eval_set=[(X_meta_s[split:], meta_y[split:])], verbose=False)
+    try:
+        meta.fit(X_meta_s[:split], meta_y[:split],
+                 eval_set=[(X_meta_s[split:], meta_y[split:])], verbose=False)
+    except Exception as e:
+        err = str(e).lower()
+        if _effective_cuda and ("memory" in err or "cuda" in err
+                                or "out of memory" in err):
+            print(f"  [WARN] GPU OOM in meta final {label} — CPU fallback")
+            meta_params = make_xgb_params(None)
+            meta_params.update(n_estimators=500, max_depth=4, min_child_weight=50)
+            meta = xgb.XGBClassifier(**meta_params)
+            meta.fit(X_meta_s[:split], meta_y[:split],
+                     eval_set=[(X_meta_s[split:], meta_y[split:])], verbose=False)
+        else:
+            raise
 
     val_acc = float((meta.predict(X_meta_s[split:]) == meta_y[split:]).mean())
     print(f"  [{label}] Meta accuracy: {val_acc*100:.1f}%")
@@ -1362,4 +1406,18 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except BrokenPipeError:
+        # Stdout pipe closed (e.g. piped through head/Select-Object); exit cleanly.
+        import os as _os
+        _os.devnull  # suppress further writes
+        sys.exit(0)
+    except KeyboardInterrupt:
+        print("\n  [INTERRUPTED] Checkpoint preserved — run again to resume.")
+        sys.exit(1)
+    except Exception as _e:
+        import traceback
+        print(f"\n  [FATAL] {type(_e).__name__}: {_e}")
+        traceback.print_exc()
+        sys.exit(1)
