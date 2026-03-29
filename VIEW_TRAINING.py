@@ -1,94 +1,95 @@
 """
-╔══════════════════════════════════════════════════════════════════════╗
-  AZALYST  —  TRAINING RESULTS DASHBOARD
-  Double-click VIEW_TRAINING.bat to launch this automatically.
-  Shows: metrics summary · feature importance · SHAP · weekly IC
-         weekly returns · cumulative PnL · drawdown
-╚══════════════════════════════════════════════════════════════════════╝
-Run from project root or via VIEW_TRAINING.bat
-"""
+Azalyst Alpha Research Engine  —  Spyder Monitor (Live)
 
+Auto-launched by RUN_AZALYST.bat when you choose Terminal + Spyder mode.
+Can also be run manually:  python VIEW_TRAINING.py  or F5 in Spyder.
+
+Reads results/checkpoint_v4_latest.json and results/run_log.txt every 5 s
+and renders a 4-panel live dashboard:
+  • Training Quality by Week  (win rate + rolling Sharpe)
+  • PnL and Drawdown          (cumulative return + max drawdown curve)
+  • Current Status            (week, trades, win rate, Sharpe, DD, PF)
+  • Recent Log Tail           (last N lines from the engine log file)
+"""
 from __future__ import annotations
+
 import json
-import os
 import sys
 from pathlib import Path
 
 import matplotlib
-matplotlib.use("TkAgg")          # interactive window (works in Spyder + bare Python)
+matplotlib.use("TkAgg")          # works as a standalone window on Windows
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
-import matplotlib.patches as mpatches
 import numpy as np
 import pandas as pd
 
-# ── Paths ────────────────────────────────────────────────────────────────────
-ROOT    = Path(__file__).resolve().parent
-RES     = ROOT / "results"
-MODELS  = RES / "models"
+# ── Paths ─────────────────────────────────────────────────────────────────────
+ROOT = Path(__file__).resolve().parent
+RES  = ROOT / "results"
+CKPT = RES  / "checkpoint_v4_latest.json"
+LOG  = RES  / "run_log.txt"
 
-FI_FILES = {
-    "v4 Base":    RES / "feature_importance_v4_base.csv",
-    "v4 W013":    RES / "feature_importance_v4_week013.csv",
-    "Y3 W013":    RES / "feature_importance_y3_week013.csv",
-    "Y3 W026":    RES / "feature_importance_y3_week026.csv",
-    "Y3 W039":    RES / "feature_importance_y3_week039.csv",
-}
-SHAP_FILES = {
-    "v4 Base":  MODELS / "shap" / "shap_importance_v4_base.csv",
-    "v4 W013":  MODELS / "shap" / "shap_importance_v4_week013.csv",
-}
-WEEKLY_CSV   = RES / "weekly_summary_year3.csv"
-PNL_CSV      = RES / "backtest_pnl.csv"
-PERF_CSV     = RES / "performance_summary.csv"
-TRAIN_V4     = RES / "train_summary_v4.json"
-TRAIN_BASE   = RES / "train_summary.json"
-PERF_Y3      = RES / "performance_year3.json"
-IC_CSV       = RES / "ic_analysis.csv"
+REFRESH = 5   # seconds between refreshes
+LOG_TAIL = 18  # log lines to show
+
+# ── Theme (dark — matches RUN_AZALYST terminal palette) ──────────────────────
+BG    = "#0b1220"
+PANEL = "#111b2e"
+ACC1  = "#f07f2a"   # orange
+ACC2  = "#4fa8d5"   # blue
+ACC3  = "#21c16b"   # green
+ACC4  = "#e05252"   # red
+TXT   = "#d9f5e2"
+MUTED = "#8fb7a0"
+GRID  = "#1a2a3a"
 
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
-def _load_json(path: Path) -> dict:
+# ── Data helpers ──────────────────────────────────────────────────────────────
+def _load_ckpt() -> dict:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(CKPT.read_text(encoding="utf-8"))
     except Exception:
         return {}
 
-def _load_csv(path: Path, **kw) -> pd.DataFrame | None:
-    if not path.exists():
-        return None
+
+def _tail_log(n: int = LOG_TAIL) -> list[str]:
     try:
-        return pd.read_csv(path, **kw)
+        with LOG.open("r", encoding="utf-8", errors="replace") as fh:
+            lines = fh.readlines()
+        return [ln.rstrip() for ln in lines[-n:]]
     except Exception:
-        return None
-
-def _best_fi() -> tuple[str, pd.DataFrame] | tuple[None, None]:
-    """Return the most recent feature-importance file that exists."""
-    for label in ["Y3 W039", "Y3 W026", "Y3 W013", "v4 W013", "v4 Base"]:
-        df = _load_csv(FI_FILES[label], index_col=0)
-        if df is not None and not df.empty:
-            return label, df
-    return None, None
-
-def _best_shap() -> tuple[str, pd.DataFrame] | tuple[None, None]:
-    for label in ["v4 W013", "v4 Base"]:
-        df = _load_csv(SHAP_FILES[label])
-        if df is not None and not df.empty:
-            return label, df
-    return None, None
+        return [f"Waiting for {LOG.name} …  (pipeline not started yet)"]
 
 
-# ── Theme ────────────────────────────────────────────────────────────────────
-BG      = "#0e0e12"
-PANEL   = "#1a1a24"
-ACC1    = "#f07f2a"   # orange  (matches screenshot)
-ACC2    = "#4fa8d5"   # blue
-ACC3    = "#4caf50"   # green
-ACC4    = "#e05252"   # red
-TXT     = "#e8e8e8"
-GRID    = "#2a2a38"
+def _win_rates_by_week(all_trades: list) -> list[float]:
+    """Return per-week win-rate % from the trades list in the checkpoint."""
+    if not all_trades:
+        return []
+    df = pd.DataFrame(all_trades)
+    if "week" not in df.columns or "pnl_percent" not in df.columns:
+        return []
+    result = []
+    for w in sorted(df["week"].unique()):
+        wk = df[df["week"] == w]
+        result.append(float((wk["pnl_percent"] > 0).mean() * 100))
+    return result
 
-def _style():
+
+def _rolling_sharpe(weekly_returns: list, window: int = 4) -> list[float]:
+    if len(weekly_returns) < 2:
+        return [0.0] * len(weekly_returns)
+    out = []
+    for i in range(len(weekly_returns)):
+        sub = weekly_returns[max(0, i - window + 1): i + 1]
+        mu  = float(np.mean(sub))
+        std = float(np.std(sub))
+        out.append(mu / std * np.sqrt(52) if std > 0 else 0.0)
+    return out
+
+
+# ── Style ─────────────────────────────────────────────────────────────────────
+def _apply_style() -> None:
     plt.rcParams.update({
         "figure.facecolor":  BG,
         "axes.facecolor":    PANEL,
@@ -98,7 +99,7 @@ def _style():
         "xtick.color":       TXT,
         "ytick.color":       TXT,
         "grid.color":        GRID,
-        "grid.linewidth":    0.6,
+        "grid.linewidth":    0.5,
         "text.color":        TXT,
         "font.family":       "monospace",
         "font.size":         9,
@@ -107,253 +108,166 @@ def _style():
     })
 
 
-# ── Build dashboard ──────────────────────────────────────────────────────────
-def build_dashboard():
-    _style()
+# ── Render one frame ──────────────────────────────────────────────────────────
+def _render(fig: plt.Figure, axes: list, ckpt: dict, log_lines: list[str]) -> None:
+    ax_qual, ax_pnl, ax_status, ax_log = axes
 
-    # ── load data ────────────────────────────────────────────────────────────
-    tv4      = _load_json(TRAIN_V4)
-    tbase    = _load_json(TRAIN_BASE)
-    py3      = _load_json(PERF_Y3)
-    weekly   = _load_csv(WEEKLY_CSV)
-    pnl_df   = _load_csv(PNL_CSV, parse_dates=["timestamp"])
-    perf_df  = _load_csv(PERF_CSV)
-    fi_label, fi_df   = _best_fi()
-    shap_label, shap_df = _best_shap()
+    weekly_summary = ckpt.get("weekly_summary", [])
+    weekly_returns = ckpt.get("weekly_returns", [])
+    all_trades     = ckpt.get("all_trades", [])
+    last_week      = ckpt.get("last_week", 0)
+    retrains       = ckpt.get("retrains", 0)
+    kill_sw        = ckpt.get("kill_switch_hit", False)
+    ts             = ckpt.get("ts", "—")
+    run_id         = ckpt.get("run_id", "—")
 
-    # ── figure layout  (3 rows × 3 cols) ─────────────────────────────────────
-    fig = plt.figure(figsize=(18, 13), facecolor=BG)
-    fig.suptitle(
-        "AZALYST  —  ML TRAINING RESULTS DASHBOARD",
-        fontsize=14, fontweight="bold", color=ACC1, y=0.98
-    )
+    weeks    = [m["week"]               for m in weekly_summary]
+    cum_ret  = [m.get("cum_return_pct",  0) for m in weekly_summary]
+    max_dd   = [m.get("max_drawdown_pct", 0) for m in weekly_summary]
 
-    gs = gridspec.GridSpec(
-        3, 3,
-        figure=fig,
-        left=0.05, right=0.97,
-        top=0.93,  bottom=0.06,
-        hspace=0.45, wspace=0.38
-    )
+    win_rates = _win_rates_by_week(all_trades)
+    sharpes   = _rolling_sharpe(weekly_returns)
 
-    # ── Panel 0 (top-left): Training Metrics Summary ──────────────────────────
-    ax0 = fig.add_subplot(gs[0, 0])
-    ax0.set_axis_off()
+    # ── Panel 1: Training Quality by Week ────────────────────────────────────
+    ax_qual.clear()
+    ax_qual.set_facecolor(PANEL)
+    ax_qual.grid(True, alpha=0.3, color=GRID)
+    if win_rates:
+        ax_qual.plot(range(1, len(win_rates) + 1), win_rates,
+                     color=ACC1, linewidth=1.8, label="Win rate %")
+    if sharpes:
+        ax_qual.plot(range(1, len(sharpes) + 1), [s * 10 for s in sharpes],
+                     color=ACC2, linewidth=1.8, label="Sharpe ×10")
+    ax_qual.set_title("Training Quality by Week")
+    ax_qual.legend(fontsize=8, framealpha=0.15, labelcolor=TXT, loc="upper left")
+    ax_qual.tick_params(colors=TXT)
 
-    def _val(d, k, fmt=".5f"):
-        v = d.get(k)
-        if v is None:
-            return "n/a"
-        try:
-            return f"{float(v):{fmt}}"
-        except Exception:
-            return str(v)
+    # ── Panel 2: PnL and Drawdown ─────────────────────────────────────────────
+    ax_pnl.clear()
+    ax_pnl.set_facecolor(PANEL)
+    ax_pnl.grid(True, alpha=0.3, color=GRID)
+    if weeks:
+        ax_pnl.plot(weeks, cum_ret,
+                    color=ACC2, linewidth=1.8, label="Total PnL %")
+        ax_pnl.plot(weeks, max_dd,
+                    color=ACC1, linewidth=1.8, label="Drawdown %")
+    ax_pnl.set_title("PnL and Drawdown")
+    ax_pnl.legend(fontsize=8, framealpha=0.15, labelcolor=TXT, loc="upper left")
+    ax_pnl.tick_params(colors=TXT)
 
-    rows = [
-        ("── TRAIN SUMMARY (v4) ──", "", False),
-        ("AUC (CV mean)",   _val(tv4, "mean_auc"),              True),
-        ("IC  (CV mean)",   _val(tv4, "mean_ic"),               True),
-        ("ICIR",            _val(tv4, "icir"),                  True),
-        ("Features used",   str(tv4.get("n_features", "n/a")),  True),
-        ("Train rows",      f'{tv4.get("n_rows", 0):,}' if tv4.get("n_rows") else "n/a", True),
-        ("GPU",             "CUDA ✓" if tv4.get("use_gpu") else "CPU", True),
-        ("", "", False),
-        ("── YEAR 3 PERF ──",       "", False),
-        ("Total return %",  _val(py3, "total_return_pct", ".2f"), True),
-        ("Ann. return %",   _val(py3, "annualised_pct",   ".2f"), True),
-        ("Sharpe",          _val(py3, "sharpe",           ".3f"), True),
-        ("IC mean",         _val(py3, "ic_mean",          ".5f"), True),
-        ("ICIR",            _val(py3, "icir",             ".4f"), True),
-        ("Total trades",    str(py3.get("total_trades", "n/a")),  True),
-        ("Retrains",        str(py3.get("retrains",      "n/a")),  True),
-    ]
-    if perf_df is not None and not perf_df.empty:
-        r = perf_df.iloc[0]
-        rows += [
-            ("", "", False),
-            ("── BACKTEST OVERALL ──", "", False),
-            ("Total ret %",   f'{float(r.get("total_ret_%", 0)):.2f}', True),
-            ("Sharpe",        f'{float(r.get("sharpe", 0)):.3f}',       True),
-            ("Max DD %",      f'{float(r.get("max_dd_%", 0)):.2f}',     True),
-            ("Win rate %",    f'{float(r.get("win_rate_%", 0)):.1f}',   True),
-        ]
-
-    y_pos = 0.99
-    step  = 0.063
-    for label, value, is_data in rows:
-        if not is_data:
-            ax0.text(0.02, y_pos, label, transform=ax0.transAxes,
-                     fontsize=8, color=ACC1, fontweight="bold", va="top")
-        else:
-            ax0.text(0.04, y_pos, label, transform=ax0.transAxes,
-                     fontsize=8.5, color=TXT, va="top")
-            col = ACC3 if value not in ("n/a", "CPU") else ACC4
-            ax0.text(0.72, y_pos, value, transform=ax0.transAxes,
-                     fontsize=8.5, color=col, va="top", ha="right")
-        y_pos -= step
-
-    ax0.set_title("Training & Performance Metrics", pad=6)
-    ax0.set_facecolor(PANEL)
-    for sp in ax0.spines.values():
+    # ── Panel 3: Current Status ───────────────────────────────────────────────
+    ax_status.clear()
+    ax_status.set_facecolor(PANEL)
+    ax_status.set_axis_off()
+    for sp in ax_status.spines.values():
         sp.set_edgecolor(ACC1)
         sp.set_linewidth(1.2)
 
-    # ── Panel 1 (top-mid): Feature Importance ────────────────────────────────
-    ax1 = fig.add_subplot(gs[0, 1])
-    if fi_df is not None:
-        col = fi_df.columns[0]
-        top = fi_df[col].sort_values(ascending=True).tail(18)
-        colors = [ACC1 if i >= len(top) - 5 else ACC2 for i in range(len(top))]
-        bars = ax1.barh(top.index, top.values, color=colors, height=0.7)
-        ax1.set_title(f"Feature Importance  ({fi_label})", pad=6)
-        ax1.set_xlabel("Importance")
-        ax1.grid(axis="x", alpha=0.4)
-        ax1.tick_params(axis="y", labelsize=7)
+    n_trades = len(all_trades)
+    if all_trades:
+        tdf      = pd.DataFrame(all_trades)
+        wr       = float((tdf["pnl_percent"] > 0).mean() * 100)
+        wins_sum = tdf[tdf["pnl_percent"] > 0]["pnl_percent"].sum()
+        loss_sum = abs(tdf[tdf["pnl_percent"] <= 0]["pnl_percent"].sum())
+        pf       = wins_sum / loss_sum if loss_sum > 0 else 0.0
     else:
-        ax1.text(0.5, 0.5, "No feature importance data", ha="center", va="center",
-                 color=TXT, transform=ax1.transAxes)
-        ax1.set_title("Feature Importance", pad=6)
+        wr = pf = 0.0
 
-    # ── Panel 2 (top-right): SHAP Importance ─────────────────────────────────
-    ax2 = fig.add_subplot(gs[0, 2])
-    if shap_df is not None:
-        shap_top = shap_df.nlargest(18, "mean_abs_shap")
-        shap_top_s = shap_top.set_index("feature")["mean_abs_shap"].sort_values()
-        colors2 = [ACC3 if i >= len(shap_top_s) - 5 else ACC2 for i in range(len(shap_top_s))]
-        ax2.barh(shap_top_s.index, shap_top_s.values, color=colors2, height=0.7)
-        ax2.set_title(f"SHAP Importance  ({shap_label})", pad=6)
-        ax2.set_xlabel("|SHAP value|")
-        ax2.grid(axis="x", alpha=0.4)
-        ax2.tick_params(axis="y", labelsize=7)
-    else:
-        ax2.text(0.5, 0.5, "No SHAP data found", ha="center", va="center",
-                 color=TXT, transform=ax2.transAxes)
-        ax2.set_title("SHAP Importance", pad=6)
+    cur_dd  = weekly_summary[-1].get("max_drawdown_pct", 0) if weekly_summary else 0.0
+    cur_ret = weekly_summary[-1].get("cum_return_pct",   0) if weekly_summary else 0.0
+    cur_shp = sharpes[-1] if sharpes else 0.0
 
-    # ── Panel 3 (mid-left): Weekly IC ────────────────────────────────────────
-    ax3 = fig.add_subplot(gs[1, 0])
-    if weekly is not None:
-        ic = weekly["ic"]
-        colors_ic = [ACC3 if v >= 0 else ACC4 for v in ic]
-        ax3.bar(weekly["week"], ic, color=colors_ic, width=0.7)
-        ax3.axhline(0, color=TXT, lw=0.8, ls="--")
-        mean_ic = ic.mean()
-        ax3.axhline(mean_ic, color=ACC1, lw=1.2, ls="--",
-                    label=f"Mean IC {mean_ic:.4f}")
-        ax3.set_title("Weekly Information Coefficient (IC)", pad=6)
-        ax3.set_xlabel("Week")
-        ax3.set_ylabel("IC")
-        ax3.legend(fontsize=8, loc="upper right")
-        ax3.grid(axis="y", alpha=0.4)
-    else:
-        ax3.text(0.5, 0.5, "No weekly summary data", ha="center", va="center",
-                 color=TXT, transform=ax3.transAxes)
-        ax3.set_title("Weekly IC", pad=6)
+    is_run  = bool(weekly_summary) and not kill_sw
+    st_lbl  = "RUNNING" if is_run else ("KILL-SWITCH" if kill_sw else "IDLE")
+    st_col  = ACC3 if is_run else (ACC4 if kill_sw else MUTED)
 
-    # ── Panel 4 (mid-mid): Weekly Returns ────────────────────────────────────
-    ax4 = fig.add_subplot(gs[1, 1])
-    if weekly is not None:
-        wr = weekly["week_return_pct"]
-        colors_wr = [ACC3 if v >= 0 else ACC4 for v in wr]
-        ax4.bar(weekly["week"], wr, color=colors_wr, width=0.7)
-        ax4.axhline(0, color=TXT, lw=0.8, ls="--")
-        cum = (1 + wr / 100).cumprod() - 1
-        ax4b = ax4.twinx()
-        ax4b.plot(weekly["week"], cum * 100, color=ACC2, lw=1.5,
-                  label="Cum %")
-        ax4b.set_ylabel("Cum Return %", color=ACC2, fontsize=8)
-        ax4b.tick_params(axis="y", labelcolor=ACC2, labelsize=7)
-        ax4.set_title("Weekly Returns & Cumulative PnL", pad=6)
-        ax4.set_xlabel("Week")
-        ax4.set_ylabel("Week Return %")
-        ax4.grid(axis="y", alpha=0.4)
-    else:
-        ax4.text(0.5, 0.5, "No weekly data", ha="center", va="center",
-                 color=TXT, transform=ax4.transAxes)
-        ax4.set_title("Weekly Returns", pad=6)
+    status_rows = [
+        ("Current Status",  "",                 None),
+        ("Run state",       st_lbl,             st_col),
+        ("Run ID",          str(run_id)[:22],   TXT),
+        ("Last checkpoint", ts,                 TXT),
+        ("Current week",    str(last_week),      TXT),
+        ("Retrains",        str(retrains),       TXT),
+        ("",                "",                 None),
+        ("Latest metrics",  "",                 None),
+        ("Trades",          f"{n_trades:,}",    TXT),
+        ("Win rate",        f"{wr:.3f}%",        ACC3 if wr >= 50 else ACC1),
+        ("Sharpe",          f"{cur_shp:.3f}",   ACC3 if cur_shp >= 1 else (ACC4 if cur_shp < 0 else ACC1)),
+        ("Drawdown",        f"{cur_dd:.2f}%",   ACC4 if abs(cur_dd) > 20 else ACC1),
+        ("Cum return",      f"{cur_ret:.2f}%",  ACC3 if cur_ret >= 0 else ACC4),
+        ("Profit factor",   f"{pf:.3f}",        ACC3 if pf >= 1.5 else ACC1),
+    ]
 
-    # ── Panel 5 (mid-right): Turnover ────────────────────────────────────────
-    ax5 = fig.add_subplot(gs[1, 2])
-    if weekly is not None and "turnover_pct" in weekly.columns:
-        ax5.plot(weekly["week"], weekly["turnover_pct"], color=ACC1, lw=1.5)
-        ax5.fill_between(weekly["week"], weekly["turnover_pct"], alpha=0.25, color=ACC1)
-        ax5.set_title("Turnover % per Week", pad=6)
-        ax5.set_xlabel("Week")
-        ax5.set_ylabel("Turnover %")
-        ax5.grid(axis="y", alpha=0.4)
-    else:
-        ax5.text(0.5, 0.5, "No turnover data", ha="center", va="center",
-                 color=TXT, transform=ax5.transAxes)
-        ax5.set_title("Turnover %", pad=6)
+    y_pos, step = 0.97, 0.072
+    for label, val, color in status_rows:
+        if color is None:
+            ax_status.text(0.04, y_pos, label,
+                           transform=ax_status.transAxes,
+                           fontsize=9, color=ACC1, fontweight="bold", va="top")
+        else:
+            ax_status.text(0.04, y_pos, label,
+                           transform=ax_status.transAxes,
+                           fontsize=8.5, color=MUTED, va="top")
+            ax_status.text(0.96, y_pos, val,
+                           transform=ax_status.transAxes,
+                           fontsize=8.5, color=color, va="top", ha="right")
+        y_pos -= step
 
-    # ── Panel 6+7 (bottom span 2 cols): Backtest PnL curve ───────────────────
-    ax6 = fig.add_subplot(gs[2, :2])
-    if pnl_df is not None and "cum_ret" in pnl_df.columns:
-        ts = pnl_df["timestamp"]
-        cum  = pnl_df["cum_ret"] * 100
-        bm   = pnl_df.get("cum_benchmark", pd.Series([0] * len(pnl_df))) * 100
-        dd   = pnl_df.get("drawdown", pd.Series([0] * len(pnl_df))) * 100
+    ax_status.set_title("Current Status")
 
-        ax6.plot(ts, cum, color=ACC3, lw=1.5, label="Strategy")
-        ax6.plot(ts, bm,  color=ACC2, lw=1,   ls="--", label="Benchmark", alpha=0.8)
-        ax6.fill_between(ts, dd, 0, color=ACC4, alpha=0.3, label="Drawdown")
-        ax6.axhline(0, color=TXT, lw=0.6, ls="--")
-        ax6.set_title("Backtest Cumulative Return & Drawdown (Year 1–3)", pad=6)
-        ax6.set_xlabel("Date")
-        ax6.set_ylabel("Cumulative Return %")
-        ax6.legend(fontsize=8, loc="upper left")
-        ax6.grid(alpha=0.4)
-        ax6.tick_params(axis="x", labelsize=7)
-    else:
-        ax6.text(0.5, 0.5, "No backtest PnL data found", ha="center", va="center",
-                 color=TXT, transform=ax6.transAxes)
-        ax6.set_title("Backtest PnL", pad=6)
-
-    # ── Panel 7 (bottom-right): Model AUC / IC comparison ────────────────────
-    ax7 = fig.add_subplot(gs[2, 2])
-
-    model_labels = []
-    model_aucs   = []
-    model_ics    = []
-
-    for src_label, src_json in [
-        ("v4 Base", TRAIN_V4),
-        ("Y3 Base", TRAIN_BASE),
-    ]:
-        d = _load_json(src_json)
-        if d:
-            model_labels.append(src_label)
-            model_aucs.append(d.get("mean_auc", 0))
-            model_ics.append(abs(d.get("mean_ic", 0)))
-
-    if model_labels:
-        x = np.arange(len(model_labels))
-        w = 0.35
-        ax7.bar(x - w/2, model_aucs, w, label="AUC",       color=ACC1)
-        ax7.bar(x + w/2, model_ics,  w, label="|IC|",      color=ACC2)
-        ax7.set_xticks(x)
-        ax7.set_xticklabels(model_labels, fontsize=8)
-        ax7.axhline(0.5, color=ACC4, lw=0.8, ls="--", label="AUC baseline 0.5")
-        ax7.set_title("Model AUC & |IC| Comparison", pad=6)
-        ax7.set_ylabel("Score")
-        ax7.legend(fontsize=8)
-        ax7.grid(axis="y", alpha=0.4)
-    else:
-        ax7.text(0.5, 0.5, "No model comparison data", ha="center", va="center",
-                 color=TXT, transform=ax7.transAxes)
-        ax7.set_title("Model Comparison", pad=6)
-
-    # ── Footer ────────────────────────────────────────────────────────────────
-    fig.text(
-        0.5, 0.005,
-        "Azalyst Alpha Research Engine  |  VIEW_TRAINING.py  |  all data from results/",
-        ha="center", fontsize=7.5, color="#666680"
+    # ── Panel 4: Recent Log Tail ──────────────────────────────────────────────
+    ax_log.clear()
+    ax_log.set_facecolor("#060d18")
+    ax_log.set_axis_off()
+    ax_log.text(
+        0.01, 0.99,
+        "\n".join(log_lines),
+        transform=ax_log.transAxes,
+        fontsize=7.5, color="#7dff9f", va="top", ha="left",
+        fontfamily="monospace",
     )
+    ax_log.set_title("Recent Log Tail")
 
-    plt.show()
-    print("[VIEW_TRAINING] Dashboard open — close the window to exit.")
+    fig.suptitle(
+        "Azalyst Alpha Research Engine  —  Spyder Monitor",
+        fontsize=13, fontweight="bold", color=ACC1, y=0.99,
+    )
+    fig.canvas.draw_idle()
+    fig.canvas.flush_events()
+
+
+# ── Main loop ─────────────────────────────────────────────────────────────────
+def run_dashboard(refresh: int = REFRESH) -> None:
+    _apply_style()
+
+    fig = plt.figure("Azalyst Monitor", figsize=(14, 9), facecolor=BG)
+    gs  = gridspec.GridSpec(
+        2, 2, figure=fig,
+        left=0.05, right=0.97,
+        top=0.94,  bottom=0.05,
+        hspace=0.42, wspace=0.35,
+    )
+    axes = [fig.add_subplot(gs[r, c]) for r, c in [(0, 0), (0, 1), (1, 0), (1, 1)]]
+
+    plt.ion()
+    plt.show(block=False)
+
+    print(f"[Azalyst Monitor] Live dashboard started — refreshes every {refresh}s")
+    print(f"[Azalyst Monitor] Checkpoint : {CKPT}")
+    print(f"[Azalyst Monitor] Log file   : {LOG}")
+    print("[Azalyst Monitor] Close the window or Ctrl+C to exit.\n")
+
+    try:
+        while plt.fignum_exists(fig.number):
+            ckpt      = _load_ckpt()
+            log_lines = _tail_log()
+            _render(fig, axes, ckpt, log_lines)
+            plt.pause(refresh)
+    except KeyboardInterrupt:
+        pass
+
+    print("[Azalyst Monitor] Exited.")
 
 
 if __name__ == "__main__":
-    print("Loading Azalyst Training Dashboard ...")
-    build_dashboard()
+    run_dashboard()

@@ -860,6 +860,26 @@ def main():
 
     # ── Init DB + checkpoint detection ───────────────────────────────────────
     os.makedirs(RESULTS_DIR, exist_ok=True)
+
+    # Tee stdout → results/run_log.txt so VIEW_TRAINING.py can tail it live
+    class _Tee:
+        def __init__(self, stream, path: str):
+            self._s = stream
+            self._f = open(path, "w", encoding="utf-8", buffering=1)
+        def write(self, s: str) -> int:
+            self._s.write(s)
+            self._f.write(s)
+            return len(s)
+        def flush(self) -> None:
+            self._s.flush()
+            self._f.flush()
+        def fileno(self) -> int:
+            return self._s.fileno()
+        def isatty(self) -> bool:
+            return False
+
+    sys.stdout = _Tee(sys.__stdout__, os.path.join(RESULTS_DIR, "run_log.txt"))
+
     db = AzalystDB(f"{RESULTS_DIR}/azalyst.db")
     ckpt = None if args.no_resume else load_checkpoint(RESULTS_DIR)
     resuming = ckpt is not None

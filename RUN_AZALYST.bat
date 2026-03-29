@@ -325,8 +325,8 @@ if "!USE_SPYDER!"=="1" (
     echo   LAUNCHING SPYDER
     echo ================================================================
     echo.
-    echo  Spyder opens in background. Once loaded:
-    echo    - Open monitor_dashboard.py and press F5 for live charts
+    echo  Spyder opens in the background. VIEW_TRAINING.py launches
+    echo  automatically as a live monitor window — no manual steps needed.
     echo    - Closing Spyder will NOT stop the pipeline
     echo.
     if "!SPYDER_MODE!"=="PATH" (
@@ -339,13 +339,13 @@ if "!USE_SPYDER!"=="1" (
     echo  [OK] Spyder launching... waiting 5s
     timeout /t 5 /nobreak >nul
     echo.
-    echo  Opening Training Results Dashboard...
+    echo  Launching Spyder Monitor (live training view)...
     if defined PYTHON_ARGS (
         start "" "!PYTHON_EXE!" !PYTHON_ARGS! "%~dp0VIEW_TRAINING.py"
     ) else (
         start "" "!PYTHON_EXE!" "%~dp0VIEW_TRAINING.py"
     )
-    echo  [OK] Dashboard window opened.
+    echo  [OK] Monitor window opened — updates every 5 s during training.
     echo.
 )
 
@@ -395,16 +395,11 @@ if "!EXIT_CODE!"=="0" (
     echo    all_trades_v4.csv        - Every simulated trade
     echo    performance_v4.json      - Sharpe, IC, ICIR summary
     echo    azalyst.db               - SQLite database ^(full history^)
+    echo    run_log.txt              - Full training log
     echo.
     echo  Checkpoint cleared ^(run finished cleanly^).
     echo.
-    echo  Opening Training Results Dashboard...
-    if defined PYTHON_ARGS (
-        start "" "!PYTHON_EXE!" !PYTHON_ARGS! "%~dp0VIEW_TRAINING.py"
-    ) else (
-        start "" "!PYTHON_EXE!" "%~dp0VIEW_TRAINING.py"
-    )
-    echo  [OK] Dashboard window opened.
+    echo  Training complete. The Spyder Monitor window shows final results.
     echo.
 ) else (
     color 0C
