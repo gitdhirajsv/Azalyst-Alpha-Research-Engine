@@ -326,7 +326,7 @@ if "!USE_SPYDER!"=="1" (
     echo ================================================================
     echo.
     echo  Spyder opens in the background. VIEW_TRAINING.py launches
-    echo  automatically as a live monitor window — no manual steps needed.
+    echo  automatically as a live monitor window - no manual steps needed.
     echo    - Closing Spyder will NOT stop the pipeline
     echo.
     if "!SPYDER_MODE!"=="PATH" (
@@ -345,7 +345,7 @@ if "!USE_SPYDER!"=="1" (
     ) else (
         start "" "!PYTHON_EXE!" "%~dp0VIEW_TRAINING.py"
     )
-    echo  [OK] Monitor window opened — updates every 5 s during training.
+    echo  [OK] Monitor window opened - updates every 5 s during training.
     echo.
 )
 

@@ -33,16 +33,16 @@ LOG  = RES  / "run_log.txt"
 REFRESH = 5   # seconds between refreshes
 LOG_TAIL = 18  # log lines to show
 
-# ── Theme (dark — matches RUN_AZALYST terminal palette) ──────────────────────
-BG    = "#0b1220"
-PANEL = "#111b2e"
-ACC1  = "#f07f2a"   # orange
-ACC2  = "#4fa8d5"   # blue
-ACC3  = "#21c16b"   # green
-ACC4  = "#e05252"   # red
-TXT   = "#d9f5e2"
-MUTED = "#8fb7a0"
-GRID  = "#1a2a3a"
+# ── Theme (light / white background) ────────────────────────────────────────
+BG    = "#ffffff"
+PANEL = "#f5f5f5"
+ACC1  = "#e07020"   # orange
+ACC2  = "#2c7bb6"   # blue
+ACC3  = "#27a060"   # green
+ACC4  = "#d94040"   # red
+TXT   = "#1a1a2e"
+MUTED = "#555577"
+GRID  = "#dddddd"
 
 
 # ── Data helpers ──────────────────────────────────────────────────────────────
@@ -101,10 +101,12 @@ def _apply_style() -> None:
         "grid.color":        GRID,
         "grid.linewidth":    0.5,
         "text.color":        TXT,
-        "font.family":       "monospace",
+        "font.family":       "sans-serif",
         "font.size":         9,
         "axes.titlesize":    10,
         "axes.titleweight":  "bold",
+        "legend.framealpha": 0.8,
+        "legend.edgecolor":  GRID,
     })
 
 
@@ -160,8 +162,8 @@ def _render(fig: plt.Figure, axes: list, ckpt: dict, log_lines: list[str]) -> No
     ax_status.set_facecolor(PANEL)
     ax_status.set_axis_off()
     for sp in ax_status.spines.values():
-        sp.set_edgecolor(ACC1)
-        sp.set_linewidth(1.2)
+        sp.set_edgecolor("#cccccc")
+        sp.set_linewidth(1.0)
 
     n_trades = len(all_trades)
     if all_trades:
@@ -217,19 +219,19 @@ def _render(fig: plt.Figure, axes: list, ckpt: dict, log_lines: list[str]) -> No
 
     # ── Panel 4: Recent Log Tail ──────────────────────────────────────────────
     ax_log.clear()
-    ax_log.set_facecolor("#060d18")
+    ax_log.set_facecolor("#f0f4f8")
     ax_log.set_axis_off()
     ax_log.text(
         0.01, 0.99,
         "\n".join(log_lines),
         transform=ax_log.transAxes,
-        fontsize=7.5, color="#7dff9f", va="top", ha="left",
+        fontsize=7.5, color="#1a1a2e", va="top", ha="left",
         fontfamily="monospace",
     )
     ax_log.set_title("Recent Log Tail")
 
     fig.suptitle(
-        "Azalyst Alpha Research Engine  —  Spyder Monitor",
+        "Azalyst Alpha Research Engine  -  Spyder Monitor",
         fontsize=13, fontweight="bold", color=ACC1, y=0.99,
     )
     fig.canvas.draw_idle()
