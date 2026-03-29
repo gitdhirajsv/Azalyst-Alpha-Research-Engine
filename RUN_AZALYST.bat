@@ -390,6 +390,14 @@ if "!EXIT_CODE!"=="0" (
     echo.
     echo  Checkpoint cleared ^(run finished cleanly^).
     echo.
+    echo  Opening Training Results Dashboard...
+    if defined PYTHON_ARGS (
+        start "" "!PYTHON_EXE!" !PYTHON_ARGS! "%~dp0VIEW_TRAINING.py"
+    ) else (
+        start "" "!PYTHON_EXE!" "%~dp0VIEW_TRAINING.py"
+    )
+    echo  [OK] Dashboard window opened.
+    echo.
 ) else (
     color 0C
     echo.

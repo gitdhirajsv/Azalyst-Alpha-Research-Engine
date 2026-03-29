@@ -1,5 +1,5 @@
 @echo off
-title Azalyst — Training Dashboard
+title Azalyst - Training Dashboard
 color 0A
 cd /d "%~dp0"
 
@@ -27,7 +27,7 @@ set "PYTHON_EXE=python"
 
 echo.
 echo  ============================================================
-echo    AZALYST  —  ML TRAINING RESULTS DASHBOARD
+echo    AZALYST  --  ML TRAINING RESULTS DASHBOARD
 echo    Loading plots from results/ ...
 echo  ============================================================
 echo.
