@@ -861,76 +861,31 @@ def main():
     # ── Init DB + checkpoint detection ───────────────────────────────────────
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
-    # Tee stdout -> results/run_log.txt so VIEW_TRAINING.py can tail it live
-    class _Tee:
-        def __init__(self, stream, path: str):
-            self._s = stream
-            try:
-                self._f = open(path, "w", encoding="utf-8", buffering=1)
-            except OSError:
-                self._f = None
-        # -- attributes libraries probe on sys.stdout -------------------------
-        @property
-        def buffer(self):
-            return getattr(self._s, "buffer", self._s)
-        @property
-        def encoding(self):
-            return getattr(self._s, "encoding", "utf-8")
-        @property
-        def errors(self):
-            return getattr(self._s, "errors", "replace")
-        @property
-        def line_buffering(self):
-            return True
-        @property
-        def closed(self):
-            return False
-        def writable(self):   return True
-        def readable(self):   return False
-        def seekable(self):   return False
-        def isatty(self):     return False
-        def fileno(self):
-            try:
-                return self._s.fileno()
-            except Exception:
-                import io
-                raise io.UnsupportedOperation("fileno")
-        # -- core I/O ---------------------------------------------------------
-        def write(self, s: str) -> int:
-            try:
-                self._s.write(s)
-            except Exception:
-                pass
-            if self._f:
-                try:
-                    self._f.write(s)
-                except Exception:
-                    pass
-            return len(s)
-        def flush(self) -> None:
-            try:
-                self._s.flush()
-            except Exception:
-                pass
-            if self._f:
-                try:
-                    self._f.flush()
-                except Exception:
-                    pass
-
+    # Simple log file writer — does NOT replace sys.stdout, just mirrors key
+    # lines so VIEW_TRAINING.py can tail results/run_log.txt live.
+    _log_path = os.path.join(RESULTS_DIR, "run_log.txt")
     try:
-        sys.stdout = _Tee(sys.__stdout__ or sys.stdout,
-                          os.path.join(RESULTS_DIR, "run_log.txt"))
+        _log_fh = open(_log_path, "w", encoding="utf-8", buffering=1)
     except Exception:
-        pass  # never crash the engine over logging
+        _log_fh = None
+
+    def _log(msg: str = "") -> None:
+        """Print to console and mirror to run_log.txt."""
+        print(msg)
+        if _log_fh:
+            try:
+                _log_fh.write(msg + "\n")
+                _log_fh.flush()
+            except Exception:
+                pass
 
     db = AzalystDB(f"{RESULTS_DIR}/azalyst.db")
     ckpt = None if args.no_resume else load_checkpoint(RESULTS_DIR)
     resuming = ckpt is not None
     if resuming:
         run_id = ckpt["run_id"]
-        print(f"\n  [CHECKPOINT] Resuming run_id={run_id}  "
-              f"from week {ckpt['last_week'] + 1}\n")
+        _log(f"\n  [CHECKPOINT] Resuming run_id={run_id}  "
+             f"from week {ckpt['last_week'] + 1}\n")
         sys.stdout.flush()
     else:
         run_id = args.run_id or f"v4_{time.strftime('%Y%m%d_%H%M%S')}"
@@ -942,34 +897,36 @@ def main():
     risk_mgr = RiskManager()
 
     # ── Step 0: Feature cache ─────────────────────────────────────────────────
-    print("STEP 0: Feature cache\n")
+    _log("STEP 0: Feature cache\n")
     if args.rebuild_cache:
         if not build_feature_store():
-            print("ERROR: Feature store build failed")
+            _log("ERROR: Feature store build failed")
             db.finish_run(run_id, "failed")
             return
     else:
         total, valid, invalid = inspect_feature_store()
         if total == 0:
-            print("  No cache — building...")
+            _log("  No cache -- building...")
             if not build_feature_store():
                 db.finish_run(run_id, "failed")
                 return
         elif invalid:
             build_feature_store()
         else:
-            print(f"  Found {valid} valid cache files")
+            _log(f"  Found {valid} valid cache files")
 
     # ── CUDA ──────────────────────────────────────────────────────────────────
     cuda_api = detect_cuda_api() if use_gpu else None
 
     # ── Step 1: Load ──────────────────────────────────────────────────────────
-    print("\nSTEP 1: Load feature cache\n")
+    _log("\nSTEP 1: Load feature cache\n")
+    _log(f"  Loading {len(list(Path(CACHE_DIR).glob('*.parquet')))} symbols from feature cache...")
     symbols = load_feature_store()
     if not symbols:
-        print("ERROR: No symbols loaded")
+        _log("ERROR: No symbols loaded")
         db.finish_run(run_id, "failed")
         return
+    _log(f"  Loaded {len(symbols)} valid symbols")
 
     # ── Step 2: Date splits ───────────────────────────────────────────────────
     print("\nSTEP 2: Date splits (v4: walk Y2+Y3)\n")
@@ -1272,6 +1229,10 @@ def main():
               f"ret={week_ret*100:+.2f}% | IC={week_ic:+.4f} | "
               f"cum={cum_ret*100:+.1f}% | DD={max_dd*100:.1f}% | "
               f"{regime}")
+        _log(f"  Week {week_num:3d} [{zone}]: {len(trades):4d} trades | "
+             f"ret={week_ret*100:+.2f}% | IC={week_ic:+.4f} | "
+             f"cum={cum_ret*100:+.1f}% | DD={max_dd*100:.1f}% | "
+             f"{regime}")
         sys.stdout.flush()
 
         # ── Checkpoint (atomic write after every completed week) ───────────────
