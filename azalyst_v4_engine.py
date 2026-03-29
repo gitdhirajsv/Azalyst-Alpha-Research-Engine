@@ -861,24 +861,68 @@ def main():
     # ── Init DB + checkpoint detection ───────────────────────────────────────
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
-    # Tee stdout → results/run_log.txt so VIEW_TRAINING.py can tail it live
+    # Tee stdout -> results/run_log.txt so VIEW_TRAINING.py can tail it live
     class _Tee:
         def __init__(self, stream, path: str):
             self._s = stream
-            self._f = open(path, "w", encoding="utf-8", buffering=1)
+            try:
+                self._f = open(path, "w", encoding="utf-8", buffering=1)
+            except OSError:
+                self._f = None
+        # -- attributes libraries probe on sys.stdout -------------------------
+        @property
+        def buffer(self):
+            return getattr(self._s, "buffer", self._s)
+        @property
+        def encoding(self):
+            return getattr(self._s, "encoding", "utf-8")
+        @property
+        def errors(self):
+            return getattr(self._s, "errors", "replace")
+        @property
+        def line_buffering(self):
+            return True
+        @property
+        def closed(self):
+            return False
+        def writable(self):   return True
+        def readable(self):   return False
+        def seekable(self):   return False
+        def isatty(self):     return False
+        def fileno(self):
+            try:
+                return self._s.fileno()
+            except Exception:
+                import io
+                raise io.UnsupportedOperation("fileno")
+        # -- core I/O ---------------------------------------------------------
         def write(self, s: str) -> int:
-            self._s.write(s)
-            self._f.write(s)
+            try:
+                self._s.write(s)
+            except Exception:
+                pass
+            if self._f:
+                try:
+                    self._f.write(s)
+                except Exception:
+                    pass
             return len(s)
         def flush(self) -> None:
-            self._s.flush()
-            self._f.flush()
-        def fileno(self) -> int:
-            return self._s.fileno()
-        def isatty(self) -> bool:
-            return False
+            try:
+                self._s.flush()
+            except Exception:
+                pass
+            if self._f:
+                try:
+                    self._f.flush()
+                except Exception:
+                    pass
 
-    sys.stdout = _Tee(sys.__stdout__, os.path.join(RESULTS_DIR, "run_log.txt"))
+    try:
+        sys.stdout = _Tee(sys.__stdout__ or sys.stdout,
+                          os.path.join(RESULTS_DIR, "run_log.txt"))
+    except Exception:
+        pass  # never crash the engine over logging
 
     db = AzalystDB(f"{RESULTS_DIR}/azalyst.db")
     ckpt = None if args.no_resume else load_checkpoint(RESULTS_DIR)
