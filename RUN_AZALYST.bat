@@ -339,6 +339,14 @@ if "!USE_SPYDER!"=="1" (
     echo  [OK] Spyder launching... waiting 5s
     timeout /t 5 /nobreak >nul
     echo.
+    echo  Opening Training Results Dashboard...
+    if defined PYTHON_ARGS (
+        start "" "!PYTHON_EXE!" !PYTHON_ARGS! "%~dp0VIEW_TRAINING.py"
+    ) else (
+        start "" "!PYTHON_EXE!" "%~dp0VIEW_TRAINING.py"
+    )
+    echo  [OK] Dashboard window opened.
+    echo.
 )
 
 :: ================================================================
