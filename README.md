@@ -24,6 +24,12 @@ At a high level, the engine processes 3+ years of 5-minute OHLCV data across 444
 
 The project exists for a single reason: most open-source crypto research is toy-level — fit a moving average, overfit on in-sample, declare victory. Azalyst is the antithesis. These methods mirror how the top systematic funds structure research, not because we are a fund, but because they are the only honest way to know if your signal is real.
 
+<div align="center">
+
+![Azalyst Spyder Monitor](docs/assets/azalyst_monitor/Azalyst_Monitor.png)
+
+</div>
+
 ---
 
 ## v4 Architecture
