@@ -26,7 +26,7 @@ The project exists for a single reason: most open-source crypto research is toy-
 
 <div align="center">
 
-![Azalyst Spyder Monitor](docs/assets/azalyst_spyder_monitor.svg)
+![Azalyst Spyder Monitor](docs/assets/azalyst_monitor/Azalyst_Monitor.png)
 
 </div>
 
