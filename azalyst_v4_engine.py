@@ -1250,10 +1250,11 @@ def main():
     icir_val = ic_mean / (ic_std + 1e-8)
     ic_pos = float((ic_s > 0).mean() * 100) if len(ic_s) > 0 else 0.0
 
+    _y2_end = pd.Timestamp(y2_end).replace(tzinfo=None)
     y2_weeks = summary_df[summary_df["week_end"].apply(
-        lambda x: pd.Timestamp(x) <= y2_end if x else False)]
+        lambda x: pd.Timestamp(x) <= _y2_end if x else False)]
     y3_weeks = summary_df[summary_df["week_end"].apply(
-        lambda x: pd.Timestamp(x) > y2_end if x else False)]
+        lambda x: pd.Timestamp(x) > _y2_end if x else False)]
 
     y2_ret = float(y2_weeks["week_return_pct"].sum()) if len(y2_weeks) > 0 else 0.0
     y3_ret = float(y3_weeks["week_return_pct"].sum()) if len(y3_weeks) > 0 else 0.0
