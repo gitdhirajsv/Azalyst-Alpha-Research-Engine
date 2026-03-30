@@ -138,75 +138,78 @@ def build_dashboard_html(
 {refresh_meta}  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Azalyst {title_suffix}</title>
   <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
     :root {{
-      --bg: #0b1220;
-      --panel: #111b2e;
-      --panel-2: #16243d;
-      --text: #d9f5e2;
-      --muted: #8fb7a0;
-      --accent: #21c16b;
-      --warn: #e0b34a;
-      --danger: #f0626e;
-      --border: rgba(143, 183, 160, 0.22);
-      --shadow: 0 18px 40px rgba(0, 0, 0, 0.25);
+      --bg: #10172a;
+      --panel: #1c2540;
+      --panel-2: #222d4a;
+      --text: #ffffff;
+      --muted: #9aa5be;
+      --accent: #4d9cf8;
+      --warn: #f0a64a;
+      --danger: #f06b77;
+      --border: rgba(255, 255, 255, 0.08);
+      --shadow: 0 4px 24px rgba(0, 0, 0, 0.40);
     }}
     * {{ box-sizing: border-box; }}
     body {{
       margin: 0;
-      font-family: Consolas, "Courier New", monospace;
-      background:
-        radial-gradient(circle at top left, rgba(33, 193, 107, 0.16), transparent 28%),
-        radial-gradient(circle at top right, rgba(224, 179, 74, 0.10), transparent 24%),
-        var(--bg);
+      font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+      background: var(--bg);
       color: var(--text);
     }}
     .page {{
-      max-width: 1200px;
+      max-width: 1280px;
       margin: 0 auto;
-      padding: 28px 20px 40px;
+      padding: 28px 24px 48px;
     }}
     .hero {{
       display: flex;
       justify-content: space-between;
-      gap: 16px;
       align-items: center;
-      margin-bottom: 20px;
+      margin-bottom: 24px;
     }}
     .hero h1 {{
       margin: 0;
-      font-size: 28px;
-      letter-spacing: 0.04em;
+      font-size: 22px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+      color: #ffffff;
     }}
     .hero p {{
-      margin: 6px 0 0;
+      margin: 5px 0 0;
+      font-size: 13px;
       color: var(--muted);
     }}
     .badge {{
-      padding: 10px 14px;
+      padding: 8px 18px;
       border-radius: 999px;
-      font-weight: 700;
-      border: 1px solid var(--border);
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      border: 1.5px solid var(--border);
       background: var(--panel);
-      box-shadow: var(--shadow);
     }}
-    .badge.running {{ color: var(--accent); }}
-    .badge.stopped {{ color: var(--danger); }}
+    .badge.running {{ color: #4ade80; border-color: rgba(74,222,128,0.30); }}
+    .badge.stopped {{ color: var(--danger); border-color: rgba(240,107,119,0.30); }}
     .grid {{
       display: grid;
       grid-template-columns: repeat(12, 1fr);
       gap: 16px;
     }}
     .card {{
-      background: linear-gradient(180deg, rgba(255,255,255,0.02), transparent), var(--panel);
+      background: var(--panel);
       border: 1px solid var(--border);
-      border-radius: 16px;
-      padding: 18px;
+      border-radius: 14px;
+      padding: 20px;
       box-shadow: var(--shadow);
     }}
     .card h2 {{
-      margin: 0 0 14px;
-      font-size: 14px;
-      letter-spacing: 0.12em;
+      margin: 0 0 16px;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
       color: var(--muted);
     }}
     .status {{ grid-column: span 4; }}
@@ -216,51 +219,67 @@ def build_dashboard_html(
     .stats {{
       display: grid;
       grid-template-columns: repeat(2, 1fr);
-      gap: 12px;
+      gap: 10px;
     }}
     .stat {{
       background: var(--panel-2);
-      border-radius: 12px;
-      padding: 12px;
-      border: 1px solid rgba(143, 183, 160, 0.12);
+      border-radius: 10px;
+      padding: 12px 14px;
+      border: 1px solid var(--border);
     }}
     .label {{
       display: block;
-      font-size: 12px;
+      font-size: 11px;
+      font-weight: 500;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
       color: var(--muted);
       margin-bottom: 6px;
     }}
     .value {{
-      font-size: 20px;
+      font-size: 19px;
       font-weight: 700;
+      color: #ffffff;
     }}
     .meta {{
       display: grid;
-      gap: 10px;
+      gap: 0;
     }}
     .meta-row {{
       display: flex;
       justify-content: space-between;
+      align-items: center;
       gap: 12px;
-      border-bottom: 1px solid rgba(143, 183, 160, 0.08);
-      padding-bottom: 8px;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      padding: 9px 0;
+      font-size: 13.5px;
     }}
     .meta-row:last-child {{
       border-bottom: 0;
       padding-bottom: 0;
     }}
+    .meta-row span {{
+      color: var(--muted);
+      font-size: 13px;
+    }}
+    .meta-row strong {{
+      color: #ffffff;
+      font-weight: 500;
+    }}
     pre {{
       margin: 0;
       white-space: pre-wrap;
       word-break: break-word;
-      background: #08111d;
-      border: 1px solid rgba(143, 183, 160, 0.08);
-      border-radius: 12px;
-      padding: 14px;
-      max-height: 560px;
+      background: #0d1424;
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 10px;
+      padding: 14px 16px;
+      max-height: 520px;
       overflow: auto;
-      color: #7dff9f;
-      line-height: 1.45;
+      color: #c8d6f0;
+      font-family: "Cascadia Code", "Fira Code", Consolas, "Courier New", monospace;
+      font-size: 12.5px;
+      line-height: 1.6;
     }}
     @media (max-width: 900px) {{
       .status, .metrics, .pids, .logs {{ grid-column: span 12; }}
@@ -271,7 +290,7 @@ def build_dashboard_html(
   <div class="page">
     <div class="hero">
       <div>
-        <h1>Azalyst Live Monitor</h1>
+        <h1>Azalyst Alpha Research Engine &mdash; Spyder Monitor</h1>
         <p>{html.escape(refresh_message)}</p>
       </div>
       <div class="badge {run_class}">{run_label}</div>
@@ -279,8 +298,9 @@ def build_dashboard_html(
 
     <div class="grid">
       <section class="card status">
-        <h2>Session</h2>
+        <h2>Current Status</h2>
         <div class="meta">
+          <div class="meta-row"><span>Run state</span><strong>{html.escape(run_label)}</strong></div>
           <div class="meta-row"><span>Current step</span><strong>{html.escape(str(status["current_step"]))}</strong></div>
           <div class="meta-row"><span>Cycle index</span><strong>{html.escape(str(status["cycle_index"]))}</strong></div>
           <div class="meta-row"><span>Last checkpoint</span><strong>{html.escape(str(status["last_checkpoint"]))}</strong></div>
@@ -288,14 +308,14 @@ def build_dashboard_html(
       </section>
 
       <section class="card metrics">
-        <h2>Latest Metrics</h2>
+        <h2>Latest Cycle</h2>
         <div class="stats">
-          <div class="stat"><span class="label">Cycle</span><span class="value">{html.escape(str(metrics["cycle"]))}</span></div>
           <div class="stat"><span class="label">Trades</span><span class="value">{metrics["trades"]}</span></div>
           <div class="stat"><span class="label">Win rate</span><span class="value">{metrics["win_rate"]}%</span></div>
           <div class="stat"><span class="label">Sharpe</span><span class="value">{metrics["sharpe"]}</span></div>
           <div class="stat"><span class="label">Drawdown</span><span class="value">{metrics["drawdown"]}%</span></div>
           <div class="stat"><span class="label">Profit factor</span><span class="value">{metrics["profit_factor"]}</span></div>
+          <div class="stat"><span class="label">Cycle</span><span class="value">{html.escape(str(metrics["cycle"]))}</span></div>
         </div>
       </section>
 
@@ -310,7 +330,7 @@ def build_dashboard_html(
       </section>
 
       <section class="card logs">
-        <h2>Recent Log</h2>
+        <h2>Recent Log Tail</h2>
         <pre>{log_text}</pre>
       </section>
     </div>
