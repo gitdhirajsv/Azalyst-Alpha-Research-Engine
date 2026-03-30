@@ -33,16 +33,16 @@ LOG  = RES  / "run_log.txt"
 REFRESH = 5   # seconds between refreshes
 LOG_TAIL = 18  # log lines to show
 
-# ── Theme (light / white background) ────────────────────────────────────────
-BG    = "#ffffff"
-PANEL = "#f5f5f5"
+# ── Theme (dark navy figure, white card panels) ─────────────────────────────
+BG    = "#0f1628"   # dark navy figure background
+PANEL = "#ffffff"   # white card panels
 ACC1  = "#e07020"   # orange
 ACC2  = "#2c7bb6"   # blue
 ACC3  = "#27a060"   # green
 ACC4  = "#d94040"   # red
-TXT   = "#1a1a2e"
-MUTED = "#555577"
-GRID  = "#dddddd"
+TXT   = "#1a1a2e"   # dark text on white panels
+MUTED = "#6b7a99"
+GRID  = "#e8ecf0"
 
 
 # ── Data helpers ──────────────────────────────────────────────────────────────
@@ -93,20 +93,23 @@ def _apply_style() -> None:
     plt.rcParams.update({
         "figure.facecolor":  BG,
         "axes.facecolor":    PANEL,
-        "axes.edgecolor":    GRID,
+        "axes.edgecolor":    "#dde3ed",
         "axes.labelcolor":   TXT,
         "axes.titlecolor":   TXT,
-        "xtick.color":       TXT,
-        "ytick.color":       TXT,
+        "xtick.color":       MUTED,
+        "ytick.color":       MUTED,
         "grid.color":        GRID,
-        "grid.linewidth":    0.5,
+        "grid.linewidth":    0.6,
         "text.color":        TXT,
-        "font.family":       "sans-serif",
+        "font.family":       ["Segoe UI", "Inter", "Helvetica Neue", "Arial", "sans-serif"],
         "font.size":         9,
-        "axes.titlesize":    10,
+        "axes.titlesize":    10.5,
         "axes.titleweight":  "bold",
-        "legend.framealpha": 0.8,
-        "legend.edgecolor":  GRID,
+        "axes.spines.top":   False,
+        "axes.spines.right": False,
+        "legend.framealpha": 0.95,
+        "legend.edgecolor":  "#dde3ed",
+        "legend.facecolor":  PANEL,
     })
 
 
@@ -164,8 +167,8 @@ def _render(fig: plt.Figure, axes: list, ckpt: dict, log_lines: list[str]) -> No
     ax_status.set_facecolor(PANEL)
     ax_status.set_axis_off()
     for sp in ax_status.spines.values():
-        sp.set_edgecolor("#cccccc")
-        sp.set_linewidth(1.0)
+        sp.set_edgecolor("#dde3ed")
+        sp.set_linewidth(0.8)
 
     n_trades = len(all_trades)
     if all_trades:
@@ -221,20 +224,22 @@ def _render(fig: plt.Figure, axes: list, ckpt: dict, log_lines: list[str]) -> No
 
     # ── Panel 4: Recent Log Tail ──────────────────────────────────────────────
     ax_log.clear()
-    ax_log.set_facecolor("#f0f4f8")
+    ax_log.set_facecolor("#f4f7fb")
     ax_log.set_axis_off()
     ax_log.text(
-        0.01, 0.99,
+        0.012, 0.985,
         "\n".join(log_lines),
         transform=ax_log.transAxes,
-        fontsize=7.5, color="#1a1a2e", va="top", ha="left",
-        fontfamily="monospace",
+        fontsize=7.8, color=TXT, va="top", ha="left",
+        fontfamily="Cascadia Code" if sys.platform == "win32" else "monospace",
+        linespacing=1.55,
     )
     ax_log.set_title("Recent Log Tail")
 
     fig.suptitle(
-        "Azalyst Alpha Research Engine  -  Spyder Monitor",
-        fontsize=13, fontweight="bold", color=ACC1, y=0.99,
+        "Azalyst Alpha Research Engine  —  Spyder Monitor",
+        fontsize=14, fontweight="bold", color=ACC1, y=0.985,
+        fontfamily="Segoe UI",
     )
     fig.canvas.draw_idle()
     fig.canvas.flush_events()
@@ -248,8 +253,8 @@ def run_dashboard(refresh: int = REFRESH) -> None:
     gs  = gridspec.GridSpec(
         2, 2, figure=fig,
         left=0.05, right=0.97,
-        top=0.94,  bottom=0.05,
-        hspace=0.42, wspace=0.35,
+        top=0.93,  bottom=0.06,
+        hspace=0.50, wspace=0.38,
     )
     axes = [fig.add_subplot(gs[r, c]) for r, c in [(0, 0), (0, 1), (1, 0), (1, 1)]]
 
