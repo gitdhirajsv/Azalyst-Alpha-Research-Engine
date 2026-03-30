@@ -193,18 +193,29 @@ echo.
 
 set "COMPUTE_CHOICE=cpu"
 set "SKIP_SHAP=0"
-if "!GPU_FOUND!"=="0" (
-    echo  Compute: CPU only (no GPU found)
-    goto :Q_MODE
-)
 
+:: Jump to GPU question if GPU is available; otherwise CPU-only path
+if "!GPU_FOUND!"=="1" goto :ASK_COMPUTE
+echo  Compute: CPU only (no GPU found)
+goto :Q_MODE
+
+:ASK_COMPUTE
 echo  Select compute device:
 echo    [1] GPU  -  !GPU_NAME!  ~4x faster
 echo    [2] CPU  -  all cores
 echo.
 choice /N /C:12 /M "  Choice (1/2): "
-if errorlevel 2 ( set "COMPUTE_CHOICE=cpu" & set "SKIP_SHAP=0" & echo  [OK] CPU selected )
-if errorlevel 1 if not errorlevel 2 ( set "COMPUTE_CHOICE=gpu" & set "SKIP_SHAP=1" & echo  [OK] GPU selected )
+if errorlevel 2 goto :SET_CPU
+goto :SET_GPU
+:SET_CPU
+set "COMPUTE_CHOICE=cpu"
+set "SKIP_SHAP=0"
+echo  [OK] CPU selected
+goto :Q_MODE
+:SET_GPU
+set "COMPUTE_CHOICE=gpu"
+set "SKIP_SHAP=1"
+echo  [OK] GPU selected
 
 :: ── Run mode: Terminal only vs Terminal + Spyder monitor ─────────────────────
 :Q_MODE
@@ -216,8 +227,15 @@ echo    [2] Terminal + Spyder  (live monitor opens in a second window;
 echo                            closing it will NOT stop the engine)
 echo.
 choice /N /C:12 /M "  Choice (1/2): "
-if errorlevel 2 ( set "LAUNCH_MONITOR=1" & echo  [OK] Terminal + Spyder )
-if errorlevel 1 if not errorlevel 2 ( set "LAUNCH_MONITOR=0" & echo  [OK] Terminal only )
+if errorlevel 2 goto :SET_SPYDER
+goto :SET_TERMINAL
+:SET_SPYDER
+set "LAUNCH_MONITOR=1"
+echo  [OK] Terminal + Spyder
+goto :CONFIRM
+:SET_TERMINAL
+set "LAUNCH_MONITOR=0"
+echo  [OK] Terminal only
 
 :CONFIRM
 echo.
