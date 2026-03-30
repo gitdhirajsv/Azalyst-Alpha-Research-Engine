@@ -7,10 +7,10 @@ An institutional-style quantitative research platform built as a personal projec
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue?style=flat-square&logo=python)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
 ![Status](https://img.shields.io/badge/Status-Active%20Research-brightgreen?style=flat-square)
-![Features](https://img.shields.io/badge/Features-56%20Cross--Sectional-red?style=flat-square)
-![ML](https://img.shields.io/badge/ML-XGBoost%20CUDA-blueviolet?style=flat-square)
+![Features](https://img.shields.io/badge/Features-72%20Cross--Sectional-red?style=flat-square)
+![ML](https://img.shields.io/badge/ML-XGBoost%20Regression%20CUDA-blueviolet?style=flat-square)
 ![CV](https://img.shields.io/badge/CV-Purged%20K--Fold-orange?style=flat-square)
-![Version](https://img.shields.io/badge/Engine-v4.0-gold?style=flat-square)
+![Version](https://img.shields.io/badge/Engine-v5.0-gold?style=flat-square)
 
 </div>
 
@@ -20,9 +20,18 @@ An institutional-style quantitative research platform built as a personal projec
 
 Azalyst Alpha Research Engine is a research infrastructure project for discovering and validating systematic alpha signals in cryptocurrency markets. It is designed as a rigorous quantitative research system — not a trading bot, not a signal service, not a financial product.
 
-At a high level, the engine processes 3+ years of 5-minute OHLCV data across 444 Binance pairs, engineers 56 cross-sectional features (including WorldQuant-inspired alphas, microstructure signals, and fractionally differentiated price), trains a two-stage XGBoost model using purged K-Fold cross-validation with an **expanding training window**, and validates strictly out-of-sample across **2 full years** (Y2+Y3) it never saw during initial training. Every signal, every metric, and every trade simulation is logged, explainable via SHAP, and persisted in SQLite.
+**v5** is a ground-up rebuild of the ML pipeline, informed by a comprehensive audit of v4's failures and inspired by Jane Street's Kaggle competition approach. The v4 binary classifier with momentum features produced 0/103 profitable weeks because crypto mean-reverts — v5 fixes this with:
 
-The project exists for a single reason: most open-source crypto research is toy-level — fit a moving average, overfit on in-sample, declare victory. Azalyst is the antithesis. These methods mirror how the top systematic funds structure research, not because we are a fund, but because they are the only honest way to know if your signal is real.
+1. **Regression, not classification** — predict continuous forward returns (XGBRegressor, `reg:squarederror`)
+2. **Short horizons** — 1hr (12 bars) and 15min (3 bars) instead of 4hr (48 bars)
+3. **Reversal-dominated features** — 72 features with 8 reversal signals, 6 pump-dump indicators, and 4 quantile-ranked features (Jane Street technique)
+4. **Per-bar prediction** — no week-averaging that destroys signal
+5. **Pump-dump detection** — multi-signal detector to filter manipulated coins
+6. **IC-gating kill-switch** — halt trading when model signal inverts
+7. **Weighted R² metric** — penalizes direction + magnitude errors (Jane Street metric)
+8. **Confidence model** — P(direction correct) for position sizing
+
+The engine processes 3+ years of 5-minute OHLCV data across 444 Binance pairs, engineers 72 cross-sectional features, trains an XGBoost regression model using purged K-Fold cross-validation with an expanding training window, and validates strictly out-of-sample across 2 full years (Y2+Y3).
 
 <div align="center">
 
@@ -32,82 +41,67 @@ The project exists for a single reason: most open-source crypto research is toy-
 
 ---
 
-## v4 Architecture
+## v5 Architecture
 
 ```
-                     AZALYST v4.0 RESEARCH ENGINE
+                     AZALYST v5.0 RESEARCH ENGINE
 
   DATA LAYER              FEATURE ENGINE             SIGNAL SOURCES
- Polars+DuckDB    56 cross-sectional  Factor scores
- 444 coins               features, TF-aware         ML return prob
- 26M+ rows               Frac. diff (AFML)          Pump/dump filter
- 3-year 5min             Hurst + FFT                StatArb z-scores
+ Polars+DuckDB    72 cross-sectional  Regression return pred
+ 444 coins               features, TF-aware         Confidence model
+ 26M+ rows               8 reversal signals         Pump/dump filter
+ 3-year 5min             4 quantile-ranked          IC-gated selection
 
                             SIGNAL COMBINER
                            Regime-adaptive
                            IC-weighted fusion
                            4-state detector
 
-  PRIMARY MODEL         META-LABELING           WALK-FORWARD
-                        (AFML Ch. 3)
- XGBoost CUDA     2nd-stage XGBoost   Expanding window
- Purged K-Fold         P(primary correct)      Walk Y2+Y3 (2yr)
- 48-bar embargo        Confidence sizing       Quarterly retrain
- RobustScaler                                  IC feature select
+  PRIMARY MODEL         CONFIDENCE MODEL        WALK-FORWARD
+                        (replaces meta-label)
+ XGBRegressor CUDA   2nd-stage XGBoost   Expanding window
+ Purged K-Fold         P(direction correct)     Walk Y2+Y3 (2yr)
+ 12-bar horizon        Magnitude sizing         Quarterly retrain
+ Weighted R²                                    IC feature gating
 
-  RISK INTEGRATION      KILL-SWITCH             PERSISTENCE
+  RISK INTEGRATION      KILL-SWITCHES           PERSISTENCE
  VaR / CVaR            -15% max DD             SQLite (azalyst.db)
- Position risk cap     4-week pause            SHAP per cycle
- HRP weighting         Auto-resume             Full run history
+ Position risk cap     IC-gating threshold     SHAP per cycle
+ Magnitude sizing      Pump-dump filter        Full run history
 ```
+
+### What Changed from v4 → v5
+
+| Aspect | v4 (broken) | v5 (rebuilt) |
+|---|---|---|
+| Model type | XGBClassifier (binary) | XGBRegressor (continuous returns) |
+| Objective | `binary:logistic` + AUC | `reg:squarederror` + Weighted R² |
+| Features | 56 (momentum-dominated) | 72 (reversal-dominated + pump-dump + qrank) |
+| Horizon | 48 bars (4hr) | 12 bars (1hr) / 3 bars (15min) |
+| Label | Binary: `r > cross-sectional median` | Continuous: raw forward return |
+| Prediction | `predict_proba()[:, 1]` averaged per week | `predict()` per bar |
+| Sizing | Meta-labeling P(correct) | Confidence model + predicted magnitude |
+| IC threshold | -0.02 (too lax) | 0.00 (strict) + IC-gating at -0.03 |
+| Pump-dump | Not integrated | Multi-signal detector with regime classification |
+| Kill-switches | DD only (-15%) | DD (-15%) + IC-gating + pump-dump filter |
 
 ### Core Capabilities
 
-- **56 cross-sectional features** across 9 categories — returns, volume, volatility, technical, microstructure, price structure, WorldQuant alphas, regime, and fractional differentiation
-- **Expanding training window** — train on Y1, then Y1+Y2, then Y1+Y2+Y3 (not fixed window)
+- **72 cross-sectional features** across 11 categories — returns, volume, volatility, technical, microstructure, price structure, WorldQuant alphas, regime, fractional differentiation, **reversal signals**, **pump-dump indicators**, and **quantile-ranked features**
+- **XGBoost Regression** — continuous return prediction, Weighted R² metric (Jane Street)
+- **Short-horizon forecasting** — 1hr (12 bars) and 15min (3 bars) forward returns
+- **Pump-dump detection** — multi-signal composite score filtering manipulated coins
+- **IC-gating** — halt all trading when rolling IC drops below -0.03
+- **Expanding training window** — train on Y1, then Y1+Y2, then Y1+Y2+Y3
 - **2-year out-of-sample** — walk-forward on Y2+Y3 (104 weeks, never seen during initial training)
-- **Regime-aware feature selection** — every 2 weeks compute per-feature IC, drop consistently negative IC features at retrain
 - **Risk integration** — VaR/CVaR scaled position sizing, 3% per-position risk cap
-- **Drawdown kill-switch** — halt all trading if max DD exceeds -15%, resume after 4 weeks
-- **SHAP explainability** — TreeExplainer after every training cycle, stored in SQLite + CSV
-- **SQLite persistence** — all trades, metrics, SHAP, models, feature IC in `results/azalyst.db`
-- **GPU-accelerated** — NVIDIA CUDA via XGBoost (RTX 2050/T4/any CUDA device)
-- **Meta-labeling** — 2nd-stage XGBoost for confidence-weighted position sizing (AFML Ch. 3)
+- **SHAP explainability** — TreeExplainer after every training cycle
+- **SQLite persistence** — all trades, metrics, SHAP, models in `results/azalyst.db`
+- **GPU-accelerated** — NVIDIA CUDA via XGBoost
 
 ---
 
-## The Three Pillars
-
-### 1. Fractional Differentiation (Lopez de Prado, AFML Ch. 5)
-
-Standard returns destroy all memory of price levels. Raw prices preserve memory but are non-stationary and break tree-based models. Fractional differentiation with `d=0.4` using the Fixed-Width Window (FFD) method gives the model access to **where the price actually is** while maintaining stationarity.
-
-```
-d=0.0     raw price (non-stationary, max memory)
-d=0.4     Azalyst default (stationary, retains memory)   ◄ HERE
-d=1.0     standard returns (stationary, zero memory)
-```
-
-### 2. Meta-Labeling (Lopez de Prado, AFML Ch. 3)
-
-The primary model says "BUY this coin." But how confident should we be? A second-stage XGBoost model is trained on a meta-question: **"When the primary model predicted UP, was it actually correct?"** The output confidence probability directly scales position size:
-
-- **High confidence (0.85)** → full position, maximum capital allocation
-- **Low confidence (0.45)** → reduced position, capital preservation
-
-### 3. Regime-Aware IC Selection (Grinold & Kahn + v4)
-
-Instead of static signal weights, the v4 engine tracks rolling Information Coefficient per feature over the last 8 weeks. Features with consistently negative IC (< -0.02) are dropped at the next quarterly retrain. This prevents the model from training on features that have become adversarial in the current regime.
-
-```
-56 features → compute per-feature IC biweekly → rolling 8-week mean
-→ drop features below -0.02 IC threshold (min 20 retained)
-→ retrain with cleaner feature set every 13 weeks
-```
-
----
-
-## Feature Engineering — 56 Features, 9 Categories
+## Feature Engineering — 72 Features, 11 Categories
 
 | Category | Count | Features |
 |---|---|---|
@@ -117,115 +111,67 @@ Instead of static signal weights, the v4 engine tracks rolling Information Coeff
 | Technical | 10 | `rsi_14` `rsi_6` `macd_hist` `bb_pos` `bb_width` `stoch_k` `stoch_d` `cci_14` `adx_14` `dmi_diff` |
 | Microstructure | 6 | `vwap_dev` `amihud` `kyle_lambda` `spread_proxy` `body_ratio` `candle_dir` |
 | Price Structure | 6 | `wick_top` `wick_bot` `price_accel` `skew_1d` `kurt_1d` `max_ret_4h` |
-| WorldQuant Alphas | 8 | `wq_alpha001` `wq_alpha012` `wq_alpha031` `wq_alpha098` `cs_momentum` `cs_reversal` `vol_adjusted_mom` `trend_consistency` |
+| WorldQuant Alphas | 6 | `wq_alpha001` `wq_alpha012` `wq_alpha031` `wq_alpha098` `vol_adjusted_mom` `trend_consistency` |
 | Regime | 5 | `vol_regime` `trend_strength` `corr_btc_proxy` `hurst_exp` `fft_strength` |
 | Memory-Preserving | 1 | `frac_diff_close` — fractional differentiation d=0.4 (AFML Ch. 5) |
+| **Reversal** (new) | **8** | `rev_1h` `rev_4h` `rev_1d` `rev_2d` `mean_rev_zscore_1h` `mean_rev_zscore_4h` `overbought_rev` `oversold_rev` |
+| **Pump-Dump** (new) | **6** | `pump_score` `dump_score` `vol_spike_zscore` `ret_vol_ratio_1h` `tail_risk_1h` `abnormal_range` |
+| **Quantile Rank** (new) | **4** | `qrank_ret_1h` `qrank_rvol_1d` `qrank_rev_1h` `qrank_vol_ratio` |
 
 ---
 
 ## ML Pipeline
 
-### Training Label — Cross-Sectional Alpha
+### Training Target — Continuous Forward Returns (v5)
 
-The model predicts whether a coin will **outperform the cross-sectional median** return at the next 4H horizon. Direction-agnostic — works in bull and bear markets equally.
+The model predicts the **raw forward return** at the 1hr horizon. No binary conversion, no cross-sectional median — the model learns to predict magnitude and direction simultaneously.
 
-$$\text{alpha\_label}_i = \mathbb{1}\left[ r_{i,t+48} > \text{median}(r_{j,t+48}) \;\forall\; j \in \text{universe} \right]$$
+$$\hat{r}_{i,t+12} = f(X_{i,t}) \quad \text{where } r \text{ is the log return over 12 bars (1hr)}$$
 
-### Purged K-Fold Cross-Validation
+### Prediction → Trade Signal
 
-48-bar embargo gap between train and validation prevents information leakage from autocorrelated features:
+- **Predicted return > 0** → candidate long (ranked by magnitude)
+- **Predicted return < 0** → candidate short (ranked by magnitude)
+- **Top 15% by predicted return** → long portfolio
+- **Bottom 15% by predicted return** → short portfolio
+- **Position size** ∝ predicted magnitude × confidence model probability × risk scale
 
-```
-| TRAIN | 48-bar gap | VAL |
-                  (4 hours)
-```
+### Pump-Dump Filter
 
-5 purged folds. RobustScaler for fat-tailed crypto distributions.
+Multi-signal detector with 4 components:
+- Price spike z-score (sudden price jumps)
+- Volume spike z-score (abnormal volume)
+- Range spike z-score (wick expansion)
+- Reversal pattern score (quick reversal after spike)
 
-### Expanding Window Walk-Forward
+Composite score [0, 1]. Symbols exceeding threshold (0.6) are filtered from the tradeable universe.
 
-Instead of fixed training, the model expands its training window over time:
+### IC-Gating Kill-Switch (v5)
 
-```
-Walk Week 1:   Train on Y1                    → Predict Y2 Week 1
-Walk Week 13:  Train on Y1 + Y2[:13wk]        → Predict Y2 Week 14
-Walk Week 26:  Train on Y1 + Y2[:26wk]        → Predict Y2 Week 27
-...
-Walk Week 52:  Train on Y1 + Y2               → Predict Y3 Week 1
-Walk Week 65:  Train on Y1 + Y2 + Y3[:13wk]   → Predict Y3 Week 14
-```
-
-### Kill-Switch & Risk Integration
+When the rolling average feature IC drops below -0.03, the model's signal has inverted. Instead of trading on an inverted signal (losing money systematically), IC-gating halts all predictions until the signal recovers.
 
 ```
-If cumulative DD > -15%  →  HALT all trading for 4 weeks
-VaR exceeds risk cap     →  Scale down position sizes (min 0.3x)
-Auto-resume after pause  →  Continue walk-forward normally
+If avg_recent_IC < -0.03  →  SKIP week (no trades, no risk)
+If cumulative DD > -15%   →  HALT 4 weeks (standard kill-switch)
 ```
 
-### Signal Fusion — 4 Sources, IC-Weighted
+### Confidence Model (replaces Meta-Labeling)
 
-```
-REGIME DETECTOR (4-state)
-     BULL_TREND        Factor: 0.45  ML: 0.35  Pump: 0.10  StatArb: 0.10
-     BEAR_TREND        Factor: 0.25  ML: 0.20  Pump: 0.20  StatArb: 0.35
-     HIGH_VOL_LATERAL  Factor: 0.15  ML: 0.15  Pump: 0.35  StatArb: 0.35
-     LOW_VOL_GRIND     Factor: 0.30  ML: 0.30  Pump: 0.15  StatArb: 0.25
-```
+A second-stage XGBoost classifier trained on the meta-question: **"When the regression model predicted a direction, was it correct?"**
+
+- Uses OOS fold predictions from base model + scaled features
+- Output: P(direction correct) ∈ [0, 1]
+- Directly scales position size: high confidence → larger position
 
 ---
 
 ## Running the Engine
 
-### Option 1 — Windows One-Click (recommended for local)
+### Option 1 — Windows One-Click
 
-Double-click **`RUN_AZALYST.bat`** — guides through 2 prompts then runs fully unattended:
+Double-click **`RUN_AZALYST.bat`** — auto-detects GPU, installs dependencies, runs engine.
 
-1. **Select compute** — `[1] GPU` (RTX 2050, ~4x faster) or `[2] CPU`
-2. **Run mode** — `[1] Terminal only` or `[2] Terminal + Spyder` (live monitor in a second window — closing it **never** stops the engine)
-3. **Confirm start** — `Y` to launch
-
-The batch file auto-detects Python, GPU availability, and auto-installs all missing packages on first run. It runs `azalyst_v4_engine.py` with full logging. SHAP is automatically skipped on GPU (to stay within 4 GB VRAM) and enabled on CPU.
-
-**What you'll see during training:**
-```
-  Week  4 [Y2] | ret=+0.32%  IC=+0.0312  cum=+1.2%  DD=-0.4%  n=42  BULL_TREND
-  Week  8 [Y2] | ret=-0.15%  IC=-0.0103  cum=+0.8%  DD=-0.6%  n=38  LOW_VOL_GRIND
-  Week 13 [Y2]: EXPANDING RETRAIN (data up to 2024-06-15)...
-    IC filter: 56 -> 48 features
-    AUC=0.5234  IC=0.0156  ICIR=0.4821  (42.3s)
-  ...
-```
-
-### Option 2 — Kaggle + Google Drive (recommended for full 444-coin run)
-
-The Kaggle pipeline uses two notebooks with **Google Drive** as intermediate cache (sidesteps Kaggle's 20GB limit).
-
-#### One-time Google Drive setup
-1. [console.cloud.google.com](https://console.cloud.google.com) → create project → enable **Google Drive API**
-2. Create **Service Account** → Keys → JSON → download key file
-3. Google Drive → create folder `azalyst-feature-cache` → copy folder ID from URL
-4. Share folder with service account email → **Editor** access
-5. Kaggle notebooks → **Add-ons → Secrets** → add `GDRIVE_SERVICE_KEY` (paste full JSON)
-6. Set `GDRIVE_FOLDER_ID` in Cell 1 of both notebooks
-
-**Step 1 — Build Feature Cache** (`Notebooks/azalyst_1_feature_cache.ipynb`)
-- Build 56 features for all 444 coins → upload to Google Drive → auto-cleanup
-- Runtime: ~3-4 hours | Resume-safe
-
-**Step 2 — Train + Backtest** (`Notebooks/azalyst_2_train.ipynb`)
-- Downloads cache from Drive → v4 expanding window training → walk-forward Y2+Y3
-- All v4 logic inlined (Kaggle can't import local modules)
-- VRAM cap: 4M rows (T4 16GB)
-
-### Option 3 — Local Jupyter (RTX 2050 / any GPU)
-
-Open **`Notebooks/azalyst_jupyter.ipynb`** in VSCode or Jupyter. Run cells in order.
-- Imports from local modules (`azalyst_v4_engine`, `azalyst_db`, `azalyst_risk`)
-- VRAM cap: 2M rows (RTX 2050 4GB)
-- SQLite persistence to `results/azalyst.db`
-
-### Option 4 — CLI
+### Option 2 — CLI
 
 ```bash
 # GPU run
@@ -236,9 +182,18 @@ python azalyst_v4_engine.py --max-dd -0.10
 
 # Skip SHAP for faster iteration
 python azalyst_v4_engine.py --gpu --no-shap
+```
 
-# Custom run ID
-python azalyst_v4_engine.py --gpu --run-id experiment_01
+**What you'll see during training:**
+```
+  AZALYST v5  —  Short-Horizon Regression Engine
+  Model: XGBoost Regressor (1hr forward return)
+  Features: Reversal-dominated + Pump-Dump + Quantile Rank
+
+  Week  4 [Y2] | ret=+0.32%  IC=+0.0312  cum=+1.2%  DD=-0.4%  BULL_TREND
+  Week 13 [Y2]: QUARTERLY RETRAIN (expanding window to 2024-06-15)...
+    R²=0.0023  IC=0.0156  ICIR=0.4821  (42.3s)
+  ...
 ```
 
 ---
@@ -248,9 +203,8 @@ python azalyst_v4_engine.py --gpu --run-id experiment_01
 | File | Description |
 |---|---|
 | `results/weekly_summary_v4.csv` | Week-by-week IC, returns, regime, drawdown |
-| `results/all_trades_v4.csv` | All simulated trades with meta-sizing |
+| `results/all_trades_v4.csv` | All simulated trades with magnitude-based sizing |
 | `results/performance_v4.json` | Final metrics incl. Y2 vs Y3 split, VaR/CVaR |
-| `results/performance_v4.png` | 4-panel chart: cumulative return, distribution, IC series, trade P&L |
 | `results/azalyst.db` | SQLite database with full run history |
 | `results/shap/shap_importance_v4_*.csv` | SHAP feature importance per training cycle |
 | `results/models/model_v4_*.json` | XGBoost models (base + quarterly retrains) |
@@ -259,27 +213,28 @@ python azalyst_v4_engine.py --gpu --run-id experiment_01
 
 ## Repository Map
 
-### v4 Core Pipeline
+### Core Pipeline
 
 | File | Purpose |
 |---|---|
-| `azalyst_v4_engine.py` | **v4 engine** — expanding window, regime-aware IC selection, risk integration, kill-switch, SHAP, SQLite |
+| `azalyst_v4_engine.py` | **v5 engine** — regression walk-forward, IC-gating, pump-dump filter, confidence model, SHAP, SQLite |
 | `azalyst_db.py` | SQLite persistence — trades, metrics, SHAP, model artifacts (7 tables, WAL mode) |
-| `azalyst_factors_v2.py` | 56 cross-sectional features — returns, volume, microstructure, WorldQuant alphas, Hurst, FFT, frac. diff |
+| `azalyst_factors_v2.py` | 72 cross-sectional features — reversal signals, pump-dump indicators, quantile rank, WQ alphas, frac. diff |
+| `azalyst_pump_dump.py` | **NEW** — Multi-signal pump-dump detector with regime classification |
+| `azalyst_train.py` | Training module — XGBRegressor, XGBClassifier confidence model, PurgedTimeSeriesCV, Weighted R² |
+| `azalyst_ml.py` | ML module v5 — XGBoost regression predictor class |
 | `azalyst_risk.py` | Portfolio risk — MVO, HRP, Black-Litterman, VaR/CVaR, position constraints |
 | `azalyst_signal_combiner.py` | IC-weighted regime-adaptive signal fusion — 4 sources, 4-state detector |
 | `azalyst_tf_utils.py` | Timeframe-aware bar count utilities |
 | `build_feature_cache.py` | Precompute features → parquet cache (5–20x speedup) |
-| `RUN_AZALYST.bat` | Windows one-click launcher — GPU detection, auto-install, runs v4 engine |
+| `RUN_AZALYST.bat` | Windows one-click launcher — GPU detection, auto-install |
 
 ### Research Modules
 
 | File | Purpose |
 |---|---|
-| `azalyst_train.py` | Training module with PurgedTimeSeriesCV (pre-v4 architecture, reference) |
 | `azalyst_alpha_metrics.py` | Performance evaluation — IC, ICIR, Sharpe, drawdown |
 | `azalyst_weekly_loop.py` | Pre-v4 walk-forward loop (reference) |
-| `azalyst_ml.py` | ML module v2 — regime detection, pump/dump detector |
 | `azalyst_local_gpu.py` | Standalone RTX 2050 GPU runner |
 | `azalyst_statarb.py` | Cointegration / pairs trading scanner |
 | `azalyst_validator.py` | Fama-MacBeth, Newey-West, Benjamini-Hochberg correction |
@@ -288,45 +243,14 @@ python azalyst_v4_engine.py --gpu --run-id experiment_01
 | `azalyst_execution.py` | Order book simulation, VWAP/TWAP execution algos |
 | `azalyst_auditor.py` | Binance copy-trader strategy auditor |
 | `azalyst_report.py` | Research report + live signal scanner |
-| `VIEW_TRAINING.py` | Live 4-panel training dashboard — win rate, PnL, Sharpe, log tail (refreshes every 5s) |
+| `VIEW_TRAINING.py` | Live 4-panel training dashboard |
 | `monitor_dashboard.py` | Browser-based live monitor |
-
-### Notebooks
-
-| File | Purpose |
-|---|---|
-| `Notebooks/azalyst_jupyter.ipynb` | Local GPU notebook — v4 pipeline, imports local modules, 2M row VRAM cap |
-| `Notebooks/azalyst_1_feature_cache.ipynb` | Kaggle Step 1 — build 56 features, upload to Google Drive |
-| `Notebooks/azalyst_2_train.ipynb` | Kaggle Step 2 — v4 training + walk-forward, all logic inlined for Kaggle |
 
 ### Tests
 
 ```bash
-pytest -v tests/test_azalyst.py   # 34 tests
+pytest -v tests/test_azalyst.py   # 45+ tests covering v5 pipeline
 ```
-
----
-
-## Testing
-
-```bash
-pytest -v tests/test_azalyst.py
-```
-
-Tests cover: SQLite persistence, feature engineering (frac. diff), risk module (VaR/CVaR/HRP), v4 engine components (PurgedTimeSeriesCV, training matrix, regime detection, feature IC selection, drawdown), signal combiner, and integration roundtrip.
-
----
-
-## How to Interpret Results
-
-| Metric | Acceptable | Good | Strong |
-|---|---|---|---|
-| IC | > 0.01 | > 0.03 | > 0.05 |
-| ICIR | > 0.2 | > 0.5 | > 1.0 |
-| Sharpe | > 0.3 | > 0.7 | > 1.5 |
-| IC % positive weeks | > 52% | > 58% | > 65% |
-
-IC > 0.05 with ICIR > 1.0 is institutional-quality signal strength.
 
 ---
 
@@ -334,10 +258,11 @@ IC > 0.05 with ICIR > 1.0 is institutional-quality signal strength.
 
 | Parameter | Value |
 |---|---|
-| XGBoost trees | 1,000 (primary) / 500 (meta) |
+| Model | XGBRegressor (`reg:squarederror`) |
+| XGBoost trees | 1,000 (primary) / 500 (confidence) |
 | Learning rate | 0.02 |
-| Max depth | 6 (primary) / 4 (meta) |
-| Min child weight | 30 (primary) / 50 (meta) |
+| Max depth | 6 (primary) / 4 (confidence) |
+| Min child weight | 30 (primary) / 50 (confidence) |
 | Subsample | 0.8 |
 | Column sample | 0.7 (tree) / 0.7 (level) |
 | Regularisation | alpha=0.1, lambda=1.0 |
@@ -346,13 +271,15 @@ IC > 0.05 with ICIR > 1.0 is institutional-quality signal strength.
 | Training | Expanding window (Y1 → Y1+Y2 → Y1+Y2+Y3) |
 | Walk-forward | Y2 + Y3 (2-year strict OOS) |
 | Retrain | Every 13 weeks (quarterly, expanding window) |
-| Feature selection | Rolling 8-week IC, threshold -0.02, min 20 features |
-| Kill-switch | -15% max drawdown, 4-week pause |
+| Feature selection | Rolling 8-week IC, threshold 0.00, min 20 features |
+| IC-gating | Halt when avg IC < -0.03 |
+| DD kill-switch | -15% max drawdown, 4-week pause |
 | Risk cap | 3% portfolio risk per position (VaR-based) |
 | Universe | 444 coins, cross-sectional pooling |
-| Horizon | 4H (48 × 5-min bars) |
+| Horizon | 1hr (12 × 5-min bars) / 15min (3 × 5-min bars) |
 | Portfolio | Long top 15%, short bottom 15% |
 | Fees | 0.2% round-trip, position-tracked |
+| Pump-dump threshold | 0.6 composite score |
 | Frac. diff. d | 0.4 (FFD method, threshold 1e-5) |
 
 ---
@@ -361,11 +288,11 @@ IC > 0.05 with ICIR > 1.0 is institutional-quality signal strength.
 
 | Domain | Source | What Azalyst Uses |
 |---|---|---|
-| Feature engineering | **Lopez de Prado** — *Advances in Financial Machine Learning* | Fractional differentiation, meta-labeling, purged K-Fold CV |
+| Feature engineering | **Lopez de Prado** — *Advances in Financial Machine Learning* | Fractional differentiation, purged K-Fold CV |
 | Signal combination | **Grinold & Kahn** — *Active Portfolio Management* | IC-weighted signal fusion, information ratio targeting |
-| Statistical learning | **Hastie, Tibshirani, Friedman** — *Elements of Statistical Learning* | Regularization, cross-validation methodology |
+| Competition ML | **Jane Street Kaggle** | Regression objective, Weighted R², quantile rank features, per-timestep prediction |
 | Robust estimation | **Huber** — *Robust Statistics* (via RobustScaler) | Median/IQR scaling for fat-tailed crypto distributions |
-| Factor models | **Fama & French**, **Barra** | Cross-sectional alpha label, factor decomposition |
+| Factor models | **Fama & French**, **Barra** | Cross-sectional alpha, factor decomposition |
 | Microstructure | **Kyle (1985)**, **Amihud (2002)** | Kyle lambda, Amihud illiquidity ratio |
 | Volatility | **Garman & Klass (1980)**, **Parkinson (1980)** | Range-based volatility estimators |
 | Time series | **Hurst (1951)**, **FFT** | Regime detection, cyclical pattern identification |
@@ -380,13 +307,6 @@ IC > 0.05 with ICIR > 1.0 is institutional-quality signal strength.
 
 ```bash
 pip install -r requirements.txt
-```
-
-For local GPU:
-
-```bash
-pip install xgboost --upgrade
-python -c "import xgboost; print(xgboost.__version__)"
 ```
 
 ---
@@ -408,13 +328,10 @@ timestamp | open | high | low | close | volume
 | Problem | Fix |
 |---|---|
 | No GPU detected | `python -c "import xgboost as xgb; print(xgb.__version__)"` — verify CUDA build |
-| GPU found but CPU-only menu appears | Fixed in current `RUN_AZALYST.bat` — CMD variable scoping bug resolved |
 | Feature cache stale | Delete `feature_cache/` and re-run — rebuilds automatically |
 | OOM / freeze | Reduce `MAX_TRAIN_ROWS` in config (2M for RTX 2050, 4M for T4) |
 | Pipeline closes immediately | Confirm Python path has no spaces; use `RUN_AZALYST.bat` |
-| BAT says "Pipeline completed" but no results | Check `results/` for v4 output files. If empty, check data folder has `.parquet` files |
-| Kaggle notebook 1 shows fewer files | Re-run — skip logic resumes from where it stopped |
-| Live dashboard shows no data | Normal until engine completes its first week — charts populate automatically |
+| No results after run | Check `results/` for output files. If empty, check data folder has `.parquet` files |
 
 ---
 

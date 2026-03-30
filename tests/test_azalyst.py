@@ -1,5 +1,5 @@
 """
-Azalyst v4 — Test Suite
+Azalyst v5 — Test Suite
 pytest -v tests/test_azalyst.py
 """
 import json
@@ -165,7 +165,7 @@ class TestFeatureEngineering:
 
     def test_feature_cols_count(self):
         from azalyst_factors_v2 import FEATURE_COLS
-        assert len(FEATURE_COLS) == 56
+        assert len(FEATURE_COLS) == 72
 
     def test_frac_diff(self):
         from azalyst_factors_v2 import frac_diff_ffd
@@ -268,16 +268,24 @@ class TestV4EngineComponents:
         assert "device" not in p
         assert "tree_method" not in p
         assert p["n_estimators"] == 1000
+        assert p["objective"] == "reg:squarederror"
 
     def test_make_xgb_params_new_cuda(self):
         from azalyst_v4_engine import make_xgb_params
         p = make_xgb_params("new")
         assert p["device"] == "cuda"
+        assert p["objective"] == "reg:squarederror"
 
     def test_make_xgb_params_old_cuda(self):
         from azalyst_v4_engine import make_xgb_params
         p = make_xgb_params("old")
         assert p["tree_method"] == "gpu_hist"
+
+    def test_make_xgb_params_classification(self):
+        from azalyst_v4_engine import make_xgb_params
+        p = make_xgb_params(None, regression=False)
+        assert p["eval_metric"] == "auc"
+        assert "objective" not in p  # XGBClassifier sets objective internally
 
     def test_simulate_weekly_trades_empty(self):
         from azalyst_v4_engine import simulate_weekly_trades
@@ -393,3 +401,101 @@ class TestIntegration:
         assert runs.iloc[0]["status"] == "completed"
 
         db.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 7. Pump-Dump Detector (azalyst_pump_dump.py)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestPumpDump:
+    def test_compute_scores_shape(self):
+        from azalyst_pump_dump import compute_pump_dump_scores
+        df = _make_ohlcv(2000)
+        scores = compute_pump_dump_scores(df)
+        assert "pump_dump_score" in scores.columns
+        assert "is_pump" in scores.columns
+        assert "is_dump" in scores.columns
+        assert len(scores) == len(df)
+
+    def test_scores_range(self):
+        from azalyst_pump_dump import compute_pump_dump_scores
+        df = _make_ohlcv(2000)
+        scores = compute_pump_dump_scores(df)
+        valid = scores["pump_dump_score"].dropna()
+        assert valid.min() >= 0.0
+        assert valid.max() <= 1.0
+
+    def test_classify_regime(self):
+        from azalyst_pump_dump import compute_pump_dump_scores, classify_pump_dump_regime
+        df = _make_ohlcv(2000)
+        scores = compute_pump_dump_scores(df)
+        regimes = classify_pump_dump_regime(scores)
+        assert len(regimes) == len(scores)
+        assert set(regimes.dropna().unique()).issubset(
+            {"NORMAL", "PUMP_ACTIVE", "DUMP_ACTIVE", "POST_PUMP_DUMP"})
+
+    def test_filter_symbols(self):
+        from azalyst_pump_dump import filter_pump_dump_symbols
+        # Construct minimal scores dict
+        symbols_scores = {
+            "SYM1": pd.DataFrame({"pump_dump_score": [0.1, 0.2, 0.15]},
+                                 index=pd.date_range("2024-01-01", periods=3, freq="5min")),
+            "SYM2": pd.DataFrame({"pump_dump_score": [0.9, 0.95, 0.85]},
+                                 index=pd.date_range("2024-01-01", periods=3, freq="5min")),
+        }
+        ts = pd.Timestamp("2024-01-01 00:10:00")
+        avoided = filter_pump_dump_symbols(symbols_scores, ts, threshold=0.6)
+        assert "SYM2" in avoided
+        assert "SYM1" not in avoided
+
+    def test_summary_stats(self):
+        from azalyst_pump_dump import compute_pump_dump_scores, compute_pump_dump_summary
+        df = _make_ohlcv(2000)
+        scores = compute_pump_dump_scores(df)
+        summary = compute_pump_dump_summary(scores)
+        assert "mean_score" in summary
+        assert "max_score" in summary
+        assert "n_pumps" in summary
+        assert "n_dumps" in summary
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 8. v5 ML Pipeline (azalyst_train.py)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestTrainV5:
+    def test_weighted_r2_score(self):
+        from azalyst_train import weighted_r2_score
+        rng = np.random.RandomState(42)
+        y_true = rng.randn(20) * 0.02
+        y_pred = y_true.copy()  # perfect prediction
+        r2 = weighted_r2_score(y_true, y_pred)
+        assert abs(r2 - 1.0) < 1e-6  # perfect prediction
+
+    def test_weighted_r2_zero_pred(self):
+        from azalyst_train import weighted_r2_score
+        y_true = np.array([0.01, -0.02, 0.03, -0.01, 0.02])
+        y_pred = np.zeros(5)
+        r2 = weighted_r2_score(y_true, y_pred)
+        assert r2 <= 0.0  # zero prediction is worse than mean
+
+    def test_purged_cv(self):
+        from azalyst_train import PurgedTimeSeriesCV
+        cv = PurgedTimeSeriesCV(n_splits=5, gap=48)
+        X = np.random.rand(5000, 10)
+        splits = list(cv.split(X))
+        assert len(splits) >= 3
+        for tr, val in splits:
+            assert val[0] - tr[-1] >= 48
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 9. ML Module (azalyst_ml.py)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestMLModule:
+    def test_predictor_init(self):
+        from azalyst_ml import ReturnPredictorV2
+        pred = ReturnPredictorV2(device="cpu")
+        assert pred.device == "cpu"
+        assert pred.model is None
