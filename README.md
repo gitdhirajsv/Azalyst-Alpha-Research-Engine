@@ -176,9 +176,10 @@ REGIME DETECTOR (4-state)
 Double-click **`RUN_AZALYST.bat`** — guides through 2 prompts then runs fully unattended:
 
 1. **Select compute** — `[1] GPU` (RTX 2050, ~4x faster) or `[2] CPU`
-2. **Confirm start** — `Y` to launch
+2. **Run mode** — `[1] Terminal only` or `[2] Terminal + Spyder` (live monitor in a second window — closing it **never** stops the engine)
+3. **Confirm start** — `Y` to launch
 
-The batch file auto-detects Python, GPU availability, and auto-installs all missing packages on first run. It runs `azalyst_v4_engine.py` with full logging.
+The batch file auto-detects Python, GPU availability, and auto-installs all missing packages on first run. It runs `azalyst_v4_engine.py` with full logging. SHAP is automatically skipped on GPU (to stay within 4 GB VRAM) and enabled on CPU.
 
 **What you'll see during training:**
 ```

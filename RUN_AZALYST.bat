@@ -192,35 +192,37 @@ echo  ============================================================
 echo.
 
 set "COMPUTE_CHOICE=cpu"
+set "SKIP_SHAP=0"
 if "!GPU_FOUND!"=="0" (
     echo  Compute: CPU only (no GPU found)
-    goto :Q_SHAP
+    goto :Q_MODE
 )
 
 :Q1_LOOP
 echo  Select compute device:
-echo    [1] GPU - !GPU_NAME! (CUDA=%CUDA_READY%)
+echo    [1] GPU - !GPU_NAME! (CUDA=%CUDA_READY%)  ~4x faster
 echo    [2] CPU - all cores
 echo.
 set /p "Q1=  Choice (1/2): "
-if "!Q1!"=="1" ( set "COMPUTE_CHOICE=gpu" & echo  [OK] GPU selected & goto :Q_SHAP )
-if "!Q1!"=="2" ( set "COMPUTE_CHOICE=cpu" & echo  [OK] CPU selected & goto :Q_SHAP )
+if "!Q1!"=="1" ( set "COMPUTE_CHOICE=gpu" & set "SKIP_SHAP=1" & echo  [OK] GPU selected & goto :Q_MODE )
+if "!Q1!"=="2" ( set "COMPUTE_CHOICE=cpu" & set "SKIP_SHAP=0" & echo  [OK] CPU selected & goto :Q_MODE )
 echo  Enter 1 or 2.
 echo.
 goto :Q1_LOOP
 
-:: ── FIX: Added SHAP prompt — skipping SHAP is much faster on RTX 2050 ────────
-:Q_SHAP
+:: ── Run mode: Terminal only vs Terminal + Spyder monitor ─────────────────────
+:Q_MODE
 echo.
-set "SKIP_SHAP=0"
+set "LAUNCH_MONITOR=0"
 :Q2_LOOP
-echo  Skip SHAP explainability? (faster run, especially on 4GB GPU)
-echo    [1] Yes - skip SHAP  (recommended for RTX 2050 / first runs)
-echo    [2] No  - compute SHAP after each retrain
+echo  Run mode:
+echo    [1] Terminal only     - engine runs in this window
+echo    [2] Terminal + Spyder - engine here + live monitor in a second window
+echo                           (closing the monitor will NOT stop the engine)
 echo.
 set /p "Q2=  Choice (1/2): "
-if "!Q2!"=="1" ( set "SKIP_SHAP=1" & echo  [OK] SHAP disabled & goto :CONFIRM )
-if "!Q2!"=="2" ( set "SKIP_SHAP=0" & echo  [OK] SHAP enabled  & goto :CONFIRM )
+if "!Q2!"=="1" ( set "LAUNCH_MONITOR=0" & echo  [OK] Terminal only       & goto :CONFIRM )
+if "!Q2!"=="2" ( set "LAUNCH_MONITOR=1" & echo  [OK] Terminal + Spyder   & goto :CONFIRM )
 echo  Enter 1 or 2.
 echo.
 goto :Q2_LOOP
@@ -230,15 +232,11 @@ echo.
 echo  ============================================================
 echo   READY
 echo    Compute : !COMPUTE_CHOICE!
-echo    SHAP    : !SKIP_SHAP! (1=skip, 0=enabled)
+echo    Monitor : !LAUNCH_MONITOR! (0=terminal only, 1=terminal+spyder)
 echo    Data    : %~dp0data\
 echo    Cache   : %~dp0feature_cache\
 echo    Results : %~dp0results\
 echo  ============================================================
-echo.
-echo  TIP: Open a second terminal and run:
-echo    python VIEW_TRAINING.py
-echo  to watch live progress charts while the engine runs.
 echo.
 set /p "GO=  Start? (Y/N): "
 if /i not "!GO!"=="Y" ( echo  Cancelled. & timeout /t 2 /nobreak >nul & exit /b 0 )
@@ -253,6 +251,19 @@ if "!COMPUTE_CHOICE!"=="gpu" (
 
 powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c >nul 2>&1
 
+:: ── Launch Spyder monitor in its own window (independent of engine) ──────────
+if "!LAUNCH_MONITOR!"=="1" (
+    if exist "%~dp0VIEW_TRAINING.py" (
+        start "Azalyst Monitor" !PYTHON_EXE! "%~dp0VIEW_TRAINING.py"
+        echo  [Monitor] Spyder monitor launched in separate window.
+        echo  [Monitor] You can close it at any time — the engine keeps running.
+        echo.
+    ) else (
+        echo  [Monitor] VIEW_TRAINING.py not found — running terminal only.
+        echo.
+    )
+)
+
 echo  ============================================================
 echo   RUNNING
 echo    Started: %date% %time%
@@ -266,6 +277,7 @@ if "!COMPUTE_CHOICE!"=="gpu" (
     set "PY_ARGS=--gpu !PY_ARGS!"
 )
 
+:: GPU: skip SHAP by default to stay within 4GB VRAM; CPU: SHAP always on
 if "!SKIP_SHAP!"=="1" (
     set "PY_ARGS=!PY_ARGS! --no-shap"
 )
