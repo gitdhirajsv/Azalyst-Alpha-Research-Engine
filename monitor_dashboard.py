@@ -140,16 +140,18 @@ def build_dashboard_html(
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
     :root {{
-      --bg: #10172a;
-      --panel: #1c2540;
-      --panel-2: #222d4a;
-      --text: #ffffff;
-      --muted: #9aa5be;
-      --accent: #4d9cf8;
-      --warn: #f0a64a;
-      --danger: #f06b77;
-      --border: rgba(255, 255, 255, 0.08);
-      --shadow: 0 4px 24px rgba(0, 0, 0, 0.40);
+      --bg: #f4f6f8;
+      --panel: #ffffff;
+      --panel-2: #f0f3f6;
+      --text: #1a1a2e;
+      --muted: #556077;
+      --accent: #e07020;
+      --warn: #e07020;
+      --danger: #d94040;
+      --green: #27a060;
+      --blue: #2c7bb6;
+      --border: rgba(0, 0, 0, 0.09);
+      --shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
     }}
     * {{ box-sizing: border-box; }}
     body {{
@@ -172,9 +174,9 @@ def build_dashboard_html(
     .hero h1 {{
       margin: 0;
       font-size: 22px;
-      font-weight: 600;
+      font-weight: 700;
       letter-spacing: 0.01em;
-      color: #ffffff;
+      color: var(--accent);
     }}
     .hero p {{
       margin: 5px 0 0;
@@ -190,8 +192,8 @@ def build_dashboard_html(
       border: 1.5px solid var(--border);
       background: var(--panel);
     }}
-    .badge.running {{ color: #4ade80; border-color: rgba(74,222,128,0.30); }}
-    .badge.stopped {{ color: var(--danger); border-color: rgba(240,107,119,0.30); }}
+    .badge.running {{ color: var(--green); border-color: rgba(39,160,96,0.30); background: rgba(39,160,96,0.08); }}
+    .badge.stopped {{ color: var(--danger); border-color: rgba(217,64,64,0.30); background: rgba(217,64,64,0.08); }}
     .grid {{
       display: grid;
       grid-template-columns: repeat(12, 1fr);
@@ -239,7 +241,7 @@ def build_dashboard_html(
     .value {{
       font-size: 19px;
       font-weight: 700;
-      color: #ffffff;
+      color: var(--text);
     }}
     .meta {{
       display: grid;
@@ -250,7 +252,7 @@ def build_dashboard_html(
       justify-content: space-between;
       align-items: center;
       gap: 12px;
-      border-bottom: 1px solid rgba(255,255,255,0.05);
+      border-bottom: 1px solid rgba(0,0,0,0.06);
       padding: 9px 0;
       font-size: 13.5px;
     }}
@@ -263,20 +265,20 @@ def build_dashboard_html(
       font-size: 13px;
     }}
     .meta-row strong {{
-      color: #ffffff;
-      font-weight: 500;
+      color: var(--text);
+      font-weight: 600;
     }}
     pre {{
       margin: 0;
       white-space: pre-wrap;
       word-break: break-word;
-      background: #0d1424;
-      border: 1px solid rgba(255,255,255,0.06);
+      background: #f0f4f8;
+      border: 1px solid rgba(0,0,0,0.07);
       border-radius: 10px;
       padding: 14px 16px;
       max-height: 520px;
       overflow: auto;
-      color: #c8d6f0;
+      color: #1a1a2e;
       font-family: "Cascadia Code", "Fira Code", Consolas, "Courier New", monospace;
       font-size: 12.5px;
       line-height: 1.6;
