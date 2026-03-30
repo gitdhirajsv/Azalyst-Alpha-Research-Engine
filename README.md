@@ -281,6 +281,7 @@ python azalyst_v4_engine.py --gpu --run-id experiment_01
 | `azalyst_execution.py` | Order book simulation, VWAP/TWAP execution algos |
 | `azalyst_auditor.py` | Binance copy-trader strategy auditor |
 | `azalyst_report.py` | Research report + live signal scanner |
+| `VIEW_TRAINING.py` | Live 4-panel training dashboard — win rate, PnL, Sharpe, log tail (refreshes every 5s) |
 | `monitor_dashboard.py` | Browser-based live monitor |
 
 ### Notebooks
@@ -400,11 +401,13 @@ timestamp | open | high | low | close | volume
 | Problem | Fix |
 |---|---|
 | No GPU detected | `python -c "import xgboost as xgb; print(xgb.__version__)"` — verify CUDA build |
+| GPU found but CPU-only menu appears | Fixed in current `RUN_AZALYST.bat` — CMD variable scoping bug resolved |
 | Feature cache stale | Delete `feature_cache/` and re-run — rebuilds automatically |
 | OOM / freeze | Reduce `MAX_TRAIN_ROWS` in config (2M for RTX 2050, 4M for T4) |
 | Pipeline closes immediately | Confirm Python path has no spaces; use `RUN_AZALYST.bat` |
 | BAT says "Pipeline completed" but no results | Check `results/` for v4 output files. If empty, check data folder has `.parquet` files |
 | Kaggle notebook 1 shows fewer files | Re-run — skip logic resumes from where it stopped |
+| Live dashboard shows no data | Normal until engine completes its first week — charts populate automatically |
 
 ---
 

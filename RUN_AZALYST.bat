@@ -87,16 +87,17 @@ set "GPU_NAME=None"
 set "CUDA_READY=0"
 
 nvidia-smi >nul 2>&1
-if not errorlevel 1 (
-    set "GPU_FOUND=1"
-    for /f "usebackq delims=" %%a in (`nvidia-smi --query-gpu^=name --format^=csv^,noheader 2^>nul`) do (
-        if "!GPU_NAME!"=="None" set "GPU_NAME=%%a"
-    )
-    if "!GPU_NAME!"=="None" set "GPU_NAME=NVIDIA GPU"
-    echo  [OK] GPU: !GPU_NAME!
-) else (
-    echo  [INFO] No NVIDIA GPU detected - CPU mode only
+if errorlevel 1 goto :NO_GPU
+set "GPU_FOUND=1"
+for /f "usebackq delims=" %%a in (`nvidia-smi --query-gpu^=name --format^=csv^,noheader 2^>nul`) do (
+    if "!GPU_NAME!"=="None" set "GPU_NAME=%%a"
 )
+if "!GPU_NAME!"=="None" set "GPU_NAME=NVIDIA GPU"
+echo  [OK] GPU: !GPU_NAME!
+goto :GPU_DONE
+:NO_GPU
+echo  [INFO] No NVIDIA GPU detected - CPU mode only
+:GPU_DONE
 
 :: ── Package check ─────────────────────────────────────────────────────────────
 echo.

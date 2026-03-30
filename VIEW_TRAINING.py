@@ -141,7 +141,8 @@ def _render(fig: plt.Figure, axes: list, ckpt: dict, log_lines: list[str]) -> No
         ax_qual.plot(range(1, len(sharpes) + 1), [s * 10 for s in sharpes],
                      color=ACC2, linewidth=1.8, label="Sharpe ×10")
     ax_qual.set_title("Training Quality by Week")
-    ax_qual.legend(fontsize=8, framealpha=0.15, labelcolor=TXT, loc="upper left")
+    if win_rates or sharpes:
+        ax_qual.legend(fontsize=8, framealpha=0.15, labelcolor=TXT, loc="upper left")
     ax_qual.tick_params(colors=TXT)
 
     # ── Panel 2: PnL and Drawdown ─────────────────────────────────────────────
@@ -154,7 +155,8 @@ def _render(fig: plt.Figure, axes: list, ckpt: dict, log_lines: list[str]) -> No
         ax_pnl.plot(weeks, max_dd,
                     color=ACC1, linewidth=1.8, label="Drawdown %")
     ax_pnl.set_title("PnL and Drawdown")
-    ax_pnl.legend(fontsize=8, framealpha=0.15, labelcolor=TXT, loc="upper left")
+    if weeks:
+        ax_pnl.legend(fontsize=8, framealpha=0.15, labelcolor=TXT, loc="upper left")
     ax_pnl.tick_params(colors=TXT)
 
     # ── Panel 3: Current Status ───────────────────────────────────────────────
