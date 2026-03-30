@@ -33,14 +33,14 @@ LOG  = RES  / "run_log.txt"
 REFRESH = 5   # seconds between refreshes
 LOG_TAIL = 18  # log lines to show
 
-# ── Theme (dark navy figure, white card panels) ─────────────────────────────
-BG    = "#0f1628"   # dark navy figure background
+# ── Theme (fully white / light) ─────────────────────────────────────────────
+BG    = "#f0f3f8"   # very light blue-grey page background
 PANEL = "#ffffff"   # white card panels
 ACC1  = "#e07020"   # orange
 ACC2  = "#2c7bb6"   # blue
 ACC3  = "#27a060"   # green
 ACC4  = "#d94040"   # red
-TXT   = "#1a1a2e"   # dark text on white panels
+TXT   = "#1a1a2e"   # dark text
 MUTED = "#6b7a99"
 GRID  = "#e8ecf0"
 
