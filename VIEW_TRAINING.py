@@ -143,7 +143,7 @@ def _render(fig: plt.Figure, axes: list, ckpt: dict, log_lines: list[str]) -> No
     if sharpes:
         ax_qual.plot(range(1, len(sharpes) + 1), [s * 10 for s in sharpes],
                      color=ACC1, linewidth=2.2, label="Sharpe")
-    ax_qual.set_title("Training Quality by Cycle")
+    ax_qual.set_title("Training Quality by Cycle", color=TITLE_FG, pad=6)
     if win_rates or sharpes:
         ax_qual.legend(fontsize=9, loc="upper right",
                        labelcolor=[ACC2, ACC1][:len([x for x in [win_rates, sharpes] if x])])
@@ -158,7 +158,7 @@ def _render(fig: plt.Figure, axes: list, ckpt: dict, log_lines: list[str]) -> No
                     color=ACC2, linewidth=2.2, label="Total PnL %")
         ax_pnl.plot(weeks, max_dd,
                     color=ACC1, linewidth=2.2, label="Drawdown %")
-    ax_pnl.set_title("PnL and Drawdown")
+    ax_pnl.set_title("PnL and Drawdown", color=TITLE_FG, pad=6)
     if weeks:
         ax_pnl.legend(fontsize=9, loc="upper right",
                       labelcolor=[ACC2, ACC1])
@@ -166,11 +166,9 @@ def _render(fig: plt.Figure, axes: list, ckpt: dict, log_lines: list[str]) -> No
 
     # ── Panel 3: Current Status ───────────────────────────────────────────────
     ax_status.clear()
-    ax_status.set_facecolor(PANEL)
     ax_status.set_axis_off()
-    for sp in ax_status.spines.values():
-        sp.set_edgecolor("#dde3ed")
-        sp.set_linewidth(0.8)
+    ax_status.patch.set_facecolor(PANEL)
+    ax_status.patch.set_visible(True)
 
     n_trades = len(all_trades)
     if all_trades:
@@ -225,12 +223,13 @@ def _render(fig: plt.Figure, axes: list, ckpt: dict, log_lines: list[str]) -> No
                        fontfamily=MONO)
         y_pos -= step
 
-    ax_status.set_title("Current Status")
+    ax_status.set_title("Current Status", color=TITLE_FG, pad=6)
 
     # ── Panel 4: Recent Log Tail ──────────────────────────────────────────────
     ax_log.clear()
-    ax_log.set_facecolor(PANEL)
     ax_log.set_axis_off()
+    ax_log.patch.set_facecolor(PANEL)
+    ax_log.patch.set_visible(True)
     ax_log.text(
         0.015, 0.975,
         "\n".join(log_lines),
@@ -239,7 +238,7 @@ def _render(fig: plt.Figure, axes: list, ckpt: dict, log_lines: list[str]) -> No
         fontfamily="Consolas",
         linespacing=1.5,
     )
-    ax_log.set_title("Recent Log Tail")
+    ax_log.set_title("Recent Log Tail", color=TITLE_FG, pad=6)
 
     fig.suptitle(
         "Azalyst Alpha Research Engine  -  Spyder Monitor",
