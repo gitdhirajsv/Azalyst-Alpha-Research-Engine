@@ -198,34 +198,26 @@ if "!GPU_FOUND!"=="0" (
     goto :Q_MODE
 )
 
-:Q1_LOOP
 echo  Select compute device:
-echo    [1] GPU - !GPU_NAME! (CUDA=%CUDA_READY%)  ~4x faster
-echo    [2] CPU - all cores
+echo    [1] GPU  -  !GPU_NAME!  ~4x faster
+echo    [2] CPU  -  all cores
 echo.
-set /p "Q1=  Choice (1/2): "
-if "!Q1!"=="1" ( set "COMPUTE_CHOICE=gpu" & set "SKIP_SHAP=1" & echo  [OK] GPU selected & goto :Q_MODE )
-if "!Q1!"=="2" ( set "COMPUTE_CHOICE=cpu" & set "SKIP_SHAP=0" & echo  [OK] CPU selected & goto :Q_MODE )
-echo  Enter 1 or 2.
-echo.
-goto :Q1_LOOP
+choice /N /C:12 /M "  Choice (1/2): "
+if errorlevel 2 ( set "COMPUTE_CHOICE=cpu" & set "SKIP_SHAP=0" & echo  [OK] CPU selected )
+if errorlevel 1 if not errorlevel 2 ( set "COMPUTE_CHOICE=gpu" & set "SKIP_SHAP=1" & echo  [OK] GPU selected )
 
 :: ── Run mode: Terminal only vs Terminal + Spyder monitor ─────────────────────
 :Q_MODE
 echo.
 set "LAUNCH_MONITOR=0"
-:Q2_LOOP
 echo  Run mode:
-echo    [1] Terminal only     - engine runs in this window
-echo    [2] Terminal + Spyder - engine here + live monitor in a second window
-echo                           (closing the monitor will NOT stop the engine)
+echo    [1] Terminal only
+echo    [2] Terminal + Spyder  (live monitor opens in a second window;
+echo                            closing it will NOT stop the engine)
 echo.
-set /p "Q2=  Choice (1/2): "
-if "!Q2!"=="1" ( set "LAUNCH_MONITOR=0" & echo  [OK] Terminal only       & goto :CONFIRM )
-if "!Q2!"=="2" ( set "LAUNCH_MONITOR=1" & echo  [OK] Terminal + Spyder   & goto :CONFIRM )
-echo  Enter 1 or 2.
-echo.
-goto :Q2_LOOP
+choice /N /C:12 /M "  Choice (1/2): "
+if errorlevel 2 ( set "LAUNCH_MONITOR=1" & echo  [OK] Terminal + Spyder )
+if errorlevel 1 if not errorlevel 2 ( set "LAUNCH_MONITOR=0" & echo  [OK] Terminal only )
 
 :CONFIRM
 echo.
@@ -238,8 +230,8 @@ echo    Cache   : %~dp0feature_cache\
 echo    Results : %~dp0results\
 echo  ============================================================
 echo.
-set /p "GO=  Start? (Y/N): "
-if /i not "!GO!"=="Y" ( echo  Cancelled. & timeout /t 2 /nobreak >nul & exit /b 0 )
+choice /N /C:YN /M "  Start? (Y/N): "
+if errorlevel 2 ( echo  Cancelled. & timeout /t 2 /nobreak >nul & exit /b 0 )
 echo.
 
 :: ── Run ───────────────────────────────────────────────────────────────────────
