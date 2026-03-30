@@ -33,16 +33,17 @@ LOG  = RES  / "run_log.txt"
 REFRESH = 5   # seconds between refreshes
 LOG_TAIL = 18  # log lines to show
 
-# ── Theme (fully white / light) ─────────────────────────────────────────────
-BG    = "#f0f3f8"   # very light blue-grey page background
-PANEL = "#ffffff"   # white card panels
-ACC1  = "#e07020"   # orange
-ACC2  = "#2c7bb6"   # blue
+# ── Theme (dark navy bg + white card panels — matches SVG design) ────────────
+BG    = "#0d1422"   # dark navy figure background
+PANEL = "#f5f7fb"   # white card panels
+ACC1  = "#ff7f0e"   # orange (matplotlib default)
+ACC2  = "#1f77b4"   # blue  (matplotlib default)
 ACC3  = "#27a060"   # green
 ACC4  = "#d94040"   # red
-TXT   = "#1a1a2e"   # dark text
+TXT   = "#111827"   # dark text on panels
 MUTED = "#6b7a99"
-GRID  = "#e8ecf0"
+GRID  = "#e2e8f0"
+TITLE_FG = "#e7f5ee"  # light text for suptitle on dark bg
 
 
 # ── Data helpers ──────────────────────────────────────────────────────────────
@@ -93,22 +94,21 @@ def _apply_style() -> None:
     plt.rcParams.update({
         "figure.facecolor":  BG,
         "axes.facecolor":    PANEL,
-        "axes.edgecolor":    "#dde3ed",
+        "axes.edgecolor":    "#cbd5e1",
         "axes.labelcolor":   TXT,
         "axes.titlecolor":   TXT,
         "xtick.color":       MUTED,
         "ytick.color":       MUTED,
         "grid.color":        GRID,
-        "grid.linewidth":    0.6,
+        "grid.linewidth":    0.5,
         "text.color":        TXT,
-        "font.family":       ["Segoe UI", "Inter", "Helvetica Neue", "Arial", "sans-serif"],
+        "font.family":       ["Segoe UI", "Arial", "sans-serif"],
         "font.size":         9,
-        "axes.titlesize":    10.5,
+        "axes.titlesize":    11,
         "axes.titleweight":  "bold",
         "axes.spines.top":   False,
         "axes.spines.right": False,
-        "legend.framealpha": 0.95,
-        "legend.edgecolor":  "#dde3ed",
+        "legend.frameon":    False,
         "legend.facecolor":  PANEL,
     })
 
@@ -133,34 +133,36 @@ def _render(fig: plt.Figure, axes: list, ckpt: dict, log_lines: list[str]) -> No
     win_rates = _win_rates_by_week(all_trades)
     sharpes   = _rolling_sharpe(weekly_returns)
 
-    # ── Panel 1: Training Quality by Week ────────────────────────────────────
+    # ── Panel 1: Training Quality by Cycle ──────────────────────────────────
     ax_qual.clear()
     ax_qual.set_facecolor(PANEL)
-    ax_qual.grid(True, alpha=0.3, color=GRID)
+    ax_qual.grid(True, alpha=0.4, color=GRID)
     if win_rates:
         ax_qual.plot(range(1, len(win_rates) + 1), win_rates,
-                     color=ACC1, linewidth=1.8, label="Win rate %")
+                     color=ACC2, linewidth=2.2, label="Win rate")
     if sharpes:
         ax_qual.plot(range(1, len(sharpes) + 1), [s * 10 for s in sharpes],
-                     color=ACC2, linewidth=1.8, label="Sharpe ×10")
-    ax_qual.set_title("Training Quality by Week")
+                     color=ACC1, linewidth=2.2, label="Sharpe")
+    ax_qual.set_title("Training Quality by Cycle")
     if win_rates or sharpes:
-        ax_qual.legend(fontsize=8, framealpha=0.15, labelcolor=TXT, loc="upper left")
-    ax_qual.tick_params(colors=TXT)
+        ax_qual.legend(fontsize=9, loc="upper right",
+                       labelcolor=[ACC2, ACC1][:len([x for x in [win_rates, sharpes] if x])])
+    ax_qual.tick_params(colors=MUTED)
 
     # ── Panel 2: PnL and Drawdown ─────────────────────────────────────────────
     ax_pnl.clear()
     ax_pnl.set_facecolor(PANEL)
-    ax_pnl.grid(True, alpha=0.3, color=GRID)
+    ax_pnl.grid(True, alpha=0.4, color=GRID)
     if weeks:
         ax_pnl.plot(weeks, cum_ret,
-                    color=ACC2, linewidth=1.8, label="Total PnL %")
+                    color=ACC2, linewidth=2.2, label="Total PnL %")
         ax_pnl.plot(weeks, max_dd,
-                    color=ACC1, linewidth=1.8, label="Drawdown %")
+                    color=ACC1, linewidth=2.2, label="Drawdown %")
     ax_pnl.set_title("PnL and Drawdown")
     if weeks:
-        ax_pnl.legend(fontsize=8, framealpha=0.15, labelcolor=TXT, loc="upper left")
-    ax_pnl.tick_params(colors=TXT)
+        ax_pnl.legend(fontsize=9, loc="upper right",
+                      labelcolor=[ACC2, ACC1])
+    ax_pnl.tick_params(colors=MUTED)
 
     # ── Panel 3: Current Status ───────────────────────────────────────────────
     ax_status.clear()
@@ -188,57 +190,60 @@ def _render(fig: plt.Figure, axes: list, ckpt: dict, log_lines: list[str]) -> No
     st_lbl  = "RUNNING" if is_run else ("KILL-SWITCH" if kill_sw else "IDLE")
     st_col  = ACC3 if is_run else (ACC4 if kill_sw else MUTED)
 
+    # monospace padded rows matching SVG layout
     status_rows = [
-        ("Current Status",  "",                 None),
-        ("Run state",       st_lbl,             st_col),
-        ("Run ID",          str(run_id)[:22],   TXT),
-        ("Last checkpoint", ts,                 TXT),
-        ("Current week",    str(last_week),      TXT),
-        ("Retrains",        str(retrains),       TXT),
-        ("",                "",                 None),
-        ("Latest metrics",  "",                 None),
-        ("Trades",          f"{n_trades:,}",    TXT),
-        ("Win rate",        f"{wr:.3f}%",        ACC3 if wr >= 50 else ACC1),
-        ("Sharpe",          f"{cur_shp:.3f}",   ACC3 if cur_shp >= 1 else (ACC4 if cur_shp < 0 else ACC1)),
-        ("Drawdown",        f"{cur_dd:.2f}%",   ACC4 if abs(cur_dd) > 20 else ACC1),
-        ("Cum return",      f"{cur_ret:.2f}%",  ACC3 if cur_ret >= 0 else ACC4),
-        ("Profit factor",   f"{pf:.3f}",        ACC3 if pf >= 1.5 else ACC1),
+        ("Run state     ", st_lbl,            st_col),
+        ("Run ID        ", str(run_id)[:20],  TXT),
+        ("Last ckpt     ", ts,                TXT),
+        ("Current week  ", str(last_week),    TXT),
+        ("Retrains      ", str(retrains),     TXT),
+        (None, None, None),  # spacer
+        ("Latest cycle  ", str(last_week),    TXT),
+        ("Trades        ", f"{n_trades:,}",   TXT),
+        ("Win rate      ", f"{wr:.3f}%",      ACC3 if wr >= 50 else TXT),
+        ("Sharpe        ", f"{cur_shp:.3f}",  TXT),
+        ("Drawdown      ", f"{cur_dd:.2f}%",  TXT),
+        ("Cum return    ", f"{cur_ret:.2f}%", TXT),
+        ("Profit factor ", f"{pf:.3f}",       TXT),
     ]
 
-    y_pos, step = 0.97, 0.072
+    MONO = "Consolas"
+    y_pos, step = 0.96, 0.071
     for label, val, color in status_rows:
-        if color is None:
-            ax_status.text(0.04, y_pos, label,
-                           transform=ax_status.transAxes,
-                           fontsize=9, color=ACC1, fontweight="bold", va="top")
-        else:
-            ax_status.text(0.04, y_pos, label,
-                           transform=ax_status.transAxes,
-                           fontsize=8.5, color=MUTED, va="top")
-            ax_status.text(0.96, y_pos, val,
-                           transform=ax_status.transAxes,
-                           fontsize=8.5, color=color, va="top", ha="right")
+        if label is None:
+            y_pos -= step * 0.5
+            continue
+        # label + colon
+        ax_status.text(0.04, y_pos, f"{label}: ",
+                       transform=ax_status.transAxes,
+                       fontsize=8.8, color=TXT, va="top",
+                       fontfamily=MONO)
+        # value (colored)
+        ax_status.text(0.60, y_pos, val,
+                       transform=ax_status.transAxes,
+                       fontsize=8.8, color=color, va="top",
+                       fontfamily=MONO)
         y_pos -= step
 
     ax_status.set_title("Current Status")
 
     # ── Panel 4: Recent Log Tail ──────────────────────────────────────────────
     ax_log.clear()
-    ax_log.set_facecolor("#f4f7fb")
+    ax_log.set_facecolor(PANEL)
     ax_log.set_axis_off()
     ax_log.text(
-        0.012, 0.985,
+        0.015, 0.975,
         "\n".join(log_lines),
         transform=ax_log.transAxes,
-        fontsize=7.8, color=TXT, va="top", ha="left",
-        fontfamily="Cascadia Code" if sys.platform == "win32" else "monospace",
-        linespacing=1.55,
+        fontsize=8, color=TXT, va="top", ha="left",
+        fontfamily="Consolas",
+        linespacing=1.5,
     )
     ax_log.set_title("Recent Log Tail")
 
     fig.suptitle(
-        "Azalyst Alpha Research Engine  —  Spyder Monitor",
-        fontsize=14, fontweight="bold", color=ACC1, y=0.985,
+        "Azalyst Alpha Research Engine  -  Spyder Monitor",
+        fontsize=15, fontweight="bold", color=TITLE_FG, y=0.984,
         fontfamily="Segoe UI",
     )
     fig.canvas.draw_idle()
@@ -249,12 +254,12 @@ def _render(fig: plt.Figure, axes: list, ckpt: dict, log_lines: list[str]) -> No
 def run_dashboard(refresh: int = REFRESH) -> None:
     _apply_style()
 
-    fig = plt.figure("Azalyst Monitor", figsize=(14, 9), facecolor=BG)
+    fig = plt.figure("Azalyst Monitor", figsize=(15, 9), facecolor=BG)
     gs  = gridspec.GridSpec(
         2, 2, figure=fig,
-        left=0.05, right=0.97,
-        top=0.93,  bottom=0.06,
-        hspace=0.50, wspace=0.38,
+        left=0.04, right=0.97,
+        top=0.93,  bottom=0.05,
+        hspace=0.48, wspace=0.32,
     )
     axes = [fig.add_subplot(gs[r, c]) for r, c in [(0, 0), (0, 1), (1, 0), (1, 1)]]
 
