@@ -65,15 +65,15 @@ ROUND_TRIP_FEE   = FEE_RATE * 2
 HORIZON_BARS     = 48
 
 # v4 new config
-MAX_DRAWDOWN_KILL   = -0.15       # kill-switch: halt if cumulative DD > 15%
-IC_SELECTION_THRESH = -0.02       # drop features with rolling IC below this
-IC_LOOKBACK_WEEKS   = 8           # rolling window for feature IC estimation
-MIN_FEATURES        = 20          # never drop below this many features
+MAX_DRAWDOWN_KILL   = -0.15
+IC_SELECTION_THRESH = -0.02
+IC_LOOKBACK_WEEKS   = 8
+MIN_FEATURES        = 20
 VAR_CONFIDENCE      = 0.95
-POSITION_RISK_CAP   = 0.03        # max 3% portfolio risk per position
+POSITION_RISK_CAP   = 0.03
 
 
-# ── HELPERS (shared with v3) ──────────────────────────────────────────────────
+# ── HELPERS ───────────────────────────────────────────────────────────────────
 
 def _fix_timestamp(df: pd.DataFrame) -> pd.DataFrame:
     if not isinstance(df.index, pd.DatetimeIndex):
@@ -152,21 +152,16 @@ def make_xgb_params(cuda_api: str | None, n_estimators: int = 1000,
 # ── REGIME DETECTION ──────────────────────────────────────────────────────────
 
 def detect_regime(symbols: dict, week_end) -> str:
-    """
-    4-state regime detector using BTC return + cross-sectional volatility.
-    """
     btc_df = symbols.get("BTCUSDT")
     if btc_df is None:
         return "LOW_VOL_GRIND"
 
-    lookback = btc_df[btc_df.index < week_end].tail(4 * 288)  # ~4 weeks
+    lookback = btc_df[btc_df.index < week_end].tail(4 * 288)
     if len(lookback) < 288:
         return "LOW_VOL_GRIND"
 
     btc_ret = float(np.log(lookback["ret_1d"].iloc[-1] + 1)) if "ret_1d" in lookback.columns else 0.0
-    # Use close prices if available from raw data
     if len(lookback) > 0:
-        # Estimate from features
         rvol = lookback.get("rvol_1d")
         if rvol is not None:
             avg_vol = float(rvol.dropna().mean())
@@ -310,13 +305,9 @@ def load_feature_store() -> dict:
     return symbols
 
 
-# ── DATE SPLITS (v4: Y1 train, walk Y2+Y3) ───────────────────────────────────
+# ── DATE SPLITS ───────────────────────────────────────────────────────────────
 
 def get_date_splits(symbols: dict) -> tuple:
-    """
-    3-year data split into Y1/Y2/Y3 (thirds).
-    Train starts with Y1, walk-forward covers Y2+Y3.
-    """
     all_min = [df.index.min() for df in symbols.values()]
     all_max = [df.index.max() for df in symbols.values()]
     global_min = min(all_min)
@@ -336,10 +327,6 @@ def get_date_splits(symbols: dict) -> tuple:
 
 def compute_feature_ic(symbols: dict, week_start, week_end,
                        features: list) -> Dict[str, float]:
-    """
-    Compute cross-sectional Spearman IC for each feature over a single week.
-    Returns {feature_name: IC_value}.
-    """
     feature_ics = {}
     week_data = {}
 
@@ -374,11 +361,6 @@ def compute_feature_ic(symbols: dict, week_start, week_end,
 
 def select_features_by_ic(ic_history: Dict[str, List[float]],
                           all_features: list) -> list:
-    """
-    Regime-aware feature selection: drop features with consistently negative IC.
-    Uses rolling mean IC over last IC_LOOKBACK_WEEKS weeks.
-    Never drops below MIN_FEATURES.
-    """
     if not ic_history:
         return all_features
 
@@ -389,12 +371,10 @@ def select_features_by_ic(ic_history: Dict[str, List[float]],
             recent = ics[-IC_LOOKBACK_WEEKS:]
             scores[feat] = float(np.mean(recent))
         else:
-            scores[feat] = 0.0  # neutral — keep until we have data
+            scores[feat] = 0.0
 
-    # Sort by IC descending, keep features above threshold
     selected = [f for f, ic in scores.items() if ic >= IC_SELECTION_THRESH]
 
-    # Ensure minimum features by adding back top performers if needed
     if len(selected) < MIN_FEATURES:
         ranked = sorted(scores.items(), key=lambda x: -x[1])
         selected = [f for f, _ in ranked[:MIN_FEATURES]]
@@ -423,15 +403,10 @@ class PurgedTimeSeriesCV:
 
 def build_training_matrix(symbols: dict, train_end,
                           features: list = None) -> tuple:
-    """
-    Build cross-sectional training matrix with expanding window.
-    features param allows using subset of FEATURE_COLS (regime-aware selection).
-    """
     use_features = features or FEATURE_COLS
     print(f"  Building training matrix up to {pd.Timestamp(train_end).date()} "
           f"({len(use_features)} features)...")
 
-    # Build future_ret panel for cross-sectional median
     future_ret_by_sym = {}
     eligible = []
     total_rows = 0
@@ -453,7 +428,6 @@ def build_training_matrix(symbols: dict, train_end,
 
     print(f"  Candidate pool: {total_rows:,} rows x {len(eligible)} symbols")
 
-    # Cross-sectional median
     fret_matrix = pd.concat(future_ret_by_sym, axis=1, sort=True)
     ts_medians = fret_matrix.median(axis=1, skipna=True).astype(np.float32)
     del fret_matrix, future_ret_by_sym
@@ -462,7 +436,6 @@ def build_training_matrix(symbols: dict, train_end,
     rng = np.random.default_rng(42)
     sample_prob = min(1.0, MAX_TRAIN_ROWS / max(total_rows, 1))
 
-    # Pre-allocate arrays
     n_feat = len(use_features)
     initial = min(total_rows, int(MAX_TRAIN_ROWS * 1.05))
     feat_arr = np.empty((max(initial, 1), n_feat), dtype=np.float32)
@@ -536,7 +509,6 @@ def train_model(X, y, y_ret, cuda_api, features_used, label=""):
     cv = PurgedTimeSeriesCV(n_splits=5, gap=48)
     aucs, ics = [], []
 
-    # Allow per-call GPU→CPU downgrade on OOM
     _effective_cuda = cuda_api
 
     def _fit_with_fallback(model, Xtr, ytr, Xval, yval, verbose=False):
@@ -648,10 +620,6 @@ def train_meta_model(base_model, base_scaler, X, y, cuda_api, features_used,
 # ── SHAP EXPLAINABILITY ───────────────────────────────────────────────────────
 
 def compute_shap(model, X_sample, feature_names, max_samples=5000):
-    """
-    Compute SHAP values. Uses TreeExplainer for XGBoost.
-    Returns dict {feature_name: mean_abs_shap}.
-    """
     try:
         import shap
     except ImportError:
@@ -666,9 +634,8 @@ def compute_shap(model, X_sample, feature_names, max_samples=5000):
         explainer = shap.TreeExplainer(model)
         shap_values = explainer.shap_values(X_sample)
 
-        # For binary classification, shap_values may be a list [class0, class1]
         if isinstance(shap_values, list):
-            shap_values = shap_values[1]  # positive class
+            shap_values = shap_values[1]
 
         mean_abs = np.abs(shap_values).mean(axis=0)
         result = {feat: float(val) for feat, val in zip(feature_names, mean_abs)}
@@ -681,7 +648,6 @@ def compute_shap(model, X_sample, feature_names, max_samples=5000):
 
 
 def save_shap_csv(shap_dict: dict, path: str, label: str = ""):
-    """Save SHAP values to CSV in results/shap/."""
     if not shap_dict:
         return
     shap_dir = os.path.join(os.path.dirname(path), "shap")
@@ -743,9 +709,6 @@ def predict_week(model, scaler, symbols, week_start, week_end,
 def simulate_weekly_trades(predictions, actual_rets, prev_longs, prev_shorts,
                            meta_confs=None, risk_manager=None,
                            weekly_returns_hist=None):
-    """
-    Position-tracked fees + meta-labeling confidence + risk-adjusted sizing.
-    """
     if not predictions:
         return [], 0.0, set(), set()
 
@@ -754,7 +717,6 @@ def simulate_weekly_trades(predictions, actual_rets, prev_longs, prev_shorts,
     cur_longs = set(ranked[ranked >= (1 - TOP_QUANTILE)].index)
     cur_shorts = set(ranked[ranked <= TOP_QUANTILE].index)
 
-    # Risk-based sizing: use VaR/CVaR to cap position sizes
     risk_scale = 1.0
     if risk_manager is not None and weekly_returns_hist and len(weekly_returns_hist) >= 4:
         ret_series = pd.Series(weekly_returns_hist)
@@ -803,10 +765,9 @@ def simulate_weekly_trades(predictions, actual_rets, prev_longs, prev_shorts,
     return trades, week_ret, cur_longs, cur_shorts
 
 
-# ── DRAWDOWN CALCULATOR ──────────────────────────────────────────────────────
+# ── DRAWDOWN ─────────────────────────────────────────────────────────────────
 
 def compute_drawdown(weekly_returns: list) -> float:
-    """Returns current max drawdown (negative number)."""
     if not weekly_returns:
         return 0.0
     cum = np.cumprod([1 + r for r in weekly_returns])
@@ -815,17 +776,13 @@ def compute_drawdown(weekly_returns: list) -> float:
     return float(dd.min())
 
 
-# ── CHECKPOINT ────────────────────────────────────────────────────────────────
+# ── CHECKPOINT ───────────────────────────────────────────────────────────────
 
 def _ckpt_path(results_dir):
     return os.path.join(results_dir, "checkpoint_v4_latest.json")
 
 
 def save_checkpoint(results_dir, state):
-    """
-    Atomically write walk-forward state to a JSON checkpoint.
-    Uses temp-file + os.replace so a crash never corrupts the checkpoint.
-    """
     path = _ckpt_path(results_dir)
     os.makedirs(results_dir, exist_ok=True)
     tmp = path + ".tmp"
@@ -835,7 +792,6 @@ def save_checkpoint(results_dir, state):
 
 
 def load_checkpoint(results_dir):
-    """Load checkpoint if it exists. Returns dict or None."""
     path = _ckpt_path(results_dir)
     if not os.path.exists(path):
         return None
@@ -860,14 +816,11 @@ def main():
     parser.add_argument("--feature-dir", default=None)
     parser.add_argument("--out-dir", default=None)
     parser.add_argument("--rebuild-cache", action="store_true")
-    parser.add_argument("--max-dd", type=float, default=MAX_DRAWDOWN_KILL,
-                        help="Kill-switch drawdown threshold (default: -0.15)")
+    parser.add_argument("--max-dd", type=float, default=MAX_DRAWDOWN_KILL)
     parser.add_argument("--no-shap", action="store_true",
                         help="Skip SHAP computation (faster)")
-    parser.add_argument("--run-id", default=None,
-                        help="Custom run ID (default: auto-generated)")
-    parser.add_argument("--no-resume", dest="no_resume", action="store_true",
-                        help="Ignore existing checkpoint and start a fresh run")
+    parser.add_argument("--run-id", default=None)
+    parser.add_argument("--no-resume", dest="no_resume", action="store_true")
     args = parser.parse_args()
 
     global DATA_DIR, RESULTS_DIR, CACHE_DIR
@@ -883,13 +836,13 @@ def main():
 
     if use_gpu:
         os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-        os.environ["CUDA_DEVICE_ORDER"] = "PCI_E_BUS_ID"
+        # FIX: was PCI_E_BUS_ID — correct NVIDIA env value is PCI_BUS_ID
+        os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     else:
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
     import xgboost as xgb
 
-    # ── Banner ────────────────────────────────────────────────────────────────
     print("\n" + "=" * 72)
     print("  AZALYST v4  —  Regime-Aware Walk-Forward Engine")
     print("  Train: Expanding (Y1 -> Y1+Y2 -> Y1+Y2+Y3)")
@@ -898,15 +851,12 @@ def main():
     print(f"  Compute      : {'GPU (CUDA)' if use_gpu else 'CPU'}")
     print(f"  Features     : {len(FEATURE_COLS)} (with regime-aware selection)")
     print(f"  Kill-switch  : {dd_kill*100:.0f}% max drawdown")
-    print(f"  SHAP         : {'enabled' if not args.no_shap else 'disabled'}")
+    print(f"  SHAP         : {'disabled (--no-shap)' if args.no_shap else 'enabled'}")
     print(f"  Persistence  : SQLite (results/azalyst.db)")
     print("=" * 72 + "\n")
 
-    # ── Init DB + checkpoint detection ───────────────────────────────────────
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
-    # Simple log file writer — does NOT replace sys.stdout, just mirrors key
-    # lines so VIEW_TRAINING.py can tail results/run_log.txt live.
     _log_path = os.path.join(RESULTS_DIR, "run_log.txt")
     try:
         _log_fh = open(_log_path, "w", encoding="utf-8", buffering=1)
@@ -914,7 +864,6 @@ def main():
         _log_fh = None
 
     def _log(msg: str = "") -> None:
-        """Print to console and mirror to run_log.txt."""
         print(msg)
         if _log_fh:
             try:
@@ -940,7 +889,6 @@ def main():
         })
     risk_mgr = RiskManager()
 
-    # ── Step 0: Feature cache ─────────────────────────────────────────────────
     _log("STEP 0: Feature cache\n")
     if args.rebuild_cache:
         if not build_feature_store():
@@ -959,10 +907,8 @@ def main():
         else:
             _log(f"  Found {valid} valid cache files")
 
-    # ── CUDA ──────────────────────────────────────────────────────────────────
     cuda_api = detect_cuda_api() if use_gpu else None
 
-    # ── Step 1: Load ──────────────────────────────────────────────────────────
     _log("\nSTEP 1: Load feature cache\n")
     _log(f"  Loading {len(list(Path(CACHE_DIR).glob('*.parquet')))} symbols from feature cache...")
     symbols = load_feature_store()
@@ -972,11 +918,9 @@ def main():
         return
     _log(f"  Loaded {len(symbols)} valid symbols")
 
-    # ── Step 2: Date splits ───────────────────────────────────────────────────
     print("\nSTEP 2: Date splits (v4: walk Y2+Y3)\n")
     global_min, global_max, y1_end, y2_end = get_date_splits(symbols)
 
-    # ── Step 3: Initial training on Y1 (skip if resuming) ────────────────────
     os.makedirs(f"{RESULTS_DIR}/models", exist_ok=True)
     if resuming:
         print("\nSTEP 3: Skipping — loading models from checkpoint...\n")
@@ -998,7 +942,7 @@ def main():
         sys.stdout.flush()
     else:
         print("\nSTEP 3: Initial training on Y1\n")
-        active_features = list(FEATURE_COLS)  # start with all
+        active_features = list(FEATURE_COLS)
         X_train, y_train, y_ret = build_training_matrix(symbols, y1_end, active_features)
         if X_train is None:
             print("ERROR: Could not build training matrix")
@@ -1025,7 +969,6 @@ def main():
                                  f"{RESULTS_DIR}/models/scaler_v4_base.pkl",
                                  mean_auc, mean_ic, icir, len(active_features))
 
-        # SHAP
         if not args.no_shap:
             print("\n  Computing SHAP values...")
             Xs = base_scaler.transform(X_train)
@@ -1034,7 +977,6 @@ def main():
                 save_shap_csv(shap_vals, f"{RESULTS_DIR}/models/", "v4_base")
                 db.insert_shap_values(run_id, "base_y1", shap_vals)
 
-        # Meta model
         print("\n  Training meta-labeling model...")
         sys.stdout.flush()
         meta_model, meta_scaler = train_meta_model(
@@ -1056,11 +998,10 @@ def main():
         del X_train, y_train, y_ret
         gc.collect()
 
-    # ── Step 4+5: Walk-forward Y2+Y3 ─────────────────────────────────────────
     walk_start = y1_end
     print(f"\nSTEP 4+5: Walk-forward  ({walk_start.date()} -> {global_max.date()})\n")
-    print(f"  Y2 zone (good): {walk_start.date()} -> {y2_end.date()}")
-    print(f"  Y3 zone (flip): {y2_end.date()} -> {global_max.date()}\n")
+    print(f"  Y2 zone: {walk_start.date()} -> {y2_end.date()}")
+    print(f"  Y3 zone: {y2_end.date()} -> {global_max.date()}\n")
     sys.stdout.flush()
 
     weeks = pd.date_range(start=walk_start, end=global_max, freq="W-MON")
@@ -1073,7 +1014,6 @@ def main():
     current_scaler = base_scaler
     current_meta = meta_model
     current_meta_scaler = meta_scaler
-    # Paths needed so checkpoint can reload the latest model after interruption
     current_model_path = f"{RESULTS_DIR}/models/model_v4_base.json"
     current_scaler_path = f"{RESULTS_DIR}/models/scaler_v4_base.pkl"
     current_meta_path = f"{RESULTS_DIR}/models/meta_v4_base.pkl"
@@ -1110,16 +1050,14 @@ def main():
 
     for week_num, (ws, we) in enumerate(zip(weeks[:-1], weeks[1:]), 1):
         if week_num <= resume_from_week:
-            continue  # already completed in a previous interrupted run
+            continue
 
-        # ── Kill-switch check ─────────────────────────────────────────────────
         current_dd = compute_drawdown(weekly_returns)
         if current_dd < dd_kill:
             print(f"\n  *** KILL SWITCH *** Week {week_num}: "
                   f"DD={current_dd*100:.1f}% < {dd_kill*100:.0f}% threshold")
             print("  Halting all trading. Pausing for 4 weeks...")
             kill_switch_hit = True
-            # Skip 4 weeks
             weekly_returns.extend([0.0] * min(4, len(weeks) - week_num - 1))
             for skip in range(4):
                 weekly_summary.append({
@@ -1132,13 +1070,11 @@ def main():
                     "max_drawdown_pct": round(current_dd * 100, 4),
                     "regime": "KILL_SWITCH",
                 })
-            kill_switch_hit = False  # resume after pause
+            kill_switch_hit = False
             continue
 
-        # ── Regime detection ──────────────────────────────────────────────────
         regime = detect_regime(symbols, we)
 
-        # ── Feature IC tracking ───────────────────────────────────────────────
         if week_num > 1 and week_num % 2 == 0:
             fic = compute_feature_ic(symbols, ws, we, active_features)
             for feat, ic_val in fic.items():
@@ -1147,11 +1083,9 @@ def main():
                 feature_ic_history[feat].append(ic_val)
             db.insert_feature_ic(run_id, week_num, fic, active_features)
 
-        # ── Quarterly retrain with expanding window ───────────────────────────
         if week_num % RETRAIN_WEEKS == 0:
             print(f"\n  Week {week_num:3d}: QUARTERLY RETRAIN (expanding window to {we.date()})...")
 
-            # Regime-aware feature selection
             new_features = select_features_by_ic(feature_ic_history, FEATURE_COLS)
             n_dropped = len(active_features) - len(new_features)
             if n_dropped > 0:
@@ -1159,7 +1093,6 @@ def main():
                       f"({n_dropped} dropped by IC filter)")
             active_features = new_features
 
-            # Expanding window: train on everything up to current week
             X_rt, y_rt, y_ret_rt = build_training_matrix(symbols, we, active_features)
             if X_rt is not None and len(X_rt) > 200:
                 t0 = time.time()
@@ -1182,7 +1115,6 @@ def main():
                                          current_scaler_path,
                                          auc_n, ic_n, icir_n, len(active_features))
 
-                # SHAP on retrained model
                 if not args.no_shap:
                     Xs_rt = s_new.transform(X_rt)
                     shap_vals = compute_shap(m_new, Xs_rt, active_features)
@@ -1191,7 +1123,6 @@ def main():
                                       f"v4_week{week_num:03d}")
                         db.insert_shap_values(run_id, f"retrain_w{week_num:03d}", shap_vals)
 
-                # Retrain meta
                 meta_new, meta_s_new = train_meta_model(
                     current_model, current_scaler, X_rt, y_rt, cuda_api,
                     active_features, label=f"meta_w{week_num:03d}"
@@ -1209,7 +1140,6 @@ def main():
                 del X_rt, y_rt, y_ret_rt
                 gc.collect()
 
-        # ── Predict ───────────────────────────────────────────────────────────
         predictions, actual_rets, meta_confs = predict_week(
             current_model, current_scaler, symbols, ws, we,
             active_features, meta_model=current_meta,
@@ -1219,7 +1149,6 @@ def main():
         if len(predictions) < 5:
             continue
 
-        # ── Trade simulation with risk integration ────────────────────────────
         trades, week_ret, cur_longs, cur_shorts = simulate_weekly_trades(
             predictions, actual_rets, prev_longs, prev_shorts,
             meta_confs, risk_manager=risk_mgr,
@@ -1227,7 +1156,6 @@ def main():
         )
         weekly_returns.append(week_ret)
 
-        # IC
         common = [s for s in predictions if s in actual_rets]
         if len(common) > 10:
             pred_arr = np.array([predictions[s] for s in common])
@@ -1241,7 +1169,6 @@ def main():
         turnover = round(n_new / n_cur * 100, 1) if n_cur > 0 else 100.0
         prev_longs, prev_shorts = cur_longs, cur_shorts
 
-        # Cumulative stats
         cum_ret = float(np.prod([1 + r for r in weekly_returns]) - 1)
         max_dd = compute_drawdown(weekly_returns)
 
@@ -1250,7 +1177,6 @@ def main():
             t["week_start"] = str(ws.date())
         all_trades.extend(trades)
 
-        # Zone label
         zone = "Y2" if we <= y2_end else "Y3"
         ann_proj = ((1 + week_ret) ** 52 - 1) * 100
 
@@ -1279,7 +1205,6 @@ def main():
              f"{regime}")
         sys.stdout.flush()
 
-        # ── Checkpoint (atomic write after every completed week) ───────────────
         save_checkpoint(RESULTS_DIR, {
             "run_id": run_id,
             "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -1315,7 +1240,6 @@ def main():
     sharpe = float(np.mean(weekly_returns)) / wk_std * np.sqrt(52) if wk_std > 0 else 0.0
     max_dd = compute_drawdown(weekly_returns)
 
-    # VaR/CVaR
     ret_s = pd.Series(weekly_returns)
     var_95 = float(risk_mgr.calculate_var(ret_s, 0.95)) if n_wks > 4 else 0.0
     cvar_95 = float(risk_mgr.calculate_cvar(ret_s, 0.95)) if n_wks > 4 else 0.0
@@ -1326,7 +1250,6 @@ def main():
     icir_val = ic_mean / (ic_std + 1e-8)
     ic_pos = float((ic_s > 0).mean() * 100) if len(ic_s) > 0 else 0.0
 
-    # Y2 vs Y3 split analysis
     y2_weeks = summary_df[summary_df["week_end"].apply(
         lambda x: pd.Timestamp(x) <= y2_end if x else False)]
     y3_weeks = summary_df[summary_df["week_end"].apply(
@@ -1369,7 +1292,6 @@ def main():
     db.insert_performance_summary(run_id, perf)
     db.finish_run(run_id)
 
-    # ── Final report ──────────────────────────────────────────────────────────
     print(f"\n{'='*72}")
     print(f"  AZALYST v4  —  RUN COMPLETE  [{run_id}]")
     print(f"{'='*72}")
@@ -1397,7 +1319,6 @@ def main():
     print(f"  Database -> {RESULTS_DIR}/azalyst.db")
     print(f"  GPU used : {'RTX 2050 CUDA' if cuda_api else 'CPU'}")
 
-    # Remove checkpoint — run fully completed
     ckpt_file = _ckpt_path(RESULTS_DIR)
     if os.path.exists(ckpt_file):
         os.remove(ckpt_file)
@@ -1409,9 +1330,8 @@ if __name__ == "__main__":
     try:
         main()
     except BrokenPipeError:
-        # Stdout pipe closed (e.g. piped through head/Select-Object); exit cleanly.
         import os as _os
-        _os.devnull  # suppress further writes
+        _os.devnull
         sys.exit(0)
     except KeyboardInterrupt:
         print("\n  [INTERRUPTED] Checkpoint preserved — run again to resume.")

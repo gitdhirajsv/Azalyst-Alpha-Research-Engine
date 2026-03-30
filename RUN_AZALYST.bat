@@ -5,6 +5,18 @@ color 0A
 chcp 65001 >nul 2>&1
 cd /d "%~dp0"
 
+:: ── FIX: Admin elevation (required for power plan changes) ───────────────────
+net session >nul 2>&1
+if errorlevel 1 (
+    echo  [INFO] Requesting administrator privileges for power plan...
+    powershell -Command "Start-Process '%~f0' -Verb RunAs" >nul 2>&1
+    if errorlevel 1 (
+        echo  [WARN] Could not elevate. Power plan will not be set. Continuing anyway.
+    ) else (
+        exit /b
+    )
+)
+
 for %%d in (
     "%LOCALAPPDATA%\Programs\Python\Python313"
     "%LOCALAPPDATA%\Programs\Python\Python312"
@@ -181,7 +193,7 @@ echo.
 set "COMPUTE_CHOICE=cpu"
 if "!GPU_FOUND!"=="0" (
     echo  Compute: CPU only (no GPU found)
-    goto :CONFIRM
+    goto :Q_SHAP
 )
 
 :Q1_LOOP
@@ -190,30 +202,52 @@ echo    [1] GPU - !GPU_NAME! (CUDA=%CUDA_READY%)
 echo    [2] CPU - all cores
 echo.
 set /p "Q1=  Choice (1/2): "
-if "!Q1!"=="1" ( set "COMPUTE_CHOICE=gpu" & echo  [OK] GPU selected & goto :CONFIRM )
-if "!Q1!"=="2" ( set "COMPUTE_CHOICE=cpu" & echo  [OK] CPU selected & goto :CONFIRM )
+if "!Q1!"=="1" ( set "COMPUTE_CHOICE=gpu" & echo  [OK] GPU selected & goto :Q_SHAP )
+if "!Q1!"=="2" ( set "COMPUTE_CHOICE=cpu" & echo  [OK] CPU selected & goto :Q_SHAP )
 echo  Enter 1 or 2.
 echo.
 goto :Q1_LOOP
+
+:: ── FIX: Added SHAP prompt — skipping SHAP is much faster on RTX 2050 ────────
+:Q_SHAP
+echo.
+set "SKIP_SHAP=0"
+:Q2_LOOP
+echo  Skip SHAP explainability? (faster run, especially on 4GB GPU)
+echo    [1] Yes - skip SHAP  (recommended for RTX 2050 / first runs)
+echo    [2] No  - compute SHAP after each retrain
+echo.
+set /p "Q2=  Choice (1/2): "
+if "!Q2!"=="1" ( set "SKIP_SHAP=1" & echo  [OK] SHAP disabled & goto :CONFIRM )
+if "!Q2!"=="2" ( set "SKIP_SHAP=0" & echo  [OK] SHAP enabled  & goto :CONFIRM )
+echo  Enter 1 or 2.
+echo.
+goto :Q2_LOOP
 
 :CONFIRM
 echo.
 echo  ============================================================
 echo   READY
 echo    Compute : !COMPUTE_CHOICE!
+echo    SHAP    : !SKIP_SHAP! (1=skip, 0=enabled)
 echo    Data    : %~dp0data\
 echo    Cache   : %~dp0feature_cache\
 echo    Results : %~dp0results\
 echo  ============================================================
+echo.
+echo  TIP: Open a second terminal and run:
+echo    python VIEW_TRAINING.py
+echo  to watch live progress charts while the engine runs.
 echo.
 set /p "GO=  Start? (Y/N): "
 if /i not "!GO!"=="Y" ( echo  Cancelled. & timeout /t 2 /nobreak >nul & exit /b 0 )
 echo.
 
 :: ── Run ───────────────────────────────────────────────────────────────────────
+:: FIX: was PCI_E_BUS_ID — correct value is PCI_BUS_ID
 if "!COMPUTE_CHOICE!"=="gpu" (
     set "CUDA_VISIBLE_DEVICES=0"
-    set "CUDA_DEVICE_ORDER=PCI_E_BUS_ID"
+    set "CUDA_DEVICE_ORDER=PCI_BUS_ID"
 )
 
 powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c >nul 2>&1
@@ -224,11 +258,18 @@ echo    Started: %date% %time%
 echo  ============================================================
 echo.
 
+:: ── Build the python command based on choices ─────────────────────────────────
+set "PY_ARGS=--data-dir "%~dp0data" --feature-dir "%~dp0feature_cache" --out-dir "%~dp0results""
+
 if "!COMPUTE_CHOICE!"=="gpu" (
-    !PYTHON_EXE! -u "%~dp0azalyst_v4_engine.py" --gpu --data-dir "%~dp0data" --feature-dir "%~dp0feature_cache" --out-dir "%~dp0results"
-) else (
-    !PYTHON_EXE! -u "%~dp0azalyst_v4_engine.py" --data-dir "%~dp0data" --feature-dir "%~dp0feature_cache" --out-dir "%~dp0results"
+    set "PY_ARGS=--gpu !PY_ARGS!"
 )
+
+if "!SKIP_SHAP!"=="1" (
+    set "PY_ARGS=!PY_ARGS! --no-shap"
+)
+
+!PYTHON_EXE! -u "%~dp0azalyst_v4_engine.py" !PY_ARGS!
 
 set "EXIT_CODE=!errorlevel!"
 
@@ -245,13 +286,18 @@ if "!EXIT_CODE!"=="0" (
         color 0E
         echo  [WARN] Pipeline exited cleanly but produced no results.
         echo.
-        echo  This usually means the feature cache built successfully but
-        echo  found 0 valid symbols. Check your parquet file format:
+        echo  Most likely causes on your laptop:
         echo.
-        echo    !PYTHON_EXE! -c "import pandas as pd; df=pd.read_parquet('data/BTCUSDT.parquet'); print(df.head(3)); print(df.dtypes)"
+        echo  1. Timestamp issue in your parquet files. Run this to check:
+        echo     !PYTHON_EXE! -c "import pandas as pd; df=pd.read_parquet('data/BTCUSDT.parquet'); idx=df.index if hasattr(df.index,'year') else pd.to_datetime(df.index,unit='ms',utc=True); print('Max year:',idx.max().year,'Min year:',idx.min().year); print(df.head(3)); print(df.dtypes)"
         echo.
-        echo  Files need columns: open, high, low, close, volume
-        echo  Timestamps must be after 2018 (not Unix 1970 epoch).
+        echo  2. Feature cache built OK but 0 symbols passed the year^>=2018 check.
+        echo     Delete feature_cache\ folder and re-run.
+        echo.
+        echo  3. Columns missing: parquet needs open,high,low,close,volume columns.
+        echo.
+        echo  4. Armoury Crate not in Performance mode — GPU throttled silently.
+        echo     Set Armoury Crate to Performance mode and re-run with GPU.
     ) else (
         color 0A
         echo  Pipeline completed successfully.
@@ -266,9 +312,9 @@ if "!EXIT_CODE!"=="0" (
     echo  [ERROR] Exit code !EXIT_CODE!
     echo.
     echo  Common fixes:
-    echo    GPU OOM  - re-run and choose CPU
-    echo    Bad data - delete feature_cache\ and retry
-    echo    Import   - check error above for exact message
+    echo    GPU OOM       - re-run, choose CPU or choose Skip SHAP=Yes
+    echo    Bad timestamp - delete feature_cache\ and retry
+    echo    Import error  - check error message above for exact cause
     echo.
     if exist "%~dp0results\checkpoint_v4_latest.json" (
         echo  Checkpoint saved. Run again to resume from where it stopped.
