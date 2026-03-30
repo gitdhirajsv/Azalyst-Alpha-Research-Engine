@@ -166,9 +166,11 @@ def _render(fig: plt.Figure, axes: list, ckpt: dict, log_lines: list[str]) -> No
 
     # ── Panel 3: Current Status ───────────────────────────────────────────────
     ax_status.clear()
-    ax_status.set_axis_off()
-    ax_status.patch.set_facecolor(PANEL)
-    ax_status.patch.set_visible(True)
+    ax_status.set_facecolor(PANEL)
+    for sp in ax_status.spines.values():
+        sp.set_visible(False)
+    ax_status.set_xticks([])
+    ax_status.set_yticks([])
 
     n_trades = len(all_trades)
     if all_trades:
@@ -227,9 +229,11 @@ def _render(fig: plt.Figure, axes: list, ckpt: dict, log_lines: list[str]) -> No
 
     # ── Panel 4: Recent Log Tail ──────────────────────────────────────────────
     ax_log.clear()
-    ax_log.set_axis_off()
-    ax_log.patch.set_facecolor(PANEL)
-    ax_log.patch.set_visible(True)
+    ax_log.set_facecolor(PANEL)
+    for sp in ax_log.spines.values():
+        sp.set_visible(False)
+    ax_log.set_xticks([])
+    ax_log.set_yticks([])
     ax_log.text(
         0.015, 0.975,
         "\n".join(log_lines),
