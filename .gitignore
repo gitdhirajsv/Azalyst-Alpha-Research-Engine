@@ -97,3 +97,15 @@ _b64_*.txt
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# ── Local scratch / diagnostic files ──
+No
+check_*.py
+debug_*.py
+test_pd*.py
+test_perf*.py
+test_pl*.py
+crash.py
+input.txt
+input2.txt
+data_coverage.csv
