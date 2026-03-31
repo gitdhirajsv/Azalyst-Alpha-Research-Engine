@@ -159,13 +159,19 @@ def make_xgb_model(use_gpu=True):
 
 # ── v5 Regression Training Pipeline ─────────────────────────────────────────
 
-def train_regression_model(X, y_ret, feature_cols, label="", use_gpu=True):
+def train_regression_model(X, y_ret, feature_cols, label="", use_gpu=True, 
+                           use_ic_filtering=True, ic_threshold=0.005):
     """
-    v5 regression training pipeline.
+    v5 regression training pipeline with optional IC-based feature filtering.
 
     Target: continuous forward return (NOT binary label).
     Metrics: Weighted R² + IC + ICIR (NOT AUC).
     Model: XGBRegressor (NOT XGBClassifier).
+    
+    New feature (v5.1): IC-based feature filtering
+    - Pre-training: compute IC for each feature
+    - Remove features with |IC| < ic_threshold (default 0.5%)
+    - Reduces noise, improves generalization, speeds up training
 
     Returns: (model, scaler, importance, mean_r2, mean_ic, icir)
     """
@@ -176,6 +182,18 @@ def train_regression_model(X, y_ret, feature_cols, label="", use_gpu=True):
             use_gpu = False
             print(f"[{label}] GPU: CUDA unavailable — falling back to CPU")
 
+    # IC-based feature filtering (NEW v5.1)
+    if use_ic_filtering and len(feature_cols) > 30:
+        from azalyst_ic_filter import filter_features_by_ic
+        X_filtered, selected_features, ic_info = filter_features_by_ic(
+            X, y_ret, feature_cols, 
+            ic_threshold=ic_threshold,
+            min_features=20,
+            verbose=True
+        )
+        X = X_filtered
+        feature_cols = selected_features
+    
     scaler = RobustScaler()
     Xs = scaler.fit_transform(X).astype(np.float32)
 

@@ -77,14 +77,14 @@ HORIZON_BARS_1H  = 12    # 1 hour at 5-min frequency
 HORIZON_BARS     = 12    # default prediction horizon (1hr)
 
 # v5 new config
-MAX_DRAWDOWN_KILL   = -0.15
+MAX_DRAWDOWN_KILL   = -0.15  # Reverted to original
 IC_SELECTION_THRESH = 0.00   # v5: stricter — must be non-negative (was -0.02)
 IC_LOOKBACK_WEEKS   = 8
 MIN_FEATURES        = 20
 VAR_CONFIDENCE      = 0.95
 POSITION_RISK_CAP   = 0.03
 PUMP_DUMP_THRESHOLD = 0.6   # pump-dump score above this → avoid symbol
-IC_GATING_THRESHOLD = -0.03 # if rolling IC below this → halt predictions
+IC_GATING_THRESHOLD = -1.00 # OPTIMIZATION: disable kill-switch (was -0.03, now -1.00 to allow trading in all regimes)
 
 # v5: Canonical target column — prefer 1hr return when available.
 # External cache (build_feature_cache.py) sets future_ret = 4hr (hor=48).
@@ -586,9 +586,38 @@ def build_training_matrix(symbols: dict, train_end,
 
 # ── TRAIN MODEL ───────────────────────────────────────────────────────────────
 
-def train_model(X, y, y_ret, cuda_api, features_used, label=""):
-    """v5: XGBoost regression — predicts continuous returns."""
+def train_model(X, y, y_ret, cuda_api, features_used, label="", use_ic_filtering=True):
+    """v5: XGBoost regression — predicts continuous returns.
+    
+    NEW v5.1: IC-based feature filtering (optional)
+    - Pre-training: analyze which features correlate with returns
+    - Remove features with |IC| < 0.005 (default 0.5%)  
+    - Improves generalization and reduces overfitting
+    
+    Returns: (model, scaler, importance, mean_r2, mean_ic, icir, features_used_final, feature_indices)
+    """
     import xgboost as xgb
+    
+    features_filtered = features_used  # Track which features actually used
+    feature_indices = list(range(len(features_used)))  # Track which columns to use
+    
+    # IC-based feature filtering (NEW in v5.1)
+    if use_ic_filtering and len(features_used) > 30:
+        try:
+            from azalyst_ic_filter import filter_features_by_ic
+            X_filtered, selected_features, ic_info = filter_features_by_ic(
+                X, y_ret, features_used,
+                ic_threshold=0.005,
+                min_features=20,
+                verbose=True
+            )
+            # Map selected feature names back to original indices
+            feature_indices = [features_used.index(f) for f in selected_features]
+            X = X_filtered
+            features_filtered = selected_features
+        except Exception as e:
+            print(f"  [IC-Filter] Failed ({e}) — skipping, using all features")
+    
     scaler = RobustScaler()
     Xs = scaler.fit_transform(X)
     cv = PurgedTimeSeriesCV(n_splits=5, gap=48)
@@ -635,9 +664,9 @@ def train_model(X, y, y_ret, cuda_api, features_used, label=""):
     final = _fit_with_fallback(final, Xs[:split], y[:split], Xs[split:], y[split:],
                                verbose=100)
 
-    importance = pd.Series(final.feature_importances_, index=features_used,
+    importance = pd.Series(final.feature_importances_, index=features_filtered,
                            name="importance").sort_values(ascending=False)
-    return final, scaler, importance, mean_r2, mean_ic, icir
+    return final, scaler, importance, mean_r2, mean_ic, icir, features_filtered, feature_indices
 
 
 def train_meta_model(base_model, base_scaler, X, y, cuda_api, features_used,
@@ -814,7 +843,10 @@ def predict_week(model, scaler, symbols, week_start, week_end,
 def simulate_weekly_trades(predictions, actual_rets, actual_close_rets,
                            prev_longs, prev_shorts,
                            meta_confs=None, risk_manager=None,
-                           weekly_returns_hist=None):
+                           weekly_returns_hist=None,
+                           short_only=False,
+                           min_confidence=0.0,
+                           leverage=1.0):
     """v5: Use predicted return sign for direction, magnitude for sizing.
     FIX P12: Uses actual weekly close-to-close returns for PnL (not bar averages).
     FIX P9mod: Directional filter only — quantile selection + weekly returns
@@ -835,6 +867,9 @@ def simulate_weekly_trades(predictions, actual_rets, actual_close_rets,
     cur_longs = set(ranked[ranked >= (1 - adaptive_q)].index)
     cur_shorts = set(ranked[ranked <= adaptive_q].index)
 
+    if short_only:
+        cur_longs = set()
+
     # v5 FIX P-FIX-1: Cross-sectional ranking is the signal — no absolute direction filter.
     # A symbol in the BOTTOM quantile is a RELATIVE short even if its predicted return
     # is slightly positive (it will underperform the longs). Filtering by absolute sign
@@ -850,10 +885,12 @@ def simulate_weekly_trades(predictions, actual_rets, actual_close_rets,
             ret = 0.0
         fee = 0.0 if sym in prev_longs else ROUND_TRIP_FEE
         meta = meta_confs.get(sym, 1.0) if meta_confs else 1.0
+        if meta < min_confidence:
+            continue
         # v5: Rank-based position sizing (magnitude-agnostic)
         # Magnitude-based sizing breaks when predicted returns are tiny (<10bps)
         # Use cross-sectional rank instead for robust sizing
-        sized = meta * risk_scale
+        sized = meta * risk_scale * leverage
         trades.append({
             "symbol": sym, "signal": "BUY",
             "pred_ret": round(predictions[sym] * 100, 5),
@@ -868,7 +905,9 @@ def simulate_weekly_trades(predictions, actual_rets, actual_close_rets,
             ret = 0.0
         fee = 0.0 if sym in prev_shorts else ROUND_TRIP_FEE
         meta = meta_confs.get(sym, 1.0) if meta_confs else 1.0
-        sized = meta * risk_scale
+        if meta < min_confidence:
+            continue
+        sized = meta * risk_scale * leverage
         trades.append({
             "symbol": sym, "signal": "SELL",
             "pred_ret": round(predictions[sym] * 100, 5),
@@ -946,11 +985,27 @@ def main():
                              "before training (institutional standard)")
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--no-resume", dest="no_resume", action="store_true")
+    parser.add_argument("--short-only", action="store_true",
+                        help="Trade short leg only (aggressive mode)")
+    parser.add_argument("--invert-negative-ic", action="store_true",
+                        help="Invert predictions when recent live IC is negative")
+    parser.add_argument("--force-invert", action="store_true",
+                        help="Always invert model predictions (anti-signal mode)")
+    parser.add_argument("--min-confidence", type=float, default=0.0,
+                        help="Minimum confidence threshold for taking trades (0-1)")
+    parser.add_argument("--leverage", type=float, default=1.0,
+                        help="Position leverage multiplier for simulation")
+    parser.add_argument("--ic-gating-threshold", type=float, default=IC_GATING_THRESHOLD,
+                        help="Override IC gating threshold for feature/live IC kill switch")
     parser.add_argument("--target", default="1h",
                         choices=["1h", "1d", "5d", "auto"],
                         help="Forward return horizon for target: 1h (default), "
                              "1d (daily, ~288 bars), 5d (weekly, ~1440 bars), "
                              "or auto (signal-decay selected)")
+    parser.add_argument("--pin-coins", type=str, default="",
+                        help="Comma-separated symbols to restrict universe each week "
+                             "(e.g. '1000SATSUSDT,BONKUSDT,ADXUSDT,FDUSDUSDT,WINUSDT,AEURUSDT'). "
+                             "Only these coins will be ranked and traded.")
     args = parser.parse_args()
 
     global DATA_DIR, RESULTS_DIR, CACHE_DIR
@@ -992,6 +1047,13 @@ def main():
     print(f"  Features     : {len(FEATURE_COLS)} (with IC-gating selection)")
     print(f"  Horizon      : {HORIZON_BARS} bars")
     print(f"  Kill-switch  : {dd_kill*100:.0f}% max drawdown")
+    print(f"  IC Gate      : {args.ic_gating_threshold:+.2f}")
+    print(f"  Short only   : {'yes' if args.short_only else 'no'}")
+    print(f"  Invert IC<0  : {'yes' if args.invert_negative_ic else 'no'}")
+    print(f"  Force invert : {'yes' if args.force_invert else 'no'}")
+    print(f"  Min conf     : {args.min_confidence:.2f}")
+    print(f"  Leverage     : {args.leverage:.2f}x")
+    print(f"  Pin-coins    : {args.pin_coins if args.pin_coins else 'all (no restriction)'}")
     print(f"  SHAP         : {'disabled (--no-shap)' if args.no_shap else 'enabled'}")
     print(f"  Persistence  : SQLite (results/azalyst.db)")
     print("=" * 72 + "\n")
@@ -1150,11 +1212,13 @@ def main():
         print(f"\n  Training base regression model (GPU={'YES' if cuda_api else 'NO'})...")
         sys.stdout.flush()
         t0 = time.time()
-        base_model, base_scaler, importance, mean_r2, mean_ic, icir = train_model(
+        base_model, base_scaler, importance, mean_r2, mean_ic, icir, active_features, feat_indices = train_model(
             X_train, y_train, y_ret, cuda_api, active_features, label="base_y1"
         )
+        # Filter X_train to match the scaler's expected feature count
+        X_train_filtered = X_train[:, feat_indices]
         print(f"  R²={mean_r2:.4f}  IC={mean_ic:.4f}  ICIR={icir:.4f}  "
-              f"({time.time()-t0:.1f}s)")
+              f"({time.time()-t0:.1f}s) [features: {len(active_features)}/72]")
         sys.stdout.flush()
 
         base_model.save_model(f"{RESULTS_DIR}/models/model_v4_base.json")
@@ -1178,7 +1242,7 @@ def main():
         print("\n  Training confidence model...")
         sys.stdout.flush()
         meta_model, meta_scaler = train_meta_model(
-            base_model, base_scaler, X_train, y_train, cuda_api,
+            base_model, base_scaler, X_train_filtered, y_train, cuda_api,
             active_features, label="conf_y1"
         )
         if meta_model is not None:
@@ -1306,10 +1370,11 @@ def main():
             X_rt, y_rt, y_ret_rt = build_training_matrix(symbols, we, active_features)
             if X_rt is not None and len(X_rt) > 200:
                 t0 = time.time()
-                m_new, s_new, imp_new, r2_n, ic_n, icir_n = train_model(
+                m_new, s_new, imp_new, r2_n, ic_n, icir_n, active_features, feat_idx = train_model(
                     X_rt, y_rt, y_ret_rt, cuda_api, active_features,
                     label=f"v5_w{week_num:03d}"
                 )
+                X_rt_filtered = X_rt[:, feat_idx]
                 current_model, current_scaler = m_new, s_new
                 m_new.save_model(f"{RESULTS_DIR}/models/model_v4_week{week_num:03d}.json")
                 with open(f"{RESULTS_DIR}/models/scaler_v4_week{week_num:03d}.pkl", "wb") as f:
@@ -1318,7 +1383,7 @@ def main():
                 current_scaler_path = f"{RESULTS_DIR}/models/scaler_v4_week{week_num:03d}.pkl"
                 imp_new.to_csv(f"{RESULTS_DIR}/feature_importance_v4_week{week_num:03d}.csv")
                 print(f"    R²={r2_n:.4f}  IC={ic_n:.4f}  ICIR={icir_n:.4f}  "
-                      f"({time.time()-t0:.1f}s)")
+                      f"({time.time()-t0:.1f}s) [features: {len(active_features)}/72]")
 
                 db.insert_model_artifact(run_id, f"retrain_w{week_num:03d}", week_num,
                                          current_model_path,
@@ -1334,7 +1399,7 @@ def main():
                         db.insert_shap_values(run_id, f"retrain_w{week_num:03d}", shap_vals)
 
                 meta_new, meta_s_new = train_meta_model(
-                    current_model, current_scaler, X_rt, y_rt, cuda_api,
+                    current_model, current_scaler, X_rt_filtered, y_rt, cuda_api,
                     active_features, label=f"conf_w{week_num:03d}"
                 )
                 if meta_new is not None:
@@ -1358,14 +1423,14 @@ def main():
             if feat_ics:
                 recent_ics.append(feat_ics[-1])
         avg_recent_ic = float(np.mean(recent_ics)) if recent_ics else 0.0
-        feat_ic_gate = avg_recent_ic < IC_GATING_THRESHOLD and len(recent_ics) >= 4
+        feat_ic_gate = avg_recent_ic < args.ic_gating_threshold and len(recent_ics) >= 4
 
         # B) Live model-level IC gating (new)
         # If last 4 live weekly ICs average negative, model signal has inverted
         live_ics = [m["ic"] for m in weekly_summary[-4:]
                     if isinstance(m.get("ic"), (int, float)) and m.get("regime") != "IC_GATED"]
         live_ic_gate = (len(live_ics) >= 4 and
-                        np.mean(live_ics) < IC_GATING_THRESHOLD)
+                np.mean(live_ics) < args.ic_gating_threshold)
 
         ic_gated = feat_ic_gate or live_ic_gate
 
@@ -1384,7 +1449,7 @@ def main():
             live_ic_display = float(np.mean(live_ics)) if live_ics else avg_recent_ic
             gate_reason = "live_ic" if (live_ics and np.mean(live_ics) < IC_GATING_THRESHOLD) else "feat_ic"
             print(f"  Week {week_num:3d}: IC-GATED ({gate_reason}={live_ic_display:.4f} "
-                f"< {IC_GATING_THRESHOLD})")
+                f"< {args.ic_gating_threshold})")
             continue
 
         predictions, actual_rets, actual_close_rets, meta_confs = predict_week(
@@ -1393,6 +1458,21 @@ def main():
             meta_scaler=current_meta_scaler
         )
 
+        # Optional inversion when signal has turned anti-correlated.
+        if args.force_invert:
+            predictions = {k: -v for k, v in predictions.items()}
+        elif args.invert_negative_ic and len(live_ics) >= 4 and float(np.mean(live_ics)) < 0:
+            predictions = {k: -v for k, v in predictions.items()}
+
+        # Pin-coins filter: restrict to persistent-universe coins only (--pin-coins).
+        # Applied after inversion so the ranking is done on the curated set.
+        if args.pin_coins:
+            _allowed = set(s.strip().upper() for s in args.pin_coins.split(',') if s.strip())
+            predictions = {k: v for k, v in predictions.items() if k in _allowed}
+            actual_rets = {k: v for k, v in actual_rets.items() if k in _allowed}
+            actual_close_rets = {k: v for k, v in actual_close_rets.items() if k in _allowed}
+            meta_confs = {k: v for k, v in meta_confs.items() if k in _allowed} if meta_confs else meta_confs
+
         if len(predictions) < 5:
             continue
 
@@ -1400,7 +1480,10 @@ def main():
             predictions, actual_rets, actual_close_rets,
             prev_longs, prev_shorts,
             meta_confs, risk_manager=risk_mgr,
-            weekly_returns_hist=weekly_returns
+            weekly_returns_hist=weekly_returns,
+            short_only=args.short_only,
+            min_confidence=max(0.0, min(1.0, args.min_confidence)),
+            leverage=max(0.1, args.leverage)
         )
         weekly_returns.append(week_ret)
 

@@ -155,16 +155,17 @@ if "!MOD_OK!"=="0" (
 echo  [OK] Local modules found
 
 :: ── Data folder check ─────────────────────────────────────────────────────────
-if not exist "%~dp0data\" (
-    echo  [ERROR] data\ folder not found.
-    echo  Create it and add your Binance 5-min OHLCV .parquet files.
-    pause
-    exit /b 1
-)
 set "PARQUET_FOUND=0"
-for %%f in ("%~dp0data\*.parquet") do set "PARQUET_FOUND=1"
+if exist "%~dp0data\" (
+    for %%f in ("%~dp0data\*.parquet") do set "PARQUET_FOUND=1"
+)
+if exist "%~dp0data_top6\" (
+    for %%f in ("%~dp0data_top6\*.parquet") do set "PARQUET_FOUND=1"
+)
 if "!PARQUET_FOUND!"=="0" (
-    echo  [ERROR] No .parquet files in data\
+    echo  [ERROR] No .parquet files found in data\ or data_top6\
+    echo  Create data\ and add Binance 5-min OHLCV .parquet files,
+    echo  or add Top-6 coin parquet files to data_top6\
     pause
     exit /b 1
 )
@@ -174,6 +175,9 @@ echo  [OK] Data files found
 set "CACHE_COUNT=0"
 if exist "%~dp0feature_cache\" (
     for %%f in ("%~dp0feature_cache\*.parquet") do set "CACHE_COUNT=1"
+)
+if exist "%~dp0cache_top6\" (
+    for %%f in ("%~dp0cache_top6\*.parquet") do set "CACHE_COUNT=1"
 )
 if "!CACHE_COUNT!"=="0" (
     echo.
@@ -237,15 +241,45 @@ goto :CONFIRM
 set "LAUNCH_MONITOR=0"
 echo  [OK] Terminal only
 
+:: ── Universe mode ───────────────────────────────────────────────────────────
+:Q_UNIVERSE
+echo.
+echo  Universe:
+echo    [1] TOP-6 Persistent Coins  -  data_top6\  (curated  winning config)
+echo        1000SATSUSDT, BONKUSDT, ADXUSDT, FDUSDUSDT, WINUSDT, AEURUSDT
+echo    [2] Custom / Full Universe  -  data\        (all coins in data\)
+echo.
+choice /N /C:12 /M "  Choice (1/2): "
+if errorlevel 2 goto :SET_FULL_UNIVERSE
+goto :SET_TOP6_UNIVERSE
+
+:SET_TOP6_UNIVERSE
+set "UNIVERSE_MODE=top6"
+set "DATA_DIR_ARG=%~dp0data_top6"
+set "CACHE_DIR_ARG=%~dp0cache_top6"
+set "OUT_DIR_ARG=%~dp0results_top6"
+set "PIN_COINS_ARG=1000SATSUSDT,BONKUSDT,ADXUSDT,FDUSDUSDT,WINUSDT,AEURUSDT"
+echo  [OK] Top-6 persistent coins selected  (5d horizon, force-invert, 3x leverage)
+goto :CONFIRM
+
+:SET_FULL_UNIVERSE
+set "UNIVERSE_MODE=full"
+set "DATA_DIR_ARG=%~dp0data"
+set "CACHE_DIR_ARG=%~dp0feature_cache"
+set "OUT_DIR_ARG=%~dp0results"
+set "PIN_COINS_ARG="
+echo  [OK] Full universe selected
+
 :CONFIRM
 echo.
 echo  ============================================================
 echo   READY
-echo    Compute : !COMPUTE_CHOICE!
-echo    Monitor : !LAUNCH_MONITOR! (0=terminal only, 1=terminal+spyder)
-echo    Data    : %~dp0data\
-echo    Cache   : %~dp0feature_cache\
-echo    Results : %~dp0results\
+echo    Compute  : !COMPUTE_CHOICE!
+echo    Universe : !UNIVERSE_MODE!
+echo    Monitor  : !LAUNCH_MONITOR! (0=terminal only, 1=terminal+spyder)
+echo    Data     : !DATA_DIR_ARG!
+echo    Cache    : !CACHE_DIR_ARG!
+echo    Results  : !OUT_DIR_ARG!
 echo  ============================================================
 echo.
 choice /N /C:YN /M "  Start? (Y/N): "
@@ -281,7 +315,7 @@ echo  ============================================================
 echo.
 
 :: ── Build the python command based on choices ─────────────────────────────────
-set "PY_ARGS=--data-dir "%~dp0data" --feature-dir "%~dp0feature_cache" --out-dir "%~dp0results""
+set "PY_ARGS=--data-dir "!DATA_DIR_ARG!" --feature-dir "!CACHE_DIR_ARG!" --out-dir "!OUT_DIR_ARG!""
 
 if "!COMPUTE_CHOICE!"=="gpu" (
     set "PY_ARGS=--gpu !PY_ARGS!"
@@ -290,6 +324,11 @@ if "!COMPUTE_CHOICE!"=="gpu" (
 :: GPU: skip SHAP by default to stay within 4GB VRAM; CPU: SHAP always on
 if "!SKIP_SHAP!"=="1" (
     set "PY_ARGS=!PY_ARGS! --no-shap"
+)
+
+:: Top-6 mode: apply winning config + pin to persistent coin universe
+if "!UNIVERSE_MODE!"=="top6" (
+    set "PY_ARGS=!PY_ARGS! --target 5d --force-invert --leverage 3 --ic-gating-threshold -1.0 --max-dd -1.0 --no-resume --pin-coins "!PIN_COINS_ARG!""
 )
 
 !PYTHON_EXE! -u "%~dp0azalyst_v5_engine.py" !PY_ARGS!
