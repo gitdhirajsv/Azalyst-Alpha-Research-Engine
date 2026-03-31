@@ -229,20 +229,10 @@ python azalyst_v4_engine.py --gpu --no-shap
 | `build_feature_cache.py` | Precompute features → parquet cache (5–20x speedup) |
 | `RUN_AZALYST.bat` | Windows one-click launcher — GPU detection, auto-install |
 
-### Research Modules
+### Utilities
 
 | File | Purpose |
 |---|---|
-| `azalyst_alpha_metrics.py` | Performance evaluation — IC, ICIR, Sharpe, drawdown |
-| `azalyst_weekly_loop.py` | Pre-v4 walk-forward loop (reference) |
-| `azalyst_local_gpu.py` | Standalone RTX 2050 GPU runner |
-| `azalyst_statarb.py` | Cointegration / pairs trading scanner |
-| `azalyst_validator.py` | Fama-MacBeth, Newey-West, Benjamini-Hochberg correction |
-| `azalyst_benchmark.py` | BTC buy-hold + equal-weight benchmarks |
-| `azalyst_tearsheet.py` | Factor tear sheet generator |
-| `azalyst_execution.py` | Order book simulation, VWAP/TWAP execution algos |
-| `azalyst_auditor.py` | Binance copy-trader strategy auditor |
-| `azalyst_report.py` | Research report + live signal scanner |
 | `VIEW_TRAINING.py` | Live 4-panel training dashboard |
 | `monitor_dashboard.py` | Browser-based live monitor |
 
