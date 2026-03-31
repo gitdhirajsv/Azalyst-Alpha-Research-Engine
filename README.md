@@ -175,13 +175,13 @@ Double-click **`RUN_AZALYST.bat`** — auto-detects GPU, installs dependencies, 
 
 ```bash
 # GPU run
-python azalyst_v4_engine.py --gpu
+python azalyst_v5_engine.py --gpu
 
 # CPU run with custom drawdown limit
-python azalyst_v4_engine.py --max-dd -0.10
+python azalyst_v5_engine.py --max-dd -0.10
 
 # Skip SHAP for faster iteration
-python azalyst_v4_engine.py --gpu --no-shap
+python azalyst_v5_engine.py --gpu --no-shap
 ```
 
 **What you'll see during training:**
@@ -217,7 +217,7 @@ python azalyst_v4_engine.py --gpu --no-shap
 
 | File | Purpose |
 |---|---|
-| `azalyst_v4_engine.py` | **v5 engine** — regression walk-forward, IC-gating, pump-dump filter, confidence model, SHAP, SQLite |
+| `azalyst_v5_engine.py` | **v5 engine** — regression walk-forward, IC-gating, pump-dump filter, confidence model, SHAP, SQLite |
 | `azalyst_db.py` | SQLite persistence — trades, metrics, SHAP, model artifacts (7 tables, WAL mode) |
 | `azalyst_factors_v2.py` | 72 cross-sectional features — reversal signals, pump-dump indicators, quantile rank, WQ alphas, frac. diff |
 | `azalyst_pump_dump.py` | **NEW** — Multi-signal pump-dump detector with regime classification |

@@ -142,7 +142,7 @@ if "!GPU_FOUND!"=="1" (
 :: ── Local module check ────────────────────────────────────────────────────────
 echo  [Setup] Checking local modules...
 set "MOD_OK=1"
-if not exist "%~dp0azalyst_v4_engine.py"  ( echo  [ERROR] Missing: azalyst_v4_engine.py  & set "MOD_OK=0" )
+if not exist "%~dp0azalyst_v5_engine.py"  ( echo  [ERROR] Missing: azalyst_v5_engine.py  & set "MOD_OK=0" )
 if not exist "%~dp0azalyst_factors_v2.py" ( echo  [ERROR] Missing: azalyst_factors_v2.py & set "MOD_OK=0" )
 if not exist "%~dp0azalyst_risk.py"       ( echo  [ERROR] Missing: azalyst_risk.py       & set "MOD_OK=0" )
 if not exist "%~dp0azalyst_db.py"         ( echo  [ERROR] Missing: azalyst_db.py         & set "MOD_OK=0" )
@@ -292,7 +292,7 @@ if "!SKIP_SHAP!"=="1" (
     set "PY_ARGS=!PY_ARGS! --no-shap"
 )
 
-!PYTHON_EXE! -u "%~dp0azalyst_v4_engine.py" !PY_ARGS!
+!PYTHON_EXE! -u "%~dp0azalyst_v5_engine.py" !PY_ARGS!
 
 set "EXIT_CODE=!errorlevel!"
 

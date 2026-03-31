@@ -209,33 +209,33 @@ class TestRiskManager:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# 4. V4 Engine Components (azalyst_v4_engine.py)
+# 4. V5 Engine Components (azalyst_v5_engine.py)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-class TestV4EngineComponents:
+class TestV5EngineComponents:
     def test_compute_drawdown_empty(self):
-        from azalyst_v4_engine import compute_drawdown
+        from azalyst_v5_engine import compute_drawdown
         assert compute_drawdown([]) == 0.0
 
     def test_compute_drawdown_all_positive(self):
-        from azalyst_v4_engine import compute_drawdown
+        from azalyst_v5_engine import compute_drawdown
         dd = compute_drawdown([0.01, 0.02, 0.01, 0.03])
         assert dd == 0.0  # no drawdown if always going up
 
     def test_compute_drawdown_loss(self):
-        from azalyst_v4_engine import compute_drawdown
+        from azalyst_v5_engine import compute_drawdown
         dd = compute_drawdown([0.10, -0.20, 0.05, -0.10])
         assert dd < 0
         assert dd > -1.0
 
     def test_select_features_by_ic_no_history(self):
-        from azalyst_v4_engine import select_features_by_ic
+        from azalyst_v5_engine import select_features_by_ic
         features = ["a", "b", "c", "d"]
         result = select_features_by_ic({}, features)
         assert result == features  # no history -> keep all
 
     def test_select_features_by_ic_drop_negative(self):
-        from azalyst_v4_engine import select_features_by_ic, MIN_FEATURES
+        from azalyst_v5_engine import select_features_by_ic, MIN_FEATURES
         features = [f"f{i}" for i in range(30)]
         history = {}
         for i, f in enumerate(features):
@@ -248,7 +248,7 @@ class TestV4EngineComponents:
         assert len(result) == 20  # the 20 positive ones kept
 
     def test_purged_cv_splits(self):
-        from azalyst_v4_engine import PurgedTimeSeriesCV
+        from azalyst_v5_engine import PurgedTimeSeriesCV
         cv = PurgedTimeSeriesCV(n_splits=5, gap=48)
         X = np.random.rand(10000, 10)
         splits = list(cv.split(X))
@@ -258,12 +258,12 @@ class TestV4EngineComponents:
             assert val_idx[0] - train_idx[-1] >= 48
 
     def test_detect_regime_fallback(self):
-        from azalyst_v4_engine import detect_regime
+        from azalyst_v5_engine import detect_regime
         regime = detect_regime({}, pd.Timestamp("2025-01-01", tz="UTC"))
         assert regime == "LOW_VOL_GRIND"
 
     def test_make_xgb_params_cpu(self):
-        from azalyst_v4_engine import make_xgb_params
+        from azalyst_v5_engine import make_xgb_params
         p = make_xgb_params(None)
         assert "device" not in p
         assert "tree_method" not in p
@@ -271,24 +271,24 @@ class TestV4EngineComponents:
         assert p["objective"] == "reg:squarederror"
 
     def test_make_xgb_params_new_cuda(self):
-        from azalyst_v4_engine import make_xgb_params
+        from azalyst_v5_engine import make_xgb_params
         p = make_xgb_params("new")
         assert p["device"] == "cuda"
         assert p["objective"] == "reg:squarederror"
 
     def test_make_xgb_params_old_cuda(self):
-        from azalyst_v4_engine import make_xgb_params
+        from azalyst_v5_engine import make_xgb_params
         p = make_xgb_params("old")
         assert p["tree_method"] == "gpu_hist"
 
     def test_make_xgb_params_classification(self):
-        from azalyst_v4_engine import make_xgb_params
+        from azalyst_v5_engine import make_xgb_params
         p = make_xgb_params(None, regression=False)
         assert p["eval_metric"] == "auc"
         assert "objective" not in p  # XGBClassifier sets objective internally
 
     def test_simulate_weekly_trades_empty(self):
-        from azalyst_v4_engine import simulate_weekly_trades
+        from azalyst_v5_engine import simulate_weekly_trades
         trades, ret, longs, shorts = simulate_weekly_trades(
             {}, {}, set(), set()
         )
@@ -296,14 +296,14 @@ class TestV4EngineComponents:
         assert ret == 0.0
 
     def test_compute_feature_ic_few_symbols(self):
-        from azalyst_v4_engine import compute_feature_ic
+        from azalyst_v5_engine import compute_feature_ic
         # Fewer than 20 symbols -> returns zeros
         result = compute_feature_ic({}, pd.Timestamp("2025-01-01"),
                                      pd.Timestamp("2025-01-08"), ["ret_1d"])
         assert result == {"ret_1d": 0.0}
 
     def test_fix_timestamp(self):
-        from azalyst_v4_engine import _fix_timestamp
+        from azalyst_v5_engine import _fix_timestamp
         df = pd.DataFrame({"close": [100, 101]},
                           index=pd.to_datetime(["2024-01-01", "2024-01-02"],
                                                utc=True))
@@ -312,7 +312,7 @@ class TestV4EngineComponents:
         assert result.index.tz is not None
 
     def test_get_date_splits(self):
-        from azalyst_v4_engine import get_date_splits
+        from azalyst_v5_engine import get_date_splits
         # Create synthetic symbols dict with 3-year date range
         dates = pd.date_range("2022-06-01", "2025-06-01", freq="5min", tz="UTC")
         sym = {"TEST": pd.DataFrame({"close": np.ones(len(dates))}, index=dates)}
