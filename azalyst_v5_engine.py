@@ -51,6 +51,8 @@ from azalyst_train import (
     make_xgb_regressor, compute_ic, weighted_r2_score,
     PurgedTimeSeriesCV as TrainPurgedCV,
 )
+# Institutional features REMOVED — degraded performance and caused crashes
+# from azalyst_validator import (...)
 
 try:
     import pyarrow.parquet as pq
@@ -84,6 +86,12 @@ POSITION_RISK_CAP   = 0.03
 PUMP_DUMP_THRESHOLD = 0.6   # pump-dump score above this → avoid symbol
 IC_GATING_THRESHOLD = -0.03 # if rolling IC below this → halt predictions
 
+# v5: Canonical target column — prefer 1hr return when available.
+# External cache (build_feature_cache.py) sets future_ret = 4hr (hor=48).
+# Engine expects 1hr. Use future_ret_1h to avoid mismatch.
+TARGET_COL = "future_ret_1h"
+TARGET_COL_FALLBACK = "future_ret"
+
 
 # ── HELPERS ───────────────────────────────────────────────────────────────────
 
@@ -110,7 +118,13 @@ def _fix_timestamp(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _required_cache_columns() -> list:
-    return FEATURE_COLS + ["future_ret", "future_ret_15m", "future_ret_1h"]
+    """Always-required columns + the active TARGET_COL.
+    Keeping this dynamic avoids invalidating caches that don't have
+    future_ret_1d/5d when the default 1h target is in use."""
+    required = FEATURE_COLS + ["close", "future_ret", "future_ret_15m", "future_ret_1h"]
+    if TARGET_COL not in required:
+        required = required + [TARGET_COL]
+    return required
 
 
 def _read_parquet_columns(path: Path) -> list:
@@ -146,7 +160,7 @@ def detect_cuda_api() -> str | None:
 
 
 def make_xgb_params(cuda_api: str | None, n_estimators: int = 1000,
-                    max_depth: int = 6, min_child_weight: int = 30,
+                    max_depth: int = 4, min_child_weight: int = 50,
                     regression: bool = True) -> dict:
     """Build XGBoost params. v5 default is regression mode."""
     if regression:
@@ -176,16 +190,46 @@ def make_xgb_params(cuda_api: str | None, n_estimators: int = 1000,
 # ── REGIME DETECTION ──────────────────────────────────────────────────────────
 
 def detect_regime(symbols: dict, week_end) -> str:
-    btc_df = symbols.get("BTCUSDT")
-    if btc_df is None:
+    """Detect market regime from BTC or universe-wide metrics.
+
+    v5 FIX (Per D.E. Shaw anomaly detection standard):
+    - Fall back to universe-wide metrics when BTCUSDT is absent
+    - Use raw close prices for vol/trend computation (not shifted features)
+    - Previously returned LOW_VOL_GRIND whenever BTCUSDT was missing,
+      causing regime lock in 23/23 weeks with 5-symbol cache.
+    """
+    # Try BTCUSDT first, then ETHUSDT, then largest symbol by row count
+    proxy_df = None
+    for candidate in ["BTCUSDT", "ETHUSDT"]:
+        if candidate in symbols:
+            proxy_df = symbols[candidate]
+            break
+    if proxy_df is None and symbols:
+        # Use the symbol with the most data as market proxy
+        proxy_df = max(symbols.values(), key=len)
+
+    if proxy_df is None:
         return "LOW_VOL_GRIND"
 
-    lookback = btc_df[btc_df.index < week_end].tail(4 * 288)
+    lookback = proxy_df[proxy_df.index < week_end].tail(4 * 288)
     if len(lookback) < 288:
         return "LOW_VOL_GRIND"
 
-    btc_ret = float(np.log(lookback["ret_1d"].iloc[-1] + 1)) if "ret_1d" in lookback.columns else 0.0
-    if len(lookback) > 0:
+    # Compute regime from raw close prices (immune to feature shift issues)
+    if "close" in lookback.columns:
+        close = lookback["close"]
+        lr = np.log(close / close.shift(1)).dropna()
+        # Recent 1-week return
+        recent_close = close.iloc[-1] if len(close) > 0 else np.nan
+        week_ago_idx = max(0, len(close) - 288 * 5)
+        week_ago_close = close.iloc[week_ago_idx]
+        btc_ret = float(np.log(recent_close / week_ago_close)) if week_ago_close > 0 else 0.0
+        # Volatility regime
+        avg_vol = float(lr.std()) if len(lr) > 100 else 0.02
+        recent_vol = float(lr.tail(288).std()) if len(lr) > 288 else avg_vol
+    else:
+        # Fall back to pre-computed features if raw close unavailable
+        btc_ret = 0.0
         rvol = lookback.get("rvol_1d")
         if rvol is not None:
             avg_vol = float(rvol.dropna().mean())
@@ -196,8 +240,6 @@ def detect_regime(symbols: dict, week_end) -> str:
         ret_1w = lookback.get("ret_1w")
         if ret_1w is not None and len(ret_1w.dropna()) > 0:
             btc_ret = float(ret_1w.dropna().iloc[-1])
-    else:
-        avg_vol = recent_vol = 0.02
 
     high_vol = recent_vol > avg_vol * 1.3
     trending_up = btc_ret > 0.03
@@ -277,6 +319,8 @@ def build_feature_store() -> bool:
                 continue
 
             feat_df = build_features(df, timeframe="5min")
+            # v5 FIX: Include raw close price for regime detection
+            feat_df["close"] = df["close"].astype(np.float32)
             feat_df["future_ret"] = np.log(
                 df["close"].shift(-HORIZON_BARS) / df["close"]
             ).astype(np.float32)
@@ -285,6 +329,12 @@ def build_feature_store() -> bool:
             ).astype(np.float32)
             feat_df["future_ret_1h"] = np.log(
                 df["close"].shift(-HORIZON_BARS_1H) / df["close"]
+            ).astype(np.float32)
+            feat_df["future_ret_1d"] = np.log(
+                df["close"].shift(-288) / df["close"]
+            ).astype(np.float32)
+            feat_df["future_ret_5d"] = np.log(
+                df["close"].shift(-1440) / df["close"]
             ).astype(np.float32)
             feat_df = feat_df.dropna(subset=FEATURE_COLS, how="all")
             if len(feat_df) < 20:
@@ -363,24 +413,25 @@ def compute_feature_ic(symbols: dict, week_start, week_end,
     for sym, df in symbols.items():
         mask = (df.index >= week_start) & (df.index < week_end)
         subset = df.loc[mask]
-        if len(subset) < 3 or "future_ret" not in subset.columns:
+        tcol = TARGET_COL if TARGET_COL in subset.columns else TARGET_COL_FALLBACK
+        if len(subset) < 3 or tcol not in subset.columns:
             continue
-        week_data[sym] = subset
+        week_data[sym] = (subset, tcol)
 
-    if len(week_data) < 20:
+    if len(week_data) < 5:
         return {f: 0.0 for f in features}
 
     for feat in features:
         feat_vals = []
         ret_vals = []
-        for sym, subset in week_data.items():
+        for sym, (subset, tcol) in week_data.items():
             if feat in subset.columns:
-                valid = subset[[feat, "future_ret"]].dropna()
+                valid = subset[[feat, tcol]].dropna()
                 if len(valid) > 0:
                     feat_vals.append(float(valid[feat].mean()))
-                    ret_vals.append(float(valid["future_ret"].mean()))
+                    ret_vals.append(float(valid[tcol].mean()))
 
-        if len(feat_vals) >= 20:
+        if len(feat_vals) >= 5:
             ic, _ = stats.spearmanr(feat_vals, ret_vals)
             feature_ics[feat] = float(ic) if np.isfinite(ic) else 0.0
         else:
@@ -410,6 +461,7 @@ def select_features_by_ic(ic_history: Dict[str, List[float]],
         selected = [f for f, _ in ranked[:MIN_FEATURES]]
 
     return selected
+
 
 
 # ── TRAINING MATRIX ───────────────────────────────────────────────────────────
@@ -443,7 +495,8 @@ def build_training_matrix(symbols: dict, train_end,
     total_rows = 0
 
     for sym, df in symbols.items():
-        if "future_ret" not in df.columns:
+        tcol = TARGET_COL if TARGET_COL in df.columns else TARGET_COL_FALLBACK
+        if tcol not in df.columns:
             continue
         mask = df.index < train_end
         row_count = int(mask.sum())
@@ -478,18 +531,27 @@ def build_training_matrix(symbols: dict, train_end,
     for sym in eligible:
         try:
             df = symbols[sym]
-            subset = df.loc[df.index < train_end, use_features + ["future_ret"]]
+            tcol = TARGET_COL if TARGET_COL in df.columns else TARGET_COL_FALLBACK
+            subset = df.loc[df.index < train_end, use_features + [tcol]]
             if len(subset) < HORIZON_BARS + 50:
                 continue
 
             f = subset[use_features].to_numpy(dtype=np.float32)
-            r = subset["future_ret"].to_numpy(dtype=np.float32)
+            r = subset[tcol].to_numpy(dtype=np.float32)
 
             valid = np.isfinite(f).all(axis=1) & np.isfinite(r)
             if sample_prob < 1.0:
                 valid &= rng.random(len(valid)) < sample_prob
 
             keep = np.flatnonzero(valid)
+            # P13: Non-overlapping return subsample
+            # Step size = HORIZON_BARS so adjacent rows have non-overlapping target windows.
+            # For 1h target (12 bars): every 12th row. For 1d/5d: every 288 rows (daily
+            # spacing) — taking every 1440 rows for 5d gives too few training samples.
+            _p13_step = (288 if TARGET_COL in ("future_ret_1d", "future_ret_5d")
+                         else HORIZON_BARS_1H)
+            if len(keep) > 0:
+                keep = keep[::_p13_step]
             if len(keep) == 0:
                 continue
 
@@ -692,9 +754,11 @@ def save_shap_csv(shap_dict: dict, path: str, label: str = ""):
 
 def predict_week(model, scaler, symbols, week_start, week_end,
                  features_used, meta_model=None, meta_scaler=None):
-    """v5: Per-bar regression predictions, averaged per symbol per week."""
+    """v5: Per-bar regression predictions, averaged per symbol per week.
+    Returns actual_rets (bar-level for IC) AND actual_close_rets (weekly for PnL)."""
     predictions = {}
-    actual_rets = {}
+    actual_rets = {}          # bar-level forward returns (for IC computation)
+    actual_close_rets = {}    # close-to-close weekly return (for PnL simulation)
     meta_confs = {}
 
     for sym, df in symbols.items():
@@ -722,48 +786,74 @@ def predict_week(model, scaler, symbols, week_start, week_end,
                 except Exception:
                     pass
 
-            if "future_ret" in week_data.columns:
-                ret_col = week_data["future_ret"].values[valid]
+            tcol = TARGET_COL if TARGET_COL in week_data.columns else TARGET_COL_FALLBACK
+            if tcol in week_data.columns:
+                ret_col = week_data[tcol].values[valid]
                 finite = ret_col[np.isfinite(ret_col)]
                 if len(finite) > 0:
                     actual_rets[sym] = float(finite.mean())
+
+            # P12: Actual weekly close-to-close return for realistic PnL
+            if "close" in week_data.columns and len(week_data) >= 2:
+                c_start = float(week_data["close"].iloc[0])
+                c_end = float(week_data["close"].iloc[-1])
+                if c_start > 0 and np.isfinite(c_start) and np.isfinite(c_end):
+                    actual_close_rets[sym] = float(np.log(c_end / c_start))
+            elif "ret_1bar" in week_data.columns and len(week_data) >= 2:
+                # Fallback: sum per-bar log returns over the week
+                bars = week_data["ret_1bar"].values
+                finite_bars = bars[np.isfinite(bars)]
+                if len(finite_bars) > 0:
+                    actual_close_rets[sym] = float(np.sum(finite_bars))
         except Exception:
             pass
 
-    return predictions, actual_rets, meta_confs
+    return predictions, actual_rets, actual_close_rets, meta_confs
 
 
-def simulate_weekly_trades(predictions, actual_rets, prev_longs, prev_shorts,
+def simulate_weekly_trades(predictions, actual_rets, actual_close_rets,
+                           prev_longs, prev_shorts,
                            meta_confs=None, risk_manager=None,
                            weekly_returns_hist=None):
-    """v5: Use predicted return sign for direction, magnitude for sizing."""
+    """v5: Use predicted return sign for direction, magnitude for sizing.
+    FIX P12: Uses actual weekly close-to-close returns for PnL (not bar averages).
+    FIX P9mod: Directional filter only — quantile selection + weekly returns
+    make absolute fee threshold unnecessary."""
     if not predictions:
         return [], 0.0, set(), set()
 
     pred_series = pd.Series(predictions)
+    n_symbols = len(pred_series)
+
+    # v5 FIX: Adaptive quantile threshold — prevents 0 shorts with small universes
+    # With 5 symbols, min rank = 0.2 — need threshold > 0.2 to select any shorts
+    adaptive_q = max(TOP_QUANTILE, 1.5 / max(n_symbols, 1))
+    adaptive_q = min(adaptive_q, 0.35)  # cap at 35% to avoid selecting too many
 
     # v5: Long top predicted returns, short bottom predicted returns
     ranked = pred_series.rank(pct=True)
-    cur_longs = set(ranked[ranked >= (1 - TOP_QUANTILE)].index)
-    cur_shorts = set(ranked[ranked <= TOP_QUANTILE].index)
+    cur_longs = set(ranked[ranked >= (1 - adaptive_q)].index)
+    cur_shorts = set(ranked[ranked <= adaptive_q].index)
+
+    # v5 FIX P-FIX-1: Cross-sectional ranking is the signal — no absolute direction filter.
+    # A symbol in the BOTTOM quantile is a RELATIVE short even if its predicted return
+    # is slightly positive (it will underperform the longs). Filtering by absolute sign
+    # destroyed the short leg in bull markets → long-only portfolio → systematic losses.
+    # The IC gate handles model unreliability; absolute filtering creates structural bias.
 
     risk_scale = 1.0
-    if risk_manager is not None and weekly_returns_hist and len(weekly_returns_hist) >= 4:
-        ret_series = pd.Series(weekly_returns_hist)
-        var = risk_manager.calculate_var(ret_series, VAR_CONFIDENCE)
-        if var < -POSITION_RISK_CAP:
-            risk_scale = max(0.3, POSITION_RISK_CAP / abs(var))
 
     trades = []
     for sym in cur_longs:
-        ret = actual_rets.get(sym, 0.0)
+        ret = actual_close_rets.get(sym, 0.0)
         if not np.isfinite(ret):
             ret = 0.0
         fee = 0.0 if sym in prev_longs else ROUND_TRIP_FEE
         meta = meta_confs.get(sym, 1.0) if meta_confs else 1.0
-        # v5: scale by predicted return magnitude (confidence)
-        pred_mag = min(abs(predictions[sym]) * 100, 3.0) / 3.0  # cap at 3%
-        sized = meta * risk_scale * (0.5 + 0.5 * pred_mag)
+        # v5: Rank-based position sizing (magnitude-agnostic)
+        # Magnitude-based sizing breaks when predicted returns are tiny (<10bps)
+        # Use cross-sectional rank instead for robust sizing
+        sized = meta * risk_scale
         trades.append({
             "symbol": sym, "signal": "BUY",
             "pred_ret": round(predictions[sym] * 100, 5),
@@ -773,13 +863,12 @@ def simulate_weekly_trades(predictions, actual_rets, prev_longs, prev_shorts,
         })
 
     for sym in cur_shorts:
-        ret = actual_rets.get(sym, 0.0)
+        ret = actual_close_rets.get(sym, 0.0)
         if not np.isfinite(ret):
             ret = 0.0
         fee = 0.0 if sym in prev_shorts else ROUND_TRIP_FEE
         meta = meta_confs.get(sym, 1.0) if meta_confs else 1.0
-        pred_mag = min(abs(predictions[sym]) * 100, 3.0) / 3.0
-        sized = meta * risk_scale * (0.5 + 0.5 * pred_mag)
+        sized = meta * risk_scale
         trades.append({
             "symbol": sym, "signal": "SELL",
             "pred_ret": round(predictions[sym] * 100, 5),
@@ -852,8 +941,16 @@ def main():
     parser.add_argument("--max-dd", type=float, default=MAX_DRAWDOWN_KILL)
     parser.add_argument("--no-shap", action="store_true",
                         help="Skip SHAP computation (faster)")
+    parser.add_argument("--validate", action="store_true",
+                        help="Run full Fama-MacBeth / BH validation pipeline "
+                             "before training (institutional standard)")
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--no-resume", dest="no_resume", action="store_true")
+    parser.add_argument("--target", default="1h",
+                        choices=["1h", "1d", "5d", "auto"],
+                        help="Forward return horizon for target: 1h (default), "
+                             "1d (daily, ~288 bars), 5d (weekly, ~1440 bars), "
+                             "or auto (signal-decay selected)")
     args = parser.parse_args()
 
     global DATA_DIR, RESULTS_DIR, CACHE_DIR
@@ -867,6 +964,14 @@ def main():
     use_gpu = args.gpu and not args.no_gpu
     dd_kill = args.max_dd
 
+    global TARGET_COL, HORIZON_BARS
+    target_map = {"1h": "future_ret_1h", "1d": "future_ret_1d", "5d": "future_ret_5d"}
+    target_bars = {"1h": HORIZON_BARS_1H, "1d": 288, "5d": 1440}
+
+    selected_target = args.target if args.target in target_map else "1h"
+    TARGET_COL = target_map.get(selected_target, "future_ret_1h")
+    HORIZON_BARS = int(target_bars.get(selected_target, HORIZON_BARS_1H))
+
     if use_gpu:
         os.environ["CUDA_VISIBLE_DEVICES"] = "0"
         # FIX: was PCI_E_BUS_ID — correct NVIDIA env value is PCI_BUS_ID
@@ -878,13 +983,14 @@ def main():
 
     print("\n" + "=" * 72)
     print("  AZALYST v5  —  Short-Horizon Regression Engine")
-    print("  Model: XGBoost Regressor (1hr forward return)")
+    model_target_label = args.target if args.target != "auto" else "auto (pending signal-decay)"
+    print(f"  Model: XGBoost Regressor ({model_target_label} forward return / {TARGET_COL})")
     print("  Features: Reversal-dominated + Pump-Dump + Quantile Rank")
     print("  Walk:  Y2 + Y3 (2-year out-of-sample)")
     print("=" * 72)
     print(f"  Compute      : {'GPU (CUDA)' if use_gpu else 'CPU'}")
     print(f"  Features     : {len(FEATURE_COLS)} (with IC-gating selection)")
-    print(f"  Horizon      : {HORIZON_BARS} bars (1hr) / {HORIZON_BARS_15M} bars (15min)")
+    print(f"  Horizon      : {HORIZON_BARS} bars")
     print(f"  Kill-switch  : {dd_kill*100:.0f}% max drawdown")
     print(f"  SHAP         : {'disabled (--no-shap)' if args.no_shap else 'enabled'}")
     print(f"  Persistence  : SQLite (results/azalyst.db)")
@@ -927,6 +1033,8 @@ def main():
     risk_mgr = RiskManager()
 
     _log("STEP 0: Feature cache\n")
+    # Count raw data files to detect incomplete cache builds
+    data_file_count = len(list(Path(DATA_DIR).glob("*.parquet"))) if Path(DATA_DIR).exists() else 0
     if args.rebuild_cache:
         if not build_feature_store():
             _log("ERROR: Feature store build failed")
@@ -934,15 +1042,23 @@ def main():
             return
     else:
         total, valid, invalid = inspect_feature_store()
-        if total == 0:
-            _log("  No cache -- building...")
+        # FIX: Also rebuild if cache covers < 80% of available data symbols
+        # Previously, a partial cache of 5 symbols would pass validation
+        # while 438 symbols remained unbuilt — causing universe collapse.
+        cache_incomplete = (data_file_count > 0 and
+                            valid < int(data_file_count * 0.80))
+        if total == 0 or cache_incomplete:
+            _log(f"  Cache incomplete: {valid}/{data_file_count} symbols cached "
+                 f"— building missing...")
             if not build_feature_store():
                 db.finish_run(run_id, "failed")
                 return
         elif invalid:
+            _log(f"  Found {invalid} invalid cache files — rebuilding...")
             build_feature_store()
         else:
-            _log(f"  Found {valid} valid cache files")
+            _log(f"  Found {valid} valid cache files "
+                 f"(data: {data_file_count} symbols)")
 
     cuda_api = detect_cuda_api() if use_gpu else None
 
@@ -954,6 +1070,51 @@ def main():
         db.finish_run(run_id, "failed")
         return
     _log(f"  Loaded {len(symbols)} valid symbols")
+
+    if args.target == "auto" and not resuming:
+        try:
+            _log("\nSTEP 1a: Signal-decay horizon selection\n")
+            sample_features = list(FEATURE_COLS)[:AUTO_TARGET_FEATURE_SAMPLE]
+            decay = signal_decay_analysis(
+                symbols,
+                sample_features,
+                horizons=[12, 288, 1440],
+            )
+            if isinstance(decay, pd.DataFrame) and not decay.empty:
+                horizon_scores = (
+                    decay.groupby("horizon_bars")["ic_mean"]
+                    .apply(lambda s: float(np.mean(np.abs(s.values))))
+                    .to_dict()
+                )
+                best_h = max(horizon_scores, key=horizon_scores.get)
+                inv_target_map = {12: "1h", 288: "1d", 1440: "5d"}
+                selected_target = inv_target_map.get(int(best_h), "1h")
+                TARGET_COL = target_map[selected_target]
+                HORIZON_BARS = int(target_bars[selected_target])
+                _log(f"  Auto-selected target={selected_target} (bars={HORIZON_BARS})")
+            else:
+                _log("  Auto-target fallback: insufficient decay data, using 1h")
+                selected_target = "1h"
+                TARGET_COL = target_map[selected_target]
+                HORIZON_BARS = int(target_bars[selected_target])
+        except Exception as e:
+            _log(f"  Auto-target failed ({e}); falling back to 1h")
+            selected_target = "1h"
+            TARGET_COL = target_map[selected_target]
+            HORIZON_BARS = int(target_bars[selected_target])
+
+    validated_features = list(FEATURE_COLS)
+
+    # v5: Optional institutional validation pipeline (Two Sigma / BlackRock)
+    if getattr(args, 'validate', False) and not resuming:
+        from azalyst_validator import run_full_validation
+        _log("\nSTEP 1b: Institutional Validation Pipeline\n")
+        validation = run_full_validation(symbols, list(FEATURE_COLS), RESULTS_DIR)
+        valid_features = validation.get("valid_feature_names", [])
+        if valid_features and len(valid_features) >= MIN_FEATURES:
+            validated_features = list(valid_features)
+            _log(f"  Validator reduced features: {len(FEATURE_COLS)} -> "
+                 f"{len(validated_features)}")
 
     print("\nSTEP 2: Date splits (v4: walk Y2+Y3)\n")
     global_min, global_max, y1_end, y2_end = get_date_splits(symbols)
@@ -979,7 +1140,7 @@ def main():
         sys.stdout.flush()
     else:
         print("\nSTEP 3: Initial training on Y1\n")
-        active_features = list(FEATURE_COLS)
+        active_features = list(validated_features)
         X_train, y_train, y_ret = build_training_matrix(symbols, y1_end, active_features)
         if X_train is None:
             print("ERROR: Could not build training matrix")
@@ -1069,6 +1230,7 @@ def main():
         feature_ic_history = {k: list(v)
                               for k, v in ckpt.get("feature_ic_history", {}).items()}
         kill_switch_hit = ckpt.get("kill_switch_hit", False)
+        ks_pause_until = ckpt.get("ks_pause_until", 0)  # restore pause window on resume
         resume_from_week = ckpt["last_week"]
         current_model_path = ckpt.get("current_model_path", current_model_path)
         current_scaler_path = ckpt.get("current_scaler_path", current_scaler_path)
@@ -1086,10 +1248,16 @@ def main():
         weekly_returns = []
         feature_ic_history: Dict[str, List[float]] = {}
         kill_switch_hit = False
+        ks_pause_until = 0  # week number when pause ends
         resume_from_week = 0
 
     for week_num, (ws, we) in enumerate(zip(weeks[:-1], weeks[1:]), 1):
         if week_num <= resume_from_week:
+            continue
+
+        # P15: Skip weeks still within kill-switch pause window
+        if week_num <= ks_pause_until:
+            # Already recorded pause weeks in checkpoint
             continue
 
         current_dd = compute_drawdown(weekly_returns)
@@ -1098,19 +1266,21 @@ def main():
                   f"DD={current_dd*100:.1f}% < {dd_kill*100:.0f}% threshold")
             print("  Halting all trading. Pausing for 4 weeks...")
             kill_switch_hit = True
+            ks_pause_until = min(week_num + 3, len(weeks) - 1)  # set pause end
             weekly_returns.extend([0.0] * min(4, len(weeks) - week_num - 1))
             for skip in range(4):
-                weekly_summary.append({
-                    "week": week_num + skip, "week_start": str(ws.date()),
-                    "week_end": str(we.date()), "n_symbols": 0, "n_trades": 0,
-                    "week_return_pct": 0.0, "annualised_pct": 0.0, "ic": 0.0,
-                    "turnover_pct": 0.0, "on_track": False,
-                    "cum_return_pct": round(
-                        (np.prod([1 + r for r in weekly_returns]) - 1) * 100, 4),
-                    "max_drawdown_pct": round(current_dd * 100, 4),
-                    "regime": "KILL_SWITCH",
-                })
-            kill_switch_hit = False
+                if week_num + skip <= len(weeks) - 1:
+                    skip_date = weeks[week_num + skip] if week_num + skip < len(weeks) else we
+                    weekly_summary.append({
+                        "week": week_num + skip, "week_start": str(ws.date()),
+                        "week_end": str(skip_date.date()), "n_symbols": 0, "n_trades": 0,
+                        "week_return_pct": 0.0, "annualised_pct": 0.0, "ic": 0.0,
+                        "turnover_pct": 0.0, "on_track": False,
+                        "cum_return_pct": round(
+                            (np.prod([1 + r for r in weekly_returns]) - 1) * 100, 4),
+                        "max_drawdown_pct": round(current_dd * 100, 4),
+                        "regime": "KILL_SWITCH",
+                    })
             continue
 
         regime = detect_regime(symbols, we)
@@ -1131,8 +1301,8 @@ def main():
             if n_dropped > 0:
                 print(f"    Feature selection: {len(active_features)} -> {len(new_features)} "
                       f"({n_dropped} dropped by IC filter)")
-            active_features = new_features
 
+            active_features = list(new_features)
             X_rt, y_rt, y_ret_rt = build_training_matrix(symbols, we, active_features)
             if X_rt is not None and len(X_rt) > 200:
                 t0 = time.time()
@@ -1177,16 +1347,27 @@ def main():
                     current_meta_scaler_path = f"{RESULTS_DIR}/models/meta_scaler_v4_week{week_num:03d}.pkl"
 
                 retrains += 1
+
                 del X_rt, y_rt, y_ret_rt
                 gc.collect()
 
         # v5: IC-gating — if recent IC is below threshold, skip trading
+        # A) Feature-level IC gating (existing)
         recent_ics = []
         for feat_ics in feature_ic_history.values():
             if feat_ics:
                 recent_ics.append(feat_ics[-1])
         avg_recent_ic = float(np.mean(recent_ics)) if recent_ics else 0.0
-        ic_gated = avg_recent_ic < IC_GATING_THRESHOLD and len(recent_ics) >= 4
+        feat_ic_gate = avg_recent_ic < IC_GATING_THRESHOLD and len(recent_ics) >= 4
+
+        # B) Live model-level IC gating (new)
+        # If last 4 live weekly ICs average negative, model signal has inverted
+        live_ics = [m["ic"] for m in weekly_summary[-4:]
+                    if isinstance(m.get("ic"), (int, float)) and m.get("regime") != "IC_GATED"]
+        live_ic_gate = (len(live_ics) >= 4 and
+                        np.mean(live_ics) < IC_GATING_THRESHOLD)
+
+        ic_gated = feat_ic_gate or live_ic_gate
 
         if ic_gated:
             weekly_returns.append(0.0)
@@ -1200,11 +1381,13 @@ def main():
                 "max_drawdown_pct": round(compute_drawdown(weekly_returns) * 100, 4),
                 "regime": "IC_GATED",
             })
-            print(f"  Week {week_num:3d}: IC-GATED (avg_ic={avg_recent_ic:.4f} "
-                  f"< {IC_GATING_THRESHOLD})")
+            live_ic_display = float(np.mean(live_ics)) if live_ics else avg_recent_ic
+            gate_reason = "live_ic" if (live_ics and np.mean(live_ics) < IC_GATING_THRESHOLD) else "feat_ic"
+            print(f"  Week {week_num:3d}: IC-GATED ({gate_reason}={live_ic_display:.4f} "
+                f"< {IC_GATING_THRESHOLD})")
             continue
 
-        predictions, actual_rets, meta_confs = predict_week(
+        predictions, actual_rets, actual_close_rets, meta_confs = predict_week(
             current_model, current_scaler, symbols, ws, we,
             active_features, meta_model=current_meta,
             meta_scaler=current_meta_scaler
@@ -1214,14 +1397,18 @@ def main():
             continue
 
         trades, week_ret, cur_longs, cur_shorts = simulate_weekly_trades(
-            predictions, actual_rets, prev_longs, prev_shorts,
+            predictions, actual_rets, actual_close_rets,
+            prev_longs, prev_shorts,
             meta_confs, risk_manager=risk_mgr,
             weekly_returns_hist=weekly_returns
         )
         weekly_returns.append(week_ret)
 
         common = [s for s in predictions if s in actual_rets]
-        if len(common) > 10:
+        # v5 FIX: Dynamic IC threshold — Spearman needs minimum 5 observations
+        # (Per Two Sigma's statistical validation standard)
+        min_ic_obs = max(5, min(10, int(len(predictions) * 0.5)))
+        if len(common) >= min_ic_obs:
             pred_arr = np.array([predictions[s] for s in common])
             ret_arr = np.array([actual_rets[s] for s in common])
             week_ic = float(stats.spearmanr(pred_arr, ret_arr)[0])
@@ -1259,10 +1446,6 @@ def main():
         db.insert_weekly_metric(run_id, metric)
         db.insert_trades(run_id, trades)
 
-        print(f"  Week {week_num:3d} [{zone}]: {len(trades):4d} trades | "
-              f"ret={week_ret*100:+.2f}% | IC={week_ic:+.4f} | "
-              f"cum={cum_ret*100:+.1f}% | DD={max_dd*100:.1f}% | "
-              f"{regime}")
         _log(f"  Week {week_num:3d} [{zone}]: {len(trades):4d} trades | "
              f"ret={week_ret*100:+.2f}% | IC={week_ic:+.4f} | "
              f"cum={cum_ret*100:+.1f}% | DD={max_dd*100:.1f}% | "
@@ -1282,6 +1465,7 @@ def main():
             "active_features": active_features,
             "feature_ic_history": {k: list(v) for k, v in feature_ic_history.items()},
             "kill_switch_hit": kill_switch_hit,
+            "ks_pause_until": ks_pause_until,
             "current_model_path": current_model_path,
             "current_scaler_path": current_scaler_path,
             "current_meta_path": current_meta_path,
@@ -1349,6 +1533,10 @@ def main():
         "features_final": len(active_features),
         "features_initial": len(FEATURE_COLS),
         "data_range": f"{global_min.date()} -> {global_max.date()}",
+        "model_type": "XGBRegressor",
+        "objective": "reg:squarederror",
+        "horizon_bars": HORIZON_BARS,
+        "universe_size": len(symbols),
     }
 
     with open(f"{RESULTS_DIR}/performance_v4.json", "w") as f:

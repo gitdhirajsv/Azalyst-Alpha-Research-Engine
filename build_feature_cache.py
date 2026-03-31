@@ -83,9 +83,39 @@ def _process_symbol(args: Tuple) -> Tuple[str, bool, str]:
 
         feats = build_features(df, timeframe=resample)
 
+        # Include raw close for weekly PnL computation in the engine
+        feats["close"] = df["close"].astype(np.float32)
+
         # ── FIX: column is now 'future_ret' (not 'future_ret_4h') ─────────────
         # This aligns with azalyst_local_gpu.py and the notebook.
         feats["future_ret"] = np.log(df["close"].shift(-hor) / df["close"])
+
+        # v5 FIX: Also compute short-horizon returns required by v5 engine
+        # 15min horizon = 3 bars at 5-min frequency
+        # 1hr horizon = 12 bars at 5-min frequency
+        horizon_15m = max(1, 15 // max(1, {'1min':1,'3min':3,'5min':5,'15min':15,
+                          '30min':30,'1h':60,'4h':240,'1d':1440}.get(resample, 5)))
+        horizon_1h = max(1, 60 // max(1, {'1min':1,'3min':3,'5min':5,'15min':15,
+                         '30min':30,'1h':60,'4h':240,'1d':1440}.get(resample, 5)))
+        feats["future_ret_15m"] = np.log(
+            df["close"].shift(-horizon_15m) / df["close"]
+        ).astype(np.float32)
+        feats["future_ret_1h"] = np.log(
+            df["close"].shift(-horizon_1h) / df["close"]
+        ).astype(np.float32)
+
+        # 1-day horizon = 288 bars at 5-min frequency (for optional daily-target mode)
+        horizon_1d = max(1, 1440 // max(1, {'1min':1,'3min':3,'5min':5,'15min':15,
+                         '30min':30,'1h':60,'4h':240,'1d':1440}.get(resample, 5)))
+        # 5-day (weekly) horizon — aligns with 1-week holding period
+        horizon_5d = max(1, 7200 // max(1, {'1min':1,'3min':3,'5min':5,'15min':15,
+                         '30min':30,'1h':60,'4h':240,'1d':1440}.get(resample, 5)))
+        feats["future_ret_1d"] = np.log(
+            df["close"].shift(-horizon_1d) / df["close"]
+        ).astype(np.float32)
+        feats["future_ret_5d"] = np.log(
+            df["close"].shift(-horizon_5d) / df["close"]
+        ).astype(np.float32)
 
         # ── FIX: do NOT compute alpha_label here ──────────────────────────────
         # alpha_label = "did this coin outperform the cross-sectional median?"

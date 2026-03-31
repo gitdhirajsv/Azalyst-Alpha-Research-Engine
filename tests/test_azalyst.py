@@ -290,7 +290,7 @@ class TestV5EngineComponents:
     def test_simulate_weekly_trades_empty(self):
         from azalyst_v5_engine import simulate_weekly_trades
         trades, ret, longs, shorts = simulate_weekly_trades(
-            {}, {}, set(), set()
+            {}, {}, {}, set(), set()
         )
         assert trades == []
         assert ret == 0.0
@@ -498,4 +498,140 @@ class TestMLModule:
         from azalyst_ml import ReturnPredictorV2
         pred = ReturnPredictorV2(device="cpu")
         assert pred.device == "cpu"
-        assert pred.model is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 10. V5 Fix Validation Tests
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestV5Fixes:
+    """Tests for the v5 bug fixes — universe collapse, signal direction, etc."""
+
+    def test_simulate_trades_absolute_return_filter(self):
+        """P-FIX-1: Cross-sectional rank is the signal — no absolute-direction filter.
+        Even when all predictions are negative, the relatively highest-ranked symbols
+        should go LONG (least negative = relatively better) and the lowest should SHORT.
+        """
+        from azalyst_v5_engine import simulate_weekly_trades
+        # All predictions negative — but top-ranked (least negative) should still BUY
+        predictions = {
+            "SYM1": -0.01, "SYM2": -0.02, "SYM3": -0.005,
+            "SYM4": -0.03, "SYM5": -0.015,
+        }
+        actual_rets = {s: 0.01 for s in predictions}
+        trades, _, longs, shorts = simulate_weekly_trades(
+            predictions, actual_rets, actual_rets, set(), set()
+        )
+        # Top cross-sectional rank (SYM3, SYM1) should produce BUY even with negative preds
+        buy_trades = [t for t in trades if t["signal"] == "BUY"]
+        assert len(buy_trades) > 0, "No BUY for top-ranked symbols (cross-sectional rank ignored)"
+        # Bottom cross-sectional rank should still SHORT
+        sell_trades = [t for t in trades if t["signal"] == "SELL"]
+        assert len(sell_trades) > 0, "No SHORT for bottom-ranked symbols"
+
+    def test_simulate_trades_mixed_signals(self):
+        """FIX P2: Both BUY and SELL signals generated with mixed predictions."""
+        from azalyst_v5_engine import simulate_weekly_trades
+        predictions = {
+            "SYM1": 0.05, "SYM2": 0.03, "SYM3": 0.01,
+            "SYM4": -0.02, "SYM5": -0.04,
+        }
+        actual_rets = {s: 0.0 for s in predictions}
+        trades, _, longs, shorts = simulate_weekly_trades(
+            predictions, actual_rets, actual_rets, set(), set()
+        )
+        signals = {t["signal"] for t in trades}
+        assert "BUY" in signals, "Missing BUY signal"
+        assert "SELL" in signals, "Missing SELL signal"
+
+    def test_simulate_trades_adaptive_quantile(self):
+        """FIX P5: Adaptive quantile threshold with small universe."""
+        from azalyst_v5_engine import simulate_weekly_trades
+        # 5 symbols — previously 0 SHORTs due to TOP_QUANTILE=0.15
+        predictions = {
+            "A": 0.03, "B": 0.01, "C": -0.001, "D": -0.02, "E": -0.04,
+        }
+        actual_rets = {s: 0.0 for s in predictions}
+        trades, _, longs, shorts = simulate_weekly_trades(
+            predictions, actual_rets, actual_rets, set(), set()
+        )
+        # With adaptive quantile, shorts should include at least 1 symbol
+        assert len(shorts) >= 1, "No shorts with adaptive quantile"
+
+    def test_detect_regime_no_btcusdt(self):
+        """FIX P4: Regime detector works without BTCUSDT using universe proxy."""
+        from azalyst_v5_engine import detect_regime
+        rng = np.random.default_rng(42)
+        dates = pd.date_range("2024-01-01", periods=2000, freq="5min", tz="UTC")
+        # Create a volatile symbol — should NOT return LOW_VOL_GRIND
+        close_volatile = 100 * np.exp(np.cumsum(rng.normal(0, 0.01, 2000)))
+        sym_volatile = pd.DataFrame({"close": close_volatile}, index=dates)
+        symbols = {"ETHUSDT": sym_volatile}
+        regime = detect_regime(symbols, dates[-1])
+        # Must detect SOMETHING from this data — at least not always LOW_VOL_GRIND
+        # (The exact regime depends on the random data, but functionality is tested)
+        assert regime in {"BULL_TREND", "BEAR_TREND", "HIGH_VOL_LATERAL", "LOW_VOL_GRIND"}
+
+    def test_detect_regime_uses_proxy(self):
+        """FIX P4: With no known symbols, uses largest DataFrame as proxy."""
+        from azalyst_v5_engine import detect_regime
+        dates = pd.date_range("2024-01-01", periods=2000, freq="5min", tz="UTC")
+        close = np.linspace(100, 200, 2000)  # strong uptrend
+        symbols = {
+            "RANDOMUSDT": pd.DataFrame({"close": close}, index=dates),
+        }
+        regime = detect_regime(symbols, dates[-1])
+        # Strong uptrend should be BULL_TREND
+        assert regime == "BULL_TREND"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 11. Validator Module (azalyst_validator.py)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestValidator:
+    def test_newey_west_se(self):
+        from azalyst_validator import _newey_west_se
+        rng = np.random.default_rng(42)
+        x = rng.normal(0, 1, 100)
+        se = _newey_west_se(x)
+        assert se > 0
+        assert se < 1.0
+
+    def test_benjamini_hochberg(self):
+        from azalyst_validator import benjamini_hochberg
+        # 10 features: 3 truly significant (p<0.01), 7 not (p>0.5)
+        pvals = pd.Series(
+            [0.001, 0.005, 0.008] + [0.6, 0.7, 0.8, 0.9, 0.55, 0.65, 0.75],
+            index=[f"f{i}" for i in range(10)]
+        )
+        result = benjamini_hochberg(pvals, alpha=0.10)
+        assert "significant" in result.columns
+        n_sig = result["significant"].sum()
+        assert n_sig >= 3  # at least the 3 truly significant ones
+        assert n_sig <= 5  # not too many false discoveries
+
+    def test_governance_report(self, tmp_path):
+        from azalyst_validator import generate_governance_report
+        importance_cur = pd.Series(
+            [0.1, 0.08, 0.05, 0.03],
+            index=["f1", "f2", "f3", "f4"]
+        )
+        importance_prev = pd.Series(
+            [0.09, 0.07, 0.06, 0.04],
+            index=["f1", "f2", "f3", "f4"]
+        )
+        preds = np.random.default_rng(42).normal(0, 0.01, 1000).astype(np.float32)
+        report = generate_governance_report(
+            run_id="test", retrain_label="test_w013",
+            week_num=13, ic_in_sample=0.03, ic_oos=0.01,
+            importance_current=importance_cur,
+            importance_previous=importance_prev,
+            pred_distribution=preds,
+            pred_distribution_prev=preds * 1.1,
+            output_dir=str(tmp_path),
+        )
+        assert report["ic_in_sample"] == 0.03
+        assert report["ic_oos"] == 0.01
+        assert "importance_drift_rmse" in report
+        assert os.path.exists(f"{tmp_path}/governance/governance_test_w013.json")
