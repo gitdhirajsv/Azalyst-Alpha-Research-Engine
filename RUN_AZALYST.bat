@@ -197,6 +197,11 @@ echo.
 
 set "COMPUTE_CHOICE=cpu"
 set "SKIP_SHAP=0"
+set "UNIVERSE_MODE=full"
+set "DATA_DIR_ARG=%~dp0data"
+set "CACHE_DIR_ARG=%~dp0feature_cache"
+set "OUT_DIR_ARG=%~dp0results"
+set "PIN_COINS_ARG="
 
 :: Jump to GPU question if GPU is available; otherwise CPU-only path
 if "!GPU_FOUND!"=="1" goto :ASK_COMPUTE
@@ -236,7 +241,7 @@ goto :SET_TERMINAL
 :SET_SPYDER
 set "LAUNCH_MONITOR=1"
 echo  [OK] Terminal + Spyder
-goto :CONFIRM
+goto :Q_UNIVERSE
 :SET_TERMINAL
 set "LAUNCH_MONITOR=0"
 echo  [OK] Terminal only
