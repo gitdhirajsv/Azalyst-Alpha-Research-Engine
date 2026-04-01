@@ -846,7 +846,8 @@ def simulate_weekly_trades(predictions, actual_rets, actual_close_rets,
                            weekly_returns_hist=None,
                            short_only=False,
                            min_confidence=0.0,
-                           leverage=1.0):
+                           leverage=1.0,
+                           top_n=0):
     """v5: Use predicted return sign for direction, magnitude for sizing.
     FIX P12: Uses actual weekly close-to-close returns for PnL (not bar averages).
     FIX P9mod: Directional filter only — quantile selection + weekly returns
@@ -857,15 +858,24 @@ def simulate_weekly_trades(predictions, actual_rets, actual_close_rets,
     pred_series = pd.Series(predictions)
     n_symbols = len(pred_series)
 
-    # v5 FIX: Adaptive quantile threshold — prevents 0 shorts with small universes
-    # With 5 symbols, min rank = 0.2 — need threshold > 0.2 to select any shorts
-    adaptive_q = max(TOP_QUANTILE, 1.5 / max(n_symbols, 1))
-    adaptive_q = min(adaptive_q, 0.35)  # cap at 35% to avoid selecting too many
+    if top_n > 0:
+        # Fixed top-N / bottom-N selection — replaces quantile when --top-n is set.
+        # Ranks all coins in the universe, takes the best N as longs and worst N as
+        # shorts regardless of universe size. This scales cleanly from 50 → 443 coins.
+        n = min(top_n, n_symbols // 2)  # guard: never overlap longs and shorts
+        sorted_syms = pred_series.sort_values(ascending=False)
+        cur_longs = set(sorted_syms.head(n).index)
+        cur_shorts = set(sorted_syms.tail(n).index)
+    else:
+        # v5 FIX: Adaptive quantile threshold — prevents 0 shorts with small universes
+        # With 5 symbols, min rank = 0.2 — need threshold > 0.2 to select any shorts
+        adaptive_q = max(TOP_QUANTILE, 1.5 / max(n_symbols, 1))
+        adaptive_q = min(adaptive_q, 0.35)  # cap at 35% to avoid selecting too many
 
-    # v5: Long top predicted returns, short bottom predicted returns
-    ranked = pred_series.rank(pct=True)
-    cur_longs = set(ranked[ranked >= (1 - adaptive_q)].index)
-    cur_shorts = set(ranked[ranked <= adaptive_q].index)
+        # v5: Long top predicted returns, short bottom predicted returns
+        ranked = pred_series.rank(pct=True)
+        cur_longs = set(ranked[ranked >= (1 - adaptive_q)].index)
+        cur_shorts = set(ranked[ranked <= adaptive_q].index)
 
     if short_only:
         cur_longs = set()
@@ -1006,6 +1016,11 @@ def main():
                         help="Comma-separated symbols to restrict universe each week "
                              "(e.g. '1000SATSUSDT,BONKUSDT,ADXUSDT,FDUSDUSDT,WINUSDT,AEURUSDT'). "
                              "Only these coins will be ranked and traded.")
+    parser.add_argument("--top-n", type=int, default=0,
+                        help="Pick exactly N longs (top-N predicted) and N shorts (bottom-N predicted) "
+                             "each week from the full ranked universe. Replaces the 15%% quantile. "
+                             "e.g. --top-n 6 trades 6 longs + 6 shorts from all coins. "
+                             "0 = disabled (use standard quantile).")
     args = parser.parse_args()
 
     global DATA_DIR, RESULTS_DIR, CACHE_DIR
@@ -1054,6 +1069,7 @@ def main():
     print(f"  Min conf     : {args.min_confidence:.2f}")
     print(f"  Leverage     : {args.leverage:.2f}x")
     print(f"  Pin-coins    : {args.pin_coins if args.pin_coins else 'all (no restriction)'}")
+    print(f"  Top-N        : {args.top_n} per side {'(dynamic weekly selection)' if args.top_n > 0 else '(quantile mode)'}")
     print(f"  SHAP         : {'disabled (--no-shap)' if args.no_shap else 'enabled'}")
     print(f"  Persistence  : SQLite (results/azalyst.db)")
     print("=" * 72 + "\n")
@@ -1483,7 +1499,8 @@ def main():
             weekly_returns_hist=weekly_returns,
             short_only=args.short_only,
             min_confidence=max(0.0, min(1.0, args.min_confidence)),
-            leverage=max(0.1, args.leverage)
+            leverage=max(0.1, args.leverage),
+            top_n=max(0, args.top_n)
         )
         weekly_returns.append(week_ret)
 

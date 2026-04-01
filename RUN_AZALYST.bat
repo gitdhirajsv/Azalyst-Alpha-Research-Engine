@@ -250,9 +250,9 @@ echo  [OK] Terminal only
 :Q_UNIVERSE
 echo.
 echo  Universe:
-echo    [1] TOP-6 Persistent Coins  -  data_top6\  (curated  winning config)
-echo        1000SATSUSDT, BONKUSDT, ADXUSDT, FDUSDUSDT, WINUSDT, AEURUSDT
-echo    [2] Custom / Full Universe  -  data\        (all coins in data\)
+echo    [1] TOP-6 config  -  all coins in data\ + rank all, trade top-6 longs
+echo                         and top-6 shorts each week  (winning config)
+echo    [2] Full standard -  all coins in data\ + 15%% quantile  (default)
 echo.
 choice /N /C:12 /M "  Choice (1/2): "
 if errorlevel 2 goto :SET_FULL_UNIVERSE
@@ -260,11 +260,11 @@ goto :SET_TOP6_UNIVERSE
 
 :SET_TOP6_UNIVERSE
 set "UNIVERSE_MODE=top6"
-set "DATA_DIR_ARG=%~dp0data_top6"
-set "CACHE_DIR_ARG=%~dp0cache_top6"
+set "DATA_DIR_ARG=%~dp0data"
+set "CACHE_DIR_ARG=%~dp0feature_cache"
 set "OUT_DIR_ARG=%~dp0results_top6"
-set "PIN_COINS_ARG=1000SATSUSDT,BONKUSDT,ADXUSDT,FDUSDUSDT,WINUSDT,AEURUSDT"
-echo  [OK] Top-6 persistent coins selected  (5d horizon, force-invert, 3x leverage)
+set "TOP_N_ARG=6"
+echo  [OK] Top-6 dynamic selection  (5d horizon, force-invert, 3x leverage, top-6 per side)
 goto :CONFIRM
 
 :SET_FULL_UNIVERSE
@@ -272,8 +272,8 @@ set "UNIVERSE_MODE=full"
 set "DATA_DIR_ARG=%~dp0data"
 set "CACHE_DIR_ARG=%~dp0feature_cache"
 set "OUT_DIR_ARG=%~dp0results"
-set "PIN_COINS_ARG="
-echo  [OK] Full universe selected
+set "TOP_N_ARG=0"
+echo  [OK] Full universe selected  (15%% quantile)
 
 :CONFIRM
 echo.
@@ -281,6 +281,7 @@ echo  ============================================================
 echo   READY
 echo    Compute  : !COMPUTE_CHOICE!
 echo    Universe : !UNIVERSE_MODE!
+echo    Top-N    : !TOP_N_ARG! per side (0=quantile mode)
 echo    Monitor  : !LAUNCH_MONITOR! (0=terminal only, 1=terminal+spyder)
 echo    Data     : !DATA_DIR_ARG!
 echo    Cache    : !CACHE_DIR_ARG!
@@ -331,9 +332,9 @@ if "!SKIP_SHAP!"=="1" (
     set "PY_ARGS=!PY_ARGS! --no-shap"
 )
 
-:: Top-6 mode: apply winning config + pin to persistent coin universe
+:: Top-6 mode: apply winning config, rank all coins, trade top-6 longs + top-6 shorts
 if "!UNIVERSE_MODE!"=="top6" (
-    set "PY_ARGS=!PY_ARGS! --target 5d --force-invert --leverage 3 --ic-gating-threshold -1.0 --max-dd -1.0 --no-resume --pin-coins "!PIN_COINS_ARG!""
+    set "PY_ARGS=!PY_ARGS! --target 5d --force-invert --leverage 3 --ic-gating-threshold -1.0 --max-dd -1.0 --no-resume --top-n !TOP_N_ARG!"
 )
 
 !PYTHON_EXE! -u "%~dp0azalyst_v5_engine.py" !PY_ARGS!

@@ -169,39 +169,55 @@ A second-stage XGBoost classifier trained on the meta-question: **"When the regr
 
 ### Option 1 — Windows One-Click
 
-Double-click **`RUN_AZALYST.bat`** — auto-detects GPU, installs dependencies, runs engine. The launcher now prompts for universe mode:
+Double-click **`RUN_AZALYST.bat`** — auto-detects GPU, installs dependencies, runs engine. The launcher prompts for universe mode:
 
-- **[1] Top-6 Persistent Coins** — runs the curated winning configuration automatically (see below)
-- **[2] Full Universe** — standard run against all coins in `data/`
+- **[1] Top-6 config** — trains on **all coins** in `data/`, but each week ranks all predictions and trades only the **top 6 longs + top 6 shorts** (winning config applied automatically)
+- **[2] Full standard** — trains on all coins, trades top/bottom 15% quantile each week
 
 ### Option 2 — CLI
 
 ```bash
-# GPU run (full universe)
+# GPU run (full universe, 15% quantile)
 python azalyst_v5_engine.py --gpu
 
-# CPU run with custom drawdown limit
-python azalyst_v5_engine.py --max-dd -0.10
-
-# Skip SHAP for faster iteration
-python azalyst_v5_engine.py --gpu --no-shap
-
-# Top-6 persistent coins — winning config (5d horizon, force-invert, 3x leverage)
+# Top-6 dynamic selection — winning config (train on all coins, trade top/bottom 6 each week)
 python azalyst_v5_engine.py --gpu --no-shap \
-  --data-dir "./data_top6" --feature-dir "./cache_top6" --out-dir "./results_top6" \
+  --data-dir "./data" --feature-dir "./feature_cache" --out-dir "./results_top6" \
   --target 5d --force-invert --leverage 3 --ic-gating-threshold -1.0 --max-dd -1.0 \
-  --pin-coins "1000SATSUSDT,BONKUSDT,ADXUSDT,FDUSDUSDT,WINUSDT,AEURUSDT"
+  --top-n 6
+
+# Custom top-N (e.g. top 10 longs + 10 shorts)
+python azalyst_v5_engine.py --gpu --no-shap --target 5d --force-invert --top-n 10
 ```
 
 ---
 
-## Persistent-Universe Strategy (v5)
+## Top-N Dynamic Selection Strategy (v5)
 
-A 103-week walk-forward analysis of the 50-coin backtest revealed that most model picks were concentrated in a small set of coins that consistently ranked in the top quantile. Broadening to 444 coins at the same 15% quantile would mean trading ~66 long + 66 short positions weekly — increasing noise and execution cost with diminishing signal quality.
+### Why the 50-coin run hit +8,111%
 
-**Persistence analysis result** — weeks appearing in the long basket across 103 OOS weeks:
+The engine scored every coin with XGBoost each week, applied `--force-invert` (the model's signal was anti-correlated so inverting it made it predictive), then **ranked all 50 coins** and took:
+- **Top 15%** (~7-8 coins) → Longs
+- **Bottom 15%** (~7-8 coins) → Shorts
 
-| Rank | Symbol | Weeks Present | Persistence |
+The picks changed **dynamically every week** based on whoever ranked highest/lowest.
+
+### The 443-coin problem
+
+Scaling this logic to 443 coins at 15% quantile = **~66 longs + 66 shorts per week** — too many noisy picks, higher execution cost, diluted signal quality.
+
+### The fix: `--top-n`
+
+Instead of a percentage, use a fixed **N = 6** each week regardless of universe size:
+- Model trains on **all 443 coins** (full cross-sectional signal)
+- Each week: rank all 443 predictions → take **top 6 as longs**, **bottom 6 as shorts**
+- Concentrated, high-conviction positions from the full universe
+
+This scales cleanly: same logic as the winning 50-coin run, just narrower basket.
+
+**Persistence analysis** (103-week OOS on 50-coin run) confirmed the model consistently returned these coins in the top long basket:
+
+| Rank | Symbol | Weeks in Long Basket | Persistence |
 |---|---|---|---|
 | 1 | `1000SATSUSDT` | 49/103 | 47.6% |
 | 2 | `BONKUSDT` | 49/103 | 47.6% |
@@ -210,17 +226,15 @@ A 103-week walk-forward analysis of the 50-coin backtest revealed that most mode
 | 5 | `WINUSDT` | 27/103 | 26.2% |
 | 6 | `AEURUSDT` | 23/103 | 22.3% |
 
-These 6 coins were selected as the **pinned universe** for the production configuration. At 15% adaptive quantile over 6 symbols, the engine picks ~2 longs and ~2 shorts per week — concentrated, low-turnover positions from a pre-validated universe.
-
-### `--pin-coins` Flag
-
-The `--pin-coins` argument restricts the weekly prediction → ranking → trade cycle to a specified set of symbols. Filtering happens after model predictions and after inversion, so the XGBoost ranking is performed only over the pinned set:
+### `--top-n` Flag
 
 ```bash
---pin-coins "1000SATSUSDT,BONKUSDT,ADXUSDT,FDUSDUSDT,WINUSDT,AEURUSDT"
+--top-n 6    # trade exactly 6 longs + 6 shorts per week (replaces 15% quantile)
+--top-n 10   # trade exactly 10 longs + 10 shorts per week
+--top-n 0    # disabled — use standard 15% quantile (default)
 ```
 
-Data for pinned coins lives in `data_top6/` and pre-built feature cache in `cache_top6/`.
+The selection is **dynamic and weekly** — whoever ranks highest/lowest among all coins that week gets traded. No fixed list of coins.
 
 ### Winning Backtest Config (50-coin run, 103 weeks OOS)
 
@@ -230,6 +244,7 @@ Data for pinned coins lives in `data_top6/` and pre-built feature cache in `cach
 | Annualised | **+825.79%** |
 | Sharpe ratio | **3.68** |
 | Win rate | **70.87%** (73W / 30L) |
+| Coins traded per week | ~7 longs + 7 shorts (15% of 50) |
 | Horizon | 5-day forward return |
 | Inversion | `--force-invert` (anti-signal mode) |
 | Leverage | 3× |
@@ -318,7 +333,7 @@ pytest -v tests/test_azalyst.py   # 45+ tests covering v5 pipeline
 | Risk cap | 3% portfolio risk per position (VaR-based) |
 | Universe | 444 coins (full) / 6 coins (pinned, `--pin-coins`) |
 | Horizon | 1hr (12 × 5-min bars) / 5d (1440 × 5-min bars, top-6 config) |
-| Portfolio | Long top 15%, short bottom 15% (adaptive, min 1 per side) |
+| Portfolio | Long top 15%, short bottom 15% (default) — or fixed N per side via `--top-n` |
 | Fees | 0.2% round-trip, position-tracked |
 | Pump-dump threshold | 0.6 composite score |
 | Frac. diff. d | 0.4 (FFD method, threshold 1e-5) |
