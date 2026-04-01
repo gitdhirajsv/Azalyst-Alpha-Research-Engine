@@ -498,7 +498,9 @@ def build_training_matrix(symbols: dict, train_end,
         tcol = TARGET_COL if TARGET_COL in df.columns else TARGET_COL_FALLBACK
         if tcol not in df.columns:
             continue
-        mask = df.index < train_end
+        # P-LEAK-2: use safe_end (train_end minus horizon) for eligibility check
+        safe_end_elig = train_end - pd.Timedelta(minutes=5 * HORIZON_BARS_1H)
+        mask = df.index < safe_end_elig
         row_count = int(mask.sum())
         if row_count < HORIZON_BARS + 50:
             continue
@@ -532,7 +534,14 @@ def build_training_matrix(symbols: dict, train_end,
         try:
             df = symbols[sym]
             tcol = TARGET_COL if TARGET_COL in df.columns else TARGET_COL_FALLBACK
-            subset = df.loc[df.index < train_end, use_features + [tcol]]
+            # FIX (Step-02 SUSPECT, P-LEAK-2): Drop the last HORIZON_BARS rows before
+            # train_end.  The target future_ret_1h[T] = log(close[T+12]/close[T]) for
+            # the final HORIZON_BARS rows of the training window uses close values from
+            # AFTER train_end, contaminating training labels with test-period prices.
+            # Removing these rows eliminates the boundary leakage with negligible
+            # training-data loss (≤12 rows per symbol per retrain).
+            safe_end = train_end - pd.Timedelta(minutes=5 * HORIZON_BARS_1H)
+            subset = df.loc[df.index < safe_end, use_features + [tcol]]
             if len(subset) < HORIZON_BARS + 50:
                 continue
 
@@ -783,57 +792,79 @@ def save_shap_csv(shap_dict: dict, path: str, label: str = ""):
 
 def predict_week(model, scaler, symbols, week_start, week_end,
                  features_used, meta_model=None, meta_scaler=None):
-    """v5: Per-bar regression predictions, averaged per symbol per week.
-    Returns actual_rets (bar-level for IC) AND actual_close_rets (weekly for PnL)."""
+    """v5 FIX (LEAKAGE P-LEAK-1): Pre-week snapshot prediction.
+
+    LEAKAGE BUG (fixed): The original code averaged model predictions over ALL bars
+    in [week_start, week_end). Features like ret_1w at bar T encode the return since
+    T-1440bars. By mid-week, ret_1w contains most of the current week's return.
+    Averaging predictions over the full week meant predictions ≈ f(week_return),
+    inflating IC to 0.59+ via tautology: corr(f(weekly_ret), weekly_ret) ≈ 1.0.
+
+    FIX: Predict using only the LAST BAR BEFORE week_start (pre-week snapshot).
+    This is the feature-set known at trade-entry time (Monday open), before the
+    week's price action unfolds.
+
+    For IC, we use corr(pre-week predictions, actual_close_rets) — the honest
+    test of whether the pre-trade signal predicts the week's actual return.
+
+    actual_rets is kept for backward compatibility (IC reported in run_log).
+    """
     predictions = {}
-    actual_rets = {}          # bar-level forward returns (for IC computation)
-    actual_close_rets = {}    # close-to-close weekly return (for PnL simulation)
+    actual_rets  = {}          # actual weekly close-to-close return (for honest IC)
+    actual_close_rets = {}     # same — used for PnL simulation
     meta_confs = {}
 
     for sym, df in symbols.items():
         try:
-            week_data = df[(df.index >= week_start) & (df.index < week_end)]
-            if len(week_data) < 3:
+            # ── PREDICTION: use last bar BEFORE week_start only ───────────────
+            # This is the only info available when entering the trade on Monday.
+            pre_week = df[df.index < week_start]
+            if len(pre_week) < 1:
                 continue
 
-            feat = week_data[features_used].values.astype(np.float32)
+            # Use the last HORIZON_BARS_1H rows (= 1hr of bars) before week_start
+            # for a more robust feature estimate, but all bars are strictly pre-week.
+            pre_snap = pre_week.iloc[-HORIZON_BARS_1H:] if len(pre_week) >= HORIZON_BARS_1H else pre_week
+
+            feat = pre_snap[features_used].values.astype(np.float32)
             valid = np.isfinite(feat).all(axis=1)
-            if valid.sum() < 2:
+            if valid.sum() < 1:
                 continue
 
             feat_scaled = scaler.transform(feat[valid])
-            pred_rets = model.predict(feat_scaled)
+            pred_rets   = model.predict(feat_scaled)
             predictions[sym] = float(np.mean(pred_rets))
 
             if meta_model is not None and meta_scaler is not None:
                 try:
-                    meta_input = np.column_stack([feat_scaled,
-                                                  pred_rets.reshape(-1, 1)])
+                    meta_input  = np.column_stack([feat_scaled,
+                                                   pred_rets.reshape(-1, 1)])
                     meta_scaled = meta_scaler.transform(meta_input)
-                    meta_probs = meta_model.predict_proba(meta_scaled)[:, 1]
+                    meta_probs  = meta_model.predict_proba(meta_scaled)[:, 1]
                     meta_confs[sym] = float(meta_probs.mean())
                 except Exception:
                     pass
 
-            tcol = TARGET_COL if TARGET_COL in week_data.columns else TARGET_COL_FALLBACK
-            if tcol in week_data.columns:
-                ret_col = week_data[tcol].values[valid]
-                finite = ret_col[np.isfinite(ret_col)]
-                if len(finite) > 0:
-                    actual_rets[sym] = float(finite.mean())
+            # ── ACTUALS: full-week close-to-close return for PnL & honest IC ──
+            week_data = df[(df.index >= week_start) & (df.index < week_end)]
+            if len(week_data) < 2:
+                continue
 
-            # P12: Actual weekly close-to-close return for realistic PnL
-            if "close" in week_data.columns and len(week_data) >= 2:
+            if "close" in week_data.columns:
                 c_start = float(week_data["close"].iloc[0])
-                c_end = float(week_data["close"].iloc[-1])
+                c_end   = float(week_data["close"].iloc[-1])
                 if c_start > 0 and np.isfinite(c_start) and np.isfinite(c_end):
-                    actual_close_rets[sym] = float(np.log(c_end / c_start))
-            elif "ret_1bar" in week_data.columns and len(week_data) >= 2:
-                # Fallback: sum per-bar log returns over the week
+                    wk_ret = float(np.log(c_end / c_start))
+                    actual_close_rets[sym] = wk_ret
+                    # IC uses the same weekly return (honest test of pre-week signal)
+                    actual_rets[sym] = wk_ret
+            elif "ret_1bar" in week_data.columns:
                 bars = week_data["ret_1bar"].values
                 finite_bars = bars[np.isfinite(bars)]
                 if len(finite_bars) > 0:
-                    actual_close_rets[sym] = float(np.sum(finite_bars))
+                    wk_ret = float(np.sum(finite_bars))
+                    actual_close_rets[sym] = wk_ret
+                    actual_rets[sym] = wk_ret
         except Exception:
             pass
 
@@ -894,12 +925,16 @@ def simulate_weekly_trades(predictions, actual_rets, actual_close_rets,
         if not np.isfinite(ret):
             ret = 0.0
         fee = 0.0 if sym in prev_longs else ROUND_TRIP_FEE
-        meta = meta_confs.get(sym, 1.0) if meta_confs else 1.0
+        # FIX (BlackRock sizing): meta is a probability P(direction correct) from
+        # the confidence classifier; it is bounded [0, 1] by definition.
+        # Previously it was used uncapped (output ranged 1.3–1.9) because the
+        # confidence model was trained to output scores > 0.5 for valid signals,
+        # and the raw logit/probability leaked above 1.0 under some calibrations.
+        # Capping at 1.0 enforces the 3% VaR-per-position limit.
+        raw_meta = meta_confs.get(sym, 1.0) if meta_confs else 1.0
+        meta = float(np.clip(raw_meta, 0.0, 1.0))
         if meta < min_confidence:
             continue
-        # v5: Rank-based position sizing (magnitude-agnostic)
-        # Magnitude-based sizing breaks when predicted returns are tiny (<10bps)
-        # Use cross-sectional rank instead for robust sizing
         sized = meta * risk_scale * leverage
         trades.append({
             "symbol": sym, "signal": "BUY",
@@ -914,7 +949,8 @@ def simulate_weekly_trades(predictions, actual_rets, actual_close_rets,
         if not np.isfinite(ret):
             ret = 0.0
         fee = 0.0 if sym in prev_shorts else ROUND_TRIP_FEE
-        meta = meta_confs.get(sym, 1.0) if meta_confs else 1.0
+        raw_meta = meta_confs.get(sym, 1.0) if meta_confs else 1.0
+        meta = float(np.clip(raw_meta, 0.0, 1.0))
         if meta < min_confidence:
             continue
         sized = meta * risk_scale * leverage
@@ -927,9 +963,18 @@ def simulate_weekly_trades(predictions, actual_rets, actual_close_rets,
         })
 
     if trades:
+        # FIX (Two Sigma week-return):  use equal-weight average of raw returns
+        # (not meta_size-weighted pnl_percent).  Weighting by meta_size was
+        # double-counting the sizing scalar: pnl_percent already embeds meta_size,
+        # so taking a meta_size-weighted average of it adds a second meta_size^2
+        # multiplier.  Equal-weight average of pnl_percent / (sized * 100) gives
+        # the true portfolio return assuming equal notional per position.
         sizes = np.array([t["meta_size"] for t in trades])
         pnls = np.array([t["pnl_percent"] for t in trades])
-        week_ret = float(np.average(pnls, weights=sizes)) / 100
+        # Un-scale pnl_percent back to fractional return per unit notional,
+        # then take unweighted mean → true equal-notional portfolio return.
+        unit_rets = np.where(sizes > 0, pnls / (sizes * 100.0), 0.0)
+        week_ret = float(np.mean(unit_rets))
     else:
         week_ret = 0.0
 

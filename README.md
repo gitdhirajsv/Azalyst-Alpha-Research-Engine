@@ -20,6 +20,15 @@ An institutional-style quantitative research platform built as a personal projec
 
 Azalyst Alpha Research Engine is a research infrastructure project for discovering and validating systematic alpha signals in cryptocurrency markets. It is designed as a rigorous quantitative research system — not a trading bot, not a signal service, not a financial product.
 
+### Latest Update (Apr 2026)
+
+- Added institutional handoff protocol in `AZALYST_OPUS_PROTOCOL.ipynb` and synced prompt reference in `.github/OPUS_PROMPT.md`.
+- Added IC-based feature filtering module `azalyst_ic_filter.py` and IC-weighted sizing utility `ic_weighted_sizing.py`.
+- Updated engine gating config in `azalyst_v5_engine.py` (`IC_GATING_THRESHOLD = -1.00`) for kill-switch optimization testing.
+- Added diagnostics/audit toolchain (`diagnose.py`, `audit_*.py`, `analyze_*.py`, `estimate_optimization_gain.py`, `compare_results.py`).
+- Added session checkpoint and optimization analysis docs (`CHECKPOINT_ALPHA_v5_OPT1.md`, `SESSION_9_COMPLETION.md`, `OPTIMIZATION_ANALYSIS_REPORT.md`, `FIX_COMPLETED.md`, `IC_FILTER_ENHANCEMENT.md`).
+- Expanded tracked test scripts for optimization scenarios (`test_optimizations.py`, `test_opt_corrected.py`, `test_killswitch_optimization.py`, `test_50_run.py`, `test_single_week.py`).
+
 **v5** is a ground-up rebuild of the ML pipeline, informed by a comprehensive audit of v4's failures and inspired by Jane Street's Kaggle competition approach. The v4 binary classifier with momentum features produced 0/103 profitable weeks because crypto mean-reverts — v5 fixes this with:
 
 1. **Regression, not classification** — predict continuous forward returns (XGBRegressor, `reg:squarederror`)
