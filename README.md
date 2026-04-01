@@ -132,9 +132,9 @@ $$\hat{r}_{i,t+12} = f(X_{i,t}) \quad \text{where } r \text{ is the log return o
 
 - **Predicted return > 0** → candidate long (ranked by magnitude)
 - **Predicted return < 0** → candidate short (ranked by magnitude)
-- **Top 15% by predicted return** → long portfolio
-- **Bottom 15% by predicted return** → short portfolio
-- **Position size** ∝ predicted magnitude × confidence model probability × risk scale
+- **Default mode** — Top 15% by predicted return → longs | Bottom 15% → shorts (quantile)
+- **`--top-n N` mode** — Take exactly N highest-ranked coins as longs and N lowest-ranked as shorts every week, regardless of universe size. Replaces the percentage quantile. Recommended for large universes (e.g. `--top-n 6` on 443 coins → 6 longs + 6 shorts/week)
+- **Position size** ∝ confidence model probability × risk scale × leverage
 
 ### Pump-Dump Filter
 
@@ -331,9 +331,9 @@ pytest -v tests/test_azalyst.py   # 45+ tests covering v5 pipeline
 | IC-gating | Halt when avg IC < -0.03 |
 | DD kill-switch | -15% max drawdown, 4-week pause |
 | Risk cap | 3% portfolio risk per position (VaR-based) |
-| Universe | 444 coins (full) / 6 coins (pinned, `--pin-coins`) |
-| Horizon | 1hr (12 × 5-min bars) / 5d (1440 × 5-min bars, top-6 config) |
-| Portfolio | Long top 15%, short bottom 15% (default) — or fixed N per side via `--top-n` |
+| Universe | 444 coins cross-sectional pooling |
+| Horizon | 1hr (12 × 5-min bars) default / 5d (1440 × 5-min bars) with `--target 5d` |
+| Portfolio | Long top 15%, short bottom 15% (default) — or fixed N per side via `--top-n` (e.g. `--top-n 6` = 6 longs + 6 shorts from full ranked universe) |
 | Fees | 0.2% round-trip, position-tracked |
 | Pump-dump threshold | 0.6 composite score |
 | Frac. diff. d | 0.4 (FFD method, threshold 1e-5) |
