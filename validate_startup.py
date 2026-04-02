@@ -116,7 +116,7 @@ def check_config():
     print("="*70)
     
     try:
-        with open("azalyst_v5_engine.py", "r") as f:
+        with open("azalyst_v5_engine.py", "r", encoding="utf-8", errors="replace") as f:
             content = f.read()
         
         # Check for the optimization

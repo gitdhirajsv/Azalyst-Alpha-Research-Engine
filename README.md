@@ -20,14 +20,27 @@ An institutional-style quantitative research platform built as a personal projec
 
 Azalyst Alpha Research Engine is a research infrastructure project for discovering and validating systematic alpha signals in cryptocurrency markets. It is designed as a rigorous quantitative research system — not a trading bot, not a signal service, not a financial product.
 
-### Latest Update (Apr 2026)
+### Latest Update (Apr 2, 2026) — Session 10: Kill-Switch Optimization + Protocol Overhaul
 
-- Added institutional handoff protocol in `AZALYST_OPUS_PROTOCOL.ipynb` and synced prompt reference in `.github/OPUS_PROMPT.md`.
-- Added IC-based feature filtering module `azalyst_ic_filter.py` and IC-weighted sizing utility `ic_weighted_sizing.py`.
-- Updated engine gating config in `azalyst_v5_engine.py` (`IC_GATING_THRESHOLD = -1.00`) for kill-switch optimization testing.
-- Added diagnostics/audit toolchain (`diagnose.py`, `audit_*.py`, `analyze_*.py`, `estimate_optimization_gain.py`, `compare_results.py`).
-- Added session checkpoint and optimization analysis docs (`CHECKPOINT_ALPHA_v5_OPT1.md`, `SESSION_9_COMPLETION.md`, `OPTIMIZATION_ANALYSIS_REPORT.md`, `FIX_COMPLETED.md`, `IC_FILTER_ENHANCEMENT.md`).
-- Expanded tracked test scripts for optimization scenarios (`test_optimizations.py`, `test_opt_corrected.py`, `test_killswitch_optimization.py`, `test_50_run.py`, `test_single_week.py`).
+**Engine (OPT-1 applied):**
+- Kill-switch disabled: `IC_GATING_THRESHOLD` changed `-0.03 → -1.00` in `azalyst_v5_engine.py`
+  - Baseline was **-8.79%** over 88 weeks with 67% dead time (59/88 weeks blocked)
+  - Expected gain: **+5–7%** by removing dead-time weeks where median return was ~+0.5%
+  - Build is **READY FOR BACKTEST** — full 443-coin run not yet executed
+- Memory fix: `LazySymbolStore` replaced eager full-load — peak RAM **10.7 GB → ~2.3 GB** (critical for 443-coin runs)
+- Two further optimizations queued: OPT-2 (IC inversion when IC < 0) and OPT-3 (`SHORT_BIAS_ONLY` — remove losing long leg)
+
+**Protocol / handoff system:**
+- `AZALYST_OPUS_PROTOCOL.ipynb` overhauled — now fully self-contained for Opus↔Sonnet handoff:
+  - Added `IDENTITY & ROLE` block (Azalyst Opus persona, lead researcher, not assistant)
+  - New **Section 0: Project Overview** — architecture, 17-file codebase map, 72-feature table, benchmark targets, 4 known issues, paper trading context
+  - **Section 1** expanded from a 5-row summary table to full firm-by-firm expertise bullets (RenTech, Two Sigma, D.E. Shaw, Citadel, BlackRock Aladdin)
+  - All existing sections (PHASE 0 plan, execution protocol, step labels, handoff checkpoint, revision protocol, session close, hard rules, leakage checklist) retained
+  - Section 11 current state updated: baseline metrics, OPT-1/2/3 status, LazySymbolStore, known issues refreshed
+- Removed `.github/OPUS_PROMPT.md` — protocol now lives entirely in `AZALYST_OPUS_PROTOCOL.ipynb`
+
+**Validation:**
+- `validate_startup.py` now passes all 4 checks: directories, Python modules, local modules, engine configuration (encoding bug fixed)
 
 **v5** is a ground-up rebuild of the ML pipeline, informed by a comprehensive audit of v4's failures and inspired by Jane Street's Kaggle competition approach. The v4 binary classifier with momentum features produced 0/103 profitable weeks because crypto mean-reverts — v5 fixes this with:
 
