@@ -20,27 +20,29 @@ An institutional-style quantitative research platform built as a personal projec
 
 Azalyst Alpha Research Engine is a research infrastructure project for discovering and validating systematic alpha signals in cryptocurrency markets. It is designed as a rigorous quantitative research system — not a trading bot, not a signal service, not a financial product.
 
-### Latest Update (Apr 2, 2026) — Session 10: Kill-Switch Optimization + Protocol Overhaul
+### Latest Update (Apr 2, 2026) — Session 11: Workspace Cleanup + LazySymbolStore
 
-**Engine (OPT-1 applied):**
+**Memory fix (LazySymbolStore — now actually in code):**
+- `LazySymbolStore` class implemented in `azalyst_v5_engine.py` — on-demand parquet loading with 80-symbol LRU eviction cache
+  - Scans PyArrow schema + single-column index at startup (no full load)
+  - Loads each symbol's full DataFrame on first access, evicts least-recently-used when cache is full
+  - `get_date_splits()` uses pre-scanned `_metadata` dict — no DataFrame loading needed
+  - Peak RAM: **~2–4 GB** vs **~10.7 GB** eager load (critical for 443-coin runs)
+  - Dict-compatible interface: `items()`, `keys()`, `values()`, `get()`, `__contains__`
+- Encoding fix in `config_optimizations.py` (same charmap crash as `validate_startup.py`, now fixed)
+
+**Workspace cleanup:**
+- Removed all test/analysis/diagnostic scripts, result directories, old cache dirs, log files, checkpoint `.md` files
+- Repository now contains only the core engine modules + data pipeline — clean and ready to run
+- Feature cache deleted and rebuild started fresh (`python build_feature_cache.py --data-dir ./data --out-dir ./feature_cache --workers 4`)
+
+**Previous (Session 10 — OPT-1):**
 - Kill-switch disabled: `IC_GATING_THRESHOLD` changed `-0.03 → -1.00` in `azalyst_v5_engine.py`
   - Baseline was **-8.79%** over 88 weeks with 67% dead time (59/88 weeks blocked)
   - Expected gain: **+5–7%** by removing dead-time weeks where median return was ~+0.5%
-  - Build is **READY FOR BACKTEST** — full 443-coin run not yet executed
-- Memory fix: `LazySymbolStore` replaced eager full-load — peak RAM **10.7 GB → ~2.3 GB** (critical for 443-coin runs)
-- Two further optimizations queued: OPT-2 (IC inversion when IC < 0) and OPT-3 (`SHORT_BIAS_ONLY` — remove losing long leg)
-
-**Protocol / handoff system:**
-- `AZALYST_OPUS_PROTOCOL.ipynb` overhauled — now fully self-contained for Opus↔Sonnet handoff:
-  - Added `IDENTITY & ROLE` block (Azalyst Opus persona, lead researcher, not assistant)
-  - New **Section 0: Project Overview** — architecture, 17-file codebase map, 72-feature table, benchmark targets, 4 known issues, paper trading context
-  - **Section 1** expanded from a 5-row summary table to full firm-by-firm expertise bullets (RenTech, Two Sigma, D.E. Shaw, Citadel, BlackRock Aladdin)
-  - All existing sections (PHASE 0 plan, execution protocol, step labels, handoff checkpoint, revision protocol, session close, hard rules, leakage checklist) retained
-  - Section 11 current state updated: baseline metrics, OPT-1/2/3 status, LazySymbolStore, known issues refreshed
-- Removed `.github/OPUS_PROMPT.md` — protocol now lives entirely in `AZALYST_OPUS_PROTOCOL.ipynb`
-
-**Validation:**
-- `validate_startup.py` now passes all 4 checks: directories, Python modules, local modules, engine configuration (encoding bug fixed)
+- Two further optimizations queued: OPT-2 (IC inversion when IC < 0) and OPT-3 (`--short-only` — remove losing long leg)
+- `AZALYST_OPUS_PROTOCOL.ipynb` overhauled — fully self-contained Opus↔Sonnet handoff reference
+- `validate_startup.py` passes all 4 checks (encoding bug fixed)
 
 **v5** is a ground-up rebuild of the ML pipeline, informed by a comprehensive audit of v4's failures and inspired by Jane Street's Kaggle competition approach. The v4 binary classifier with momentum features produced 0/103 profitable weeks because crypto mean-reverts — v5 fixes this with:
 
@@ -54,12 +56,6 @@ Azalyst Alpha Research Engine is a research infrastructure project for discoveri
 8. **Confidence model** — P(direction correct) for position sizing
 
 The engine processes 3+ years of 5-minute OHLCV data across 444 Binance pairs, engineers 72 cross-sectional features, trains an XGBoost regression model using purged K-Fold cross-validation with an expanding training window, and validates strictly out-of-sample across 2 full years (Y2+Y3).
-
-<div align="center">
-
-![Azalyst Spyder Monitor](docs/assets/azalyst_spyder_monitor.svg)
-
-</div>
 
 ---
 
@@ -290,13 +286,12 @@ The selection is **dynamic and weekly** — whoever ranks highest/lowest among a
 ## Outputs
 
 | File | Description |
-|---|---|
-| `results/weekly_summary_v4.csv` | Week-by-week IC, returns, regime, drawdown |
-| `results/all_trades_v4.csv` | All simulated trades with magnitude-based sizing |
-| `results/performance_v4.json` | Final metrics incl. Y2 vs Y3 split, VaR/CVaR |
+|------|-------------|
+| `results/weekly_summary.csv` | Week-by-week IC, returns, regime, drawdown |
+| `results/all_trades.csv` | All simulated trades with magnitude-based sizing |
+| `results/performance.json` | Final metrics incl. Y2 vs Y3 split, VaR/CVaR |
 | `results/azalyst.db` | SQLite database with full run history |
-| `results/shap/shap_importance_v4_*.csv` | SHAP feature importance per training cycle |
-| `results/models/model_v4_*.json` | XGBoost models (base + quarterly retrains) |
+| `results/models/` | XGBoost models (base + quarterly retrains) |
 
 ---
 
@@ -316,20 +311,8 @@ The selection is **dynamic and weekly** — whoever ranks highest/lowest among a
 | `azalyst_signal_combiner.py` | IC-weighted regime-adaptive signal fusion — 4 sources, 4-state detector |
 | `azalyst_tf_utils.py` | Timeframe-aware bar count utilities |
 | `build_feature_cache.py` | Precompute features → parquet cache (5–20x speedup) |
+| `validate_startup.py` | Pre-flight checks — directories, modules, engine config |
 | `RUN_AZALYST.bat` | Windows one-click launcher — GPU detection, auto-install |
-
-### Utilities
-
-| File | Purpose |
-|---|---|
-| `VIEW_TRAINING.py` | Live 4-panel training dashboard |
-| `monitor_dashboard.py` | Browser-based live monitor |
-
-### Tests
-
-```bash
-pytest -v tests/test_azalyst.py   # 45+ tests covering v5 pipeline
-```
 
 ---
 
