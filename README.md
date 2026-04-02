@@ -113,7 +113,7 @@ The engine processes 3+ years of 5-minute OHLCV data across 444 Binance pairs, e
 - **XGBoost Regression** — continuous return prediction, Weighted R² metric (Jane Street)
 - **Short-horizon forecasting** — 1hr (12 bars) and 15min (3 bars) forward returns
 - **Pump-dump detection** — multi-signal composite score filtering manipulated coins
-- **IC-gating** — halt all trading when rolling IC drops below -0.03
+- **IC-gating** — halt all trading when rolling IC drops below configurable threshold (default `-0.03`; OPT-1 sets to `-1.00` to allow all-regime trading)
 - **Expanding training window** — train on Y1, then Y1+Y2, then Y1+Y2+Y3
 - **2-year out-of-sample** — walk-forward on Y2+Y3 (104 weeks, never seen during initial training)
 - **Risk integration** — VaR/CVaR scaled position sizing, 3% per-position risk cap
@@ -170,12 +170,13 @@ Composite score [0, 1]. Symbols exceeding threshold (0.6) are filtered from the 
 
 ### IC-Gating Kill-Switch (v5)
 
-When the rolling average feature IC drops below -0.03, the model's signal has inverted. Instead of trading on an inverted signal (losing money systematically), IC-gating halts all predictions until the signal recovers.
+When the rolling average feature IC drops below the configured threshold (`IC_GATING_THRESHOLD`, default `-0.03`; set to `-1.00` by OPT-1 to disable the kill-switch), the model's signal has inverted. Instead of trading on an inverted signal (losing money systematically), IC-gating halts all predictions until the signal recovers.
 
 ```
-If avg_recent_IC < -0.03  →  SKIP week (no trades, no risk)
-If cumulative DD > -15%   →  HALT 4 weeks (standard kill-switch)
+If avg_recent_IC < IC_GATING_THRESHOLD  →  SKIP week (no trades, no risk)
+If cumulative DD > -15%                 →  HALT 4 weeks (standard kill-switch)
 ```
+Override via CLI: `--ic-gating-threshold -1.0` (disable) or `--ic-gating-threshold 0.02` (strict)
 
 ### Confidence Model (replaces Meta-Labeling)
 
@@ -350,7 +351,7 @@ pytest -v tests/test_azalyst.py   # 45+ tests covering v5 pipeline
 | Walk-forward | Y2 + Y3 (2-year strict OOS) |
 | Retrain | Every 13 weeks (quarterly, expanding window) |
 | Feature selection | Rolling 8-week IC, threshold 0.00, min 20 features |
-| IC-gating | Halt when avg IC < -0.03 |
+| IC-gating | Halt when avg IC < threshold (default `-0.03` · OPT-1: `-1.00`) |
 | DD kill-switch | -15% max drawdown, 4-week pause |
 | Risk cap | 3% portfolio risk per position (VaR-based) |
 | Universe | 444 coins cross-sectional pooling |

@@ -24,6 +24,7 @@ import pickle
 import sys
 import time
 import warnings
+from collections import OrderedDict
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -131,6 +132,115 @@ def _read_parquet_columns(path: Path) -> list:
     if pq is not None:
         return list(pq.read_schema(path).names)
     return pd.read_parquet(path).columns.tolist()
+
+
+class LazySymbolStore:
+    """On-demand symbol loader with LRU cache.
+
+    Instead of loading all 443 parquet files at startup (~10.7 GB), this class:
+      1. Scans file metadata only at init (column validation + date range)
+      2. Loads each symbol's full DataFrame on first access
+      3. Evicts the least-recently-used symbol when the cache is full
+
+    Peak RAM: ~2-4 GB vs ~10.7 GB with the old eager load.
+    Interface: dict-compatible (__getitem__, items(), keys(), values(), __len__).
+    """
+
+    def __init__(self, cache_dir: str = CACHE_DIR, max_cached: int = 80):
+        self._cache_dir = Path(cache_dir)
+        self._required = set(_required_cache_columns())
+        self._max_cached = max_cached
+        self._cache: OrderedDict = OrderedDict()   # {stem: DataFrame}
+        self._metadata: Dict[str, dict] = {}       # {stem: {fpath, min, max}}
+        self._ordered_keys: List[str] = []         # valid symbols in sorted order
+        self._scan()
+
+    # ── internal ────────────────────────────────────────────────────────────
+
+    def _scan(self) -> None:
+        """Fast metadata scan — reads schema + one column per file (no full load)."""
+        files = sorted(self._cache_dir.glob("*.parquet"))
+        print(f"  Scanning {len(files)} symbols (metadata only)...")
+        required = self._required
+        for fpath in files:
+            try:
+                # Validate columns via PyArrow schema (zero row read when pq available)
+                if pq is not None:
+                    col_names = set(pq.read_schema(fpath).names)
+                    if not required.issubset(col_names):
+                        continue
+                # Read only the 'close' column to get the DatetimeIndex cheaply
+                df_idx = pd.read_parquet(fpath, columns=["close"])
+                if not required.issubset(set(df_idx.columns) | (required - {"close"})):
+                    # Fallback: verify all required cols are present without PyArrow
+                    if pq is None:
+                        all_cols = set(pd.read_parquet(fpath, engine="pyarrow").columns
+                                       if pq else df_idx.columns)
+                        if not required.issubset(all_cols):
+                            continue
+                if not isinstance(df_idx.index, pd.DatetimeIndex):
+                    df_idx.index = pd.to_datetime(df_idx.index, utc=True)
+                elif df_idx.index.tz is None:
+                    df_idx.index = df_idx.index.tz_localize("UTC")
+                min_date = df_idx.index.min()
+                max_date = df_idx.index.max()
+                if max_date.year < 2018 or len(df_idx) <= 50:
+                    continue
+                self._metadata[fpath.stem] = {"fpath": fpath, "min": min_date, "max": max_date}
+                self._ordered_keys.append(fpath.stem)
+            except Exception:
+                pass
+        print(f"  Found {len(self._ordered_keys)} valid symbols (lazy mode)")
+
+    def _load_full(self, stem: str) -> pd.DataFrame:
+        """Read the full parquet file and return a prepared DataFrame."""
+        fpath = self._metadata[stem]["fpath"]
+        df = pd.read_parquet(fpath)
+        if not isinstance(df.index, pd.DatetimeIndex):
+            df.index = pd.to_datetime(df.index, utc=True)
+        elif df.index.tz is None:
+            df.index = df.index.tz_localize("UTC")
+        return df.sort_index()
+
+    # ── dict-compatible interface ────────────────────────────────────────────
+
+    def __getitem__(self, stem: str) -> pd.DataFrame:
+        if stem in self._cache:
+            self._cache.move_to_end(stem)     # mark as most recently used
+            return self._cache[stem]
+        if stem not in self._metadata:
+            raise KeyError(stem)
+        # Evict LRU entry when cache is full
+        while len(self._cache) >= self._max_cached:
+            self._cache.popitem(last=False)   # remove oldest (least recently used)
+        df = self._load_full(stem)
+        self._cache[stem] = df
+        return df
+
+    def __contains__(self, stem: object) -> bool:
+        return stem in self._metadata
+
+    def __len__(self) -> int:
+        return len(self._ordered_keys)
+
+    def __bool__(self) -> bool:
+        return len(self._ordered_keys) > 0
+
+    def keys(self):
+        return iter(self._ordered_keys)
+
+    def values(self):
+        for stem in self._ordered_keys:
+            yield self[stem]
+
+    def items(self):
+        for stem in self._ordered_keys:
+            yield stem, self[stem]
+
+    def get(self, stem: str, default=None):
+        if stem in self._metadata:
+            return self[stem]
+        return default
 
 
 # ── CUDA DETECTION ────────────────────────────────────────────────────────────
@@ -357,39 +467,23 @@ def build_feature_store() -> bool:
     return count > 0
 
 
-def load_feature_store() -> dict:
-    symbols = {}
-    cache_path = Path(CACHE_DIR)
-    files = sorted(cache_path.glob("*.parquet"))
-    required = set(_required_cache_columns())
-
-    print(f"  Loading {len(files)} symbols from feature cache...")
-    for fpath in files:
-        try:
-            df = pd.read_parquet(fpath)
-            if not required.issubset(set(df.columns)):
-                continue
-            if not isinstance(df.index, pd.DatetimeIndex):
-                df.index = pd.to_datetime(df.index, utc=True)
-            elif df.index.tz is None:
-                df.index = df.index.tz_localize("UTC")
-            df = df.sort_index()
-            if df.index.max().year < 2018:
-                continue
-            if len(df) > 50:
-                symbols[fpath.stem] = df
-        except Exception:
-            pass
-
-    print(f"  Loaded {len(symbols)} valid symbols")
-    return symbols
+def load_feature_store() -> LazySymbolStore:
+    """Return a LazySymbolStore — symbols are loaded on demand with LRU eviction.
+    Peak RAM: ~2-4 GB vs ~10.7 GB with the old eager implementation."""
+    return LazySymbolStore()
 
 
 # ── DATE SPLITS ───────────────────────────────────────────────────────────────
 
-def get_date_splits(symbols: dict) -> tuple:
-    all_min = [df.index.min() for df in symbols.values()]
-    all_max = [df.index.max() for df in symbols.values()]
+def get_date_splits(symbols) -> tuple:
+    # Use pre-scanned metadata when available (LazySymbolStore) — avoids loading
+    # all 443 DataFrames just to get the global date range.
+    if hasattr(symbols, "_metadata") and symbols._metadata:
+        all_min = [v["min"] for v in symbols._metadata.values()]
+        all_max = [v["max"] for v in symbols._metadata.values()]
+    else:
+        all_min = [df.index.min() for df in symbols.values()]
+        all_max = [df.index.max() for df in symbols.values()]
     global_min = min(all_min)
     global_max = max(all_max)
     total_span = global_max - global_min

@@ -66,7 +66,7 @@ def apply_optimization(config_name):
     print(f"{'='*70}")
     
     # Read the engine file
-    with open('azalyst_v5_engine.py', 'r') as f:
+    with open('azalyst_v5_engine.py', 'r', encoding='utf-8', errors='replace') as f:
         content = f.read()
     
     # Apply IC_GATING_THRESHOLD change
@@ -77,7 +77,7 @@ def apply_optimization(config_name):
     # These other options would require deeper code modifications
     # For now, just modify the threshold and show recommendations
     
-    with open('azalyst_v5_engine.py', 'w') as f:
+    with open('azalyst_v5_engine.py', 'w', encoding='utf-8') as f:
         f.write(content)
     
     print(f"\n✓ Updated IC_GATING_THRESHOLD = {config['ic_gating_threshold']}")
