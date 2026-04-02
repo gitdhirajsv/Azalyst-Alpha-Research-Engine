@@ -36,7 +36,7 @@ for %%d in (
 
 echo.
 echo  ============================================================
-echo    AZALYST ALPHA RESEARCH ENGINE  v4.0
+echo    AZALYST ALPHA RESEARCH ENGINE  v5.0
 echo  ============================================================
 echo.
 
@@ -159,13 +159,9 @@ set "PARQUET_FOUND=0"
 if exist "%~dp0data\" (
     for %%f in ("%~dp0data\*.parquet") do set "PARQUET_FOUND=1"
 )
-if exist "%~dp0data_top6\" (
-    for %%f in ("%~dp0data_top6\*.parquet") do set "PARQUET_FOUND=1"
-)
 if "!PARQUET_FOUND!"=="0" (
-    echo  [ERROR] No .parquet files found in data\ or data_top6\
-    echo  Create data\ and add Binance 5-min OHLCV .parquet files,
-    echo  or add Top-6 coin parquet files to data_top6\
+    echo  [ERROR] No .parquet files found in data\
+    echo  Add Binance 5-min OHLCV .parquet files to data\
     pause
     exit /b 1
 )
@@ -175,9 +171,6 @@ echo  [OK] Data files found
 set "CACHE_COUNT=0"
 if exist "%~dp0feature_cache\" (
     for %%f in ("%~dp0feature_cache\*.parquet") do set "CACHE_COUNT=1"
-)
-if exist "%~dp0cache_top6\" (
-    for %%f in ("%~dp0cache_top6\*.parquet") do set "CACHE_COUNT=1"
 )
 if "!CACHE_COUNT!"=="0" (
     echo.
@@ -350,7 +343,7 @@ echo  ============================================================
 echo.
 
 if "!EXIT_CODE!"=="0" (
-    if not exist "%~dp0results\weekly_summary_v4.csv" (
+    if not exist "%~dp0results\weekly_summary.csv" if not exist "%~dp0results_top6\weekly_summary.csv" (
         color 0E
         echo  [WARN] Pipeline exited cleanly but produced no results.
         echo.
@@ -370,9 +363,9 @@ if "!EXIT_CODE!"=="0" (
         color 0A
         echo  Pipeline completed successfully.
         echo.
-        echo    results\weekly_summary_v4.csv
-        echo    results\all_trades_v4.csv
-        echo    results\performance_v4.json
+        echo    results\weekly_summary.csv
+        echo    results\all_trades.csv
+        echo    results\performance.json
         echo    results\azalyst.db
     )
 ) else (
