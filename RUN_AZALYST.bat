@@ -377,8 +377,10 @@ if "!EXIT_CODE!"=="0" (
     echo    Bad timestamp - delete feature_cache\ and retry
     echo    Import error  - check error message above for exact cause
     echo.
-    if exist "%~dp0results\checkpoint_v4_latest.json" (
-        echo  Checkpoint saved. Run again to resume from where it stopped.
+    if exist "%~dp0results_top6\checkpoint_v4_latest.json" (
+        echo  Checkpoint saved ^(results_top6^). Run again to resume from where it stopped.
+    ) else if exist "%~dp0results\checkpoint_v4_latest.json" (
+        echo  Checkpoint saved ^(results^). Run again to resume from where it stopped.
     )
 )
 

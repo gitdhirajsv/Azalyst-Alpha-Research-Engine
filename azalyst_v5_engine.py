@@ -1217,7 +1217,9 @@ def main():
 
     _log_path = os.path.join(RESULTS_DIR, "run_log.txt")
     try:
-        _log_fh = open(_log_path, "w", encoding="utf-8", buffering=1)
+        # Append when resuming so previous log lines are preserved
+        _log_mode = "a" if (not args.no_resume and os.path.exists(_ckpt_path(RESULTS_DIR))) else "w"
+        _log_fh = open(_log_path, _log_mode, encoding="utf-8", buffering=1)
     except Exception:
         _log_fh = None
 
@@ -1811,11 +1813,13 @@ def main():
     print(f"  Database -> {RESULTS_DIR}/azalyst.db")
     print(f"  GPU used : {'RTX 2050 CUDA' if cuda_api else 'CPU'}")
 
+    # Only clear checkpoint AFTER all I/O is done — if a write above crashes,
+    # the checkpoint is preserved and the user can resume.
+    db.close()
     ckpt_file = _ckpt_path(RESULTS_DIR)
     if os.path.exists(ckpt_file):
         os.remove(ckpt_file)
         print("  [CHECKPOINT] Cleared — run complete")
-    db.close()
 
 
 if __name__ == "__main__":
@@ -1832,4 +1836,5 @@ if __name__ == "__main__":
         import traceback
         print(f"\n  [FATAL] {type(_e).__name__}: {_e}")
         traceback.print_exc()
+        print("\n  [CHECKPOINT] Checkpoint preserved — run again to resume from where it stopped.")
         sys.exit(1)
