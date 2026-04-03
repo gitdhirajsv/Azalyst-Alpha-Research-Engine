@@ -36,7 +36,7 @@ for %%d in (
 
 echo.
 echo  ============================================================
-echo    AZALYST ALPHA RESEARCH ENGINE  v5.0
+echo    AZALYST ALPHA RESEARCH ENGINE  v5.0 / v6.0
 echo  ============================================================
 echo.
 
@@ -143,6 +143,7 @@ if "!GPU_FOUND!"=="1" (
 echo  [Setup] Checking local modules...
 set "MOD_OK=1"
 if not exist "%~dp0azalyst_v5_engine.py"  ( echo  [ERROR] Missing: azalyst_v5_engine.py  & set "MOD_OK=0" )
+if not exist "%~dp0azalyst_v6_engine.py"  ( echo  [WARN]  Missing: azalyst_v6_engine.py  ^(v6 will be unavailable^) )
 if not exist "%~dp0azalyst_factors_v2.py" ( echo  [ERROR] Missing: azalyst_factors_v2.py & set "MOD_OK=0" )
 if not exist "%~dp0azalyst_risk.py"       ( echo  [ERROR] Missing: azalyst_risk.py       & set "MOD_OK=0" )
 if not exist "%~dp0azalyst_db.py"         ( echo  [ERROR] Missing: azalyst_db.py         & set "MOD_OK=0" )
@@ -243,21 +244,32 @@ echo  [OK] Terminal only
 :Q_UNIVERSE
 echo.
 echo  Universe:
-echo    [1] TOP-6 config  -  all coins in data\ + rank all, trade top-6 longs
-echo                         and top-6 shorts each week  (winning config)
-echo    [2] Full standard -  all coins in data\ + 15%% quantile  (default)
+echo    [1] TOP-15 config -  v5 engine, rank all, trade top-15 per side
+echo    [2] Full standard -  v5 engine, all coins, 15%% quantile  (default)
+echo    [3] V6 CONSENSUS  -  Elastic Net, beta-neutral, regime-gated,
+echo                         rolling 26wk window, top-5 per side
 echo.
-choice /N /C:12 /M "  Choice (1/2): "
+choice /N /C:123 /M "  Choice (1/2/3): "
+if errorlevel 3 goto :SET_V6_UNIVERSE
 if errorlevel 2 goto :SET_FULL_UNIVERSE
 goto :SET_TOP6_UNIVERSE
 
 :SET_TOP6_UNIVERSE
-set "UNIVERSE_MODE=top6"
+set "UNIVERSE_MODE=top15"
 set "DATA_DIR_ARG=%~dp0data"
 set "CACHE_DIR_ARG=%~dp0feature_cache"
-set "OUT_DIR_ARG=%~dp0results_top6"
-set "TOP_N_ARG=6"
-echo  [OK] Top-6 dynamic selection  (5d horizon, force-invert, 3x leverage, top-6 per side)
+set "OUT_DIR_ARG=%~dp0results_top15"
+set "TOP_N_ARG=15"
+echo  [OK] Top-15 dynamic selection  (5d horizon, force-invert, 3x leverage, top-15 per side)
+goto :CONFIRM
+
+:SET_V6_UNIVERSE
+set "UNIVERSE_MODE=v6"
+set "DATA_DIR_ARG=%~dp0data"
+set "CACHE_DIR_ARG=%~dp0feature_cache"
+set "OUT_DIR_ARG=%~dp0results_v6"
+set "TOP_N_ARG=5"
+echo  [OK] V6 Consensus Rebuild  (Elastic Net, beta-neutral, regime-gated, top-5)
 goto :CONFIRM
 
 :SET_FULL_UNIVERSE
@@ -316,8 +328,10 @@ echo.
 :: ── Build the python command based on choices ─────────────────────────────────
 set "PY_ARGS=--data-dir "!DATA_DIR_ARG!" --feature-dir "!CACHE_DIR_ARG!" --out-dir "!OUT_DIR_ARG!""
 
+set "GPU_FLAG="
 if "!COMPUTE_CHOICE!"=="gpu" (
     set "PY_ARGS=--gpu !PY_ARGS!"
+    set "GPU_FLAG=--gpu"
 )
 
 :: GPU: skip SHAP by default to stay within 4GB VRAM; CPU: SHAP always on
@@ -330,8 +344,15 @@ if "!UNIVERSE_MODE!"=="top6" (
     set "PY_ARGS=!PY_ARGS! --target 5d --force-invert --leverage 3 --ic-gating-threshold -1.0 --max-dd -1.0 --top-n !TOP_N_ARG!"
 )
 
+:: V6 mode: run v6 engine with consensus config
+if "!UNIVERSE_MODE!"=="v6" (
+    !PYTHON_EXE! -u "%~dp0azalyst_v6_engine.py" --data-dir "!DATA_DIR_ARG!" --feature-dir "!CACHE_DIR_ARG!" --out-dir "!OUT_DIR_ARG!" --top-n !TOP_N_ARG! --leverage 1.0 !GPU_FLAG!
+    goto :POST_RUN
+)
+
 !PYTHON_EXE! -u "%~dp0azalyst_v5_engine.py" !PY_ARGS!
 
+:POST_RUN
 set "EXIT_CODE=!errorlevel!"
 
 powercfg /setactive 381b4222-f694-41f0-9685-ff5bb260df2e >nul 2>&1

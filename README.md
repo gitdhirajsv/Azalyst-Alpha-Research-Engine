@@ -10,7 +10,7 @@ An institutional-style quantitative research platform built as a personal projec
 ![Features](https://img.shields.io/badge/Features-72%20Cross--Sectional-red?style=flat-square)
 ![ML](https://img.shields.io/badge/ML-XGBoost%20Regression%20CUDA-blueviolet?style=flat-square)
 ![CV](https://img.shields.io/badge/CV-Purged%20K--Fold-orange?style=flat-square)
-![Version](https://img.shields.io/badge/Engine-v5.0-gold?style=flat-square)
+![Version](https://img.shields.io/badge/Engine-v6.0-gold?style=flat-square)
 
 </div>
 
@@ -20,33 +20,31 @@ An institutional-style quantitative research platform built as a personal projec
 
 Azalyst Alpha Research Engine is a research infrastructure project for discovering and validating systematic alpha signals in cryptocurrency markets. It is designed as a rigorous quantitative research system — not a trading bot, not a signal service, not a financial product.
 
-### Latest Update (Apr 2, 2026) — Session 11: Workspace Cleanup + LazySymbolStore
+### Latest Update (Apr 4, 2026) — v6.0 Consensus Rebuild
 
-**Memory fix (LazySymbolStore — now actually in code):**
-- `LazySymbolStore` class implemented in `azalyst_v5_engine.py` — on-demand parquet loading with 80-symbol LRU eviction cache
-  - Scans PyArrow schema + single-column index at startup (no full load)
-  - Loads each symbol's full DataFrame on first access, evicts least-recently-used when cache is full
-  - `get_date_splits()` uses pre-scanned `_metadata` dict — no DataFrame loading needed
-  - Peak RAM: **~2–4 GB** vs **~10.7 GB** eager load (critical for 443-coin runs)
-  - Dict-compatible interface: `items()`, `keys()`, `values()`, `get()`, `__contains__`
-- Encoding fix in `config_optimizations.py` (same charmap crash as `validate_startup.py`, now fixed)
+**v6** is a ground-up rebuild of the prediction pipeline, informed by recommendations from 7 independent AI models (GPT 5.4, Gemini 3.1 Pro, Claude Opus 4.6, Qwen, DeepSeek, GLM5, Mistral) after a comprehensive audit proved v5 was overfitting (96% IC decay IS→OOS). All 7 recommendations were evaluated, ranked, and merged into a consensus engine.
 
-**Workspace cleanup:**
-- Removed all test/analysis/diagnostic scripts, result directories, old cache dirs, log files, checkpoint `.md` files
-- Repository now contains only the core engine modules + data pipeline — clean and ready to run
-- Feature cache deleted and rebuild started fresh (`python build_feature_cache.py --data-dir ./data --out-dir ./feature_cache --workers 4`)
+### v5 vs v6
 
-**Previous (Session 10 — OPT-1):**
-- Kill-switch disabled: `IC_GATING_THRESHOLD` changed `-0.03 → -1.00` in `azalyst_v5_engine.py`
-  - Baseline was **-8.79%** over 88 weeks with 67% dead time (59/88 weeks blocked)
-  - Expected gain: **+5–7%** by removing dead-time weeks where median return was ~+0.5%
-- Two further optimizations queued: OPT-2 (IC inversion when IC < 0) and OPT-3 (`--short-only` — remove losing long leg)
-- `AZALYST_OPUS_PROTOCOL.ipynb` overhauled — fully self-contained Opus↔Sonnet handoff reference
-- `validate_startup.py` passes all 4 checks (encoding bug fixed)
+| Aspect | v5 | v6 (Consensus Rebuild) |
+|---|---|---|
+| **Model** | XGBRegressor (complex) | ElasticNetCV (simple, interpretable) |
+| **Challenger** | — | XGBoost (must beat Elastic Net by IC margin) |
+| **Target** | Raw forward log return | **Beta-neutral** (daily cross-sectional demeaned) |
+| **Training window** | Expanding (all history) | **Rolling 26 weeks** (recent data only) |
+| **Features** | 72 → IC-filtered ~46 (unstable, Jaccard 0.20–0.36) | **10 stable** (3 core + 7 stable, turnover cap ≤3/retrain) |
+| **Feature selection** | IC threshold 0.005, recomputed each retrain | **Stability-tracked**: need +IC in ≥2 periods to add, −IC in ≥3 to drop |
+| **Regime handling** | Detect only (no portfolio impact) | **Regime-gated**: no shorts in BULL_TREND, half size in HIGH_VOL |
+| **`--force-invert`** | Required (model signal inverted) | **Removed** — beta-neutral target fixes sign problem |
+| **Confidence model** | XGBClassifier 2nd-stage | **Removed** — equal-weight positions |
+| **Retraining** | Every 13 weeks (always adopt) | Every 13 weeks, **IC-gated** (reject if OOS IC ≤ 0) |
+| **Kill criteria** | DD only (−15%) | **4-gate**: OOS IC + feature stability + regime survival + beat baseline |
+| **Falsification** | None | **Built-in** campaign (single-factor baselines vs ML) |
+| **PnL tracking** | Combined | **Long/short decomposed** separately |
+| **Portfolio** | Top-15 per side, 3× leverage | **Top-5 per side**, 1× leverage (conservative) |
+| **Output dir** | `results_top6/` | `results_v6/` |
 
-**v5** is a ground-up rebuild of the ML pipeline, informed by a comprehensive audit of v4's failures and inspired by Jane Street's Kaggle competition approach. The v4 binary classifier with momentum features produced 0/103 profitable weeks because crypto mean-reverts — v5 fixes this with:
-
-1. **Regression, not classification** — predict continuous forward returns (XGBRegressor, `reg:squarederror`)
+**v5** was a ground-up rebuild from v4 (binary classifier → XGBoost regression), inspired by Jane Street's Kaggle competition approach:
 2. **Short horizons** — 1hr (12 bars) and 15min (3 bars) instead of 4hr (48 bars)
 3. **Reversal-dominated features** — 72 features with 8 reversal signals, 6 pump-dump indicators, and 4 quantile-ranked features (Jane Street technique)
 4. **Per-bar prediction** — no week-averaging that destroys signal
@@ -190,13 +188,20 @@ A second-stage XGBoost classifier trained on the meta-question: **"When the regr
 
 Double-click **`RUN_AZALYST.bat`** — auto-detects GPU, installs dependencies, runs engine. The launcher prompts for universe mode:
 
-- **[1] Top-6 config** — trains on **all coins** in `data/`, but each week ranks all predictions and trades only the **top 6 longs + top 6 shorts** (winning config applied automatically)
-- **[2] Full standard** — trains on all coins, trades top/bottom 15% quantile each week
+- **[1] Top-15 config** — v5 engine, rank all coins, trade top-15 per side
+- **[2] Full standard** — v5 engine, all coins, top/bottom 15% quantile each week
+- **[3] V6 Consensus** — v6 engine, Elastic Net, beta-neutral, regime-gated, rolling 26wk window, top-5 per side
 
 ### Option 2 — CLI
 
 ```bash
-# GPU run (full universe, 15% quantile)
+# v6 — Consensus Rebuild (recommended)
+python azalyst_v6_engine.py --no-gpu --top-n 5
+
+# v6 — with XGBoost challenger + GPU
+python azalyst_v6_engine.py --gpu --xgb-challenger --top-n 5
+
+# v5 — GPU run (full universe, 15% quantile)
 python azalyst_v5_engine.py --gpu
 
 # Top-6 dynamic selection — winning config (train on all coins, trade top/bottom 6 each week)
@@ -325,7 +330,8 @@ All output files are written to `results_top6/` (default) or the directory passe
 
 | File | Purpose |
 |---|---|
-| `azalyst_v5_engine.py` | **v5 engine** — regression walk-forward, IC-gating, pump-dump filter, confidence model, SHAP, SQLite |
+| `azalyst_v6_engine.py` | **v6 engine** — Elastic Net consensus rebuild, beta-neutral target, regime-gated portfolio, rolling window, falsification campaign, 4-gate kill criteria |
+| `azalyst_v5_engine.py` | **v5 engine** — XGBoost regression walk-forward, IC-gating, pump-dump filter, confidence model, SHAP, SQLite |
 | `azalyst_db.py` | SQLite persistence — trades, metrics, SHAP, model artifacts (7 tables, WAL mode) |
 | `azalyst_factors_v2.py` | 72 cross-sectional features — reversal signals, pump-dump indicators, quantile rank, WQ alphas, frac. diff |
 | `azalyst_pump_dump.py` | **NEW** — Multi-signal pump-dump detector with regime classification |
