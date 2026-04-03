@@ -327,7 +327,7 @@ if "!SKIP_SHAP!"=="1" (
 
 :: Top-6 mode: apply winning config, rank all coins, trade top-6 longs + top-6 shorts
 if "!UNIVERSE_MODE!"=="top6" (
-    set "PY_ARGS=!PY_ARGS! --target 5d --force-invert --leverage 3 --ic-gating-threshold -1.0 --max-dd -1.0 --no-resume --top-n !TOP_N_ARG!"
+    set "PY_ARGS=!PY_ARGS! --target 5d --force-invert --leverage 3 --ic-gating-threshold -1.0 --max-dd -1.0 --top-n !TOP_N_ARG!"
 )
 
 !PYTHON_EXE! -u "%~dp0azalyst_v5_engine.py" !PY_ARGS!

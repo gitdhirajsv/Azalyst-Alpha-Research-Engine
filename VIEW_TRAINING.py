@@ -167,7 +167,8 @@ def _render(fig: plt.Figure, axes: list, ckpt: dict, log_lines: list[str]) -> No
     # ΓöÇΓöÇ Panel 3: Current Status ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
     ax_status.clear()
     ax_status.set_facecolor(PANEL)
-    ax_status.set_axis_off()
+    ax_status.set_xticks([])
+    ax_status.set_yticks([])
     for sp in ax_status.spines.values():
         sp.set_edgecolor("#dde3ed")
         sp.set_linewidth(0.8)
@@ -230,7 +231,11 @@ def _render(fig: plt.Figure, axes: list, ckpt: dict, log_lines: list[str]) -> No
     # ΓöÇΓöÇ Panel 4: Recent Log Tail ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
     ax_log.clear()
     ax_log.set_facecolor(PANEL)
-    ax_log.set_axis_off()
+    ax_log.set_xticks([])
+    ax_log.set_yticks([])
+    for sp in ax_log.spines.values():
+        sp.set_edgecolor("#dde3ed")
+        sp.set_linewidth(0.8)
     ax_log.text(
         0.015, 0.975,
         "\n".join(log_lines),

@@ -269,6 +269,33 @@ def detect_cuda_api() -> str | None:
         return None
 
 
+def _gpu_cleanup():
+    """Force-free GPU memory after training. Safe to call even without GPU."""
+    gc.collect()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+    except Exception:
+        pass
+    # XGBoost uses RMM / CUDA allocator — gc.collect releases Python refs
+    # which lets XGBoost's C++ destructor free device memory.
+    gc.collect()
+
+
+def _model_to_cpu(model):
+    """Move an XGBoost model to CPU for prediction (frees GPU prediction buffers)."""
+    try:
+        model.set_param({"device": "cpu"})
+    except Exception:
+        try:
+            model.set_param({"predictor": "cpu_predictor"})
+        except Exception:
+            pass
+    return model
+
+
 def make_xgb_params(cuda_api: str | None, n_estimators: int = 1000,
                     max_depth: int = 4, min_child_weight: int = 50,
                     regression: bool = True) -> dict:
@@ -769,6 +796,9 @@ def train_model(X, y, y_ret, cuda_api, features_used, label="", use_ic_filtering
 
     importance = pd.Series(final.feature_importances_, index=features_filtered,
                            name="importance").sort_values(ascending=False)
+    # Move model to CPU for prediction — free GPU VRAM for next training phase
+    _model_to_cpu(final)
+    _gpu_cleanup()
     return final, scaler, importance, mean_r2, mean_ic, icir, features_filtered, feature_indices
 
 
@@ -833,6 +863,9 @@ def train_meta_model(base_model, base_scaler, X, y, cuda_api, features_used,
 
     val_acc = float((meta.predict(X_meta_s[split:]) == conf_y[split:]).mean())
     print(f"  [{label}] Confidence model accuracy: {val_acc*100:.1f}%")
+    # Move meta model to CPU — free GPU VRAM
+    _model_to_cpu(meta)
+    _gpu_cleanup()
     return meta, meta_scaler
 
 
@@ -1418,7 +1451,7 @@ def main():
                        "use_gpu": cuda_api is not None}, f, indent=2)
 
         del X_train, y_train, y_ret
-        gc.collect()
+        _gpu_cleanup()
 
     walk_start = y1_end
     print(f"\nSTEP 4+5: Walk-forward  ({walk_start.date()} -> {global_max.date()})\n")
@@ -1571,7 +1604,7 @@ def main():
                 retrains += 1
 
                 del X_rt, y_rt, y_ret_rt
-                gc.collect()
+                _gpu_cleanup()
 
         # v5: IC-gating — if recent IC is below threshold, skip trading
         # A) Feature-level IC gating (existing)
