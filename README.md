@@ -285,13 +285,37 @@ The selection is **dynamic and weekly** — whoever ranks highest/lowest among a
 
 ## Outputs
 
+All output files are written to `results_top6/` (default) or the directory passed via `--out-dir`.
+
 | File | Description |
 |------|-------------|
-| `results/weekly_summary.csv` | Week-by-week IC, returns, regime, drawdown |
-| `results/all_trades.csv` | All simulated trades with magnitude-based sizing |
-| `results/performance.json` | Final metrics incl. Y2 vs Y3 split, VaR/CVaR |
-| `results/azalyst.db` | SQLite database with full run history |
-| `results/models/` | XGBoost models (base + quarterly retrains) |
+| `results_top6/checkpoint_v4_latest.json` | Live checkpoint — weekly summary, trades, run state (read by dashboard) |
+| `results_top6/run_log.txt` | Full pipeline log (read by dashboard) |
+| `results_top6/train_summary_v4.json` | Final training metrics |
+| `results_top6/feature_importance_v4_*.csv` | SHAP feature importances per retrain cycle |
+| `results_top6/azalyst.db` | SQLite database with full run history |
+| `results_top6/models/` | XGBoost models (base + quarterly retrains) |
+
+---
+
+## Live Dashboard (Spyder Monitor)
+
+`VIEW_TRAINING.py` is a 4-panel live dashboard that displays real-time training progress. It is auto-launched by `RUN_AZALYST.bat` when you choose **Monitor = 1 (Terminal + Spyder)**.
+
+**Panels:**
+
+| Panel | What it shows |
+|---|---|
+| Training Quality by Cycle | Win rate % and rolling 4-week Sharpe per week |
+| PnL and Drawdown | Cumulative return curve + max drawdown curve |
+| Current Status | Run state, week, trade count, win rate, Sharpe, drawdown, profit factor |
+| Recent Log Tail | Last 18 lines from `run_log.txt` (live engine output) |
+
+**How to use:**
+- **Auto:** Select `Monitor: 1` in `RUN_AZALYST.bat` — dashboard opens automatically
+- **Manual:** Run `python VIEW_TRAINING.py` from a terminal, or press **F5** in Spyder
+- Refreshes every **5 seconds** — reads `results_top6/checkpoint_v4_latest.json` and `results_top6/run_log.txt`
+- Close the window or press `Ctrl+C` to exit
 
 ---
 
@@ -312,7 +336,8 @@ The selection is **dynamic and weekly** — whoever ranks highest/lowest among a
 | `azalyst_tf_utils.py` | Timeframe-aware bar count utilities |
 | `build_feature_cache.py` | Precompute features → parquet cache (5–20x speedup) |
 | `validate_startup.py` | Pre-flight checks — directories, modules, engine config |
-| `RUN_AZALYST.bat` | Windows one-click launcher — GPU detection, auto-install |
+| `VIEW_TRAINING.py` | **Live 4-panel Spyder Monitor** — reads `results_top6/` every 5 s, shows PnL, win rate, Sharpe, log tail |
+| `RUN_AZALYST.bat` | Windows one-click launcher — GPU detection, auto-install, optional dashboard launch |
 
 ---
 
@@ -393,7 +418,9 @@ timestamp | open | high | low | close | volume
 | Feature cache stale | Delete `feature_cache/` and re-run — rebuilds automatically |
 | OOM / freeze | Reduce `MAX_TRAIN_ROWS` in config (2M for RTX 2050, 4M for T4) |
 | Pipeline closes immediately | Confirm Python path has no spaces; use `RUN_AZALYST.bat` |
-| No results after run | Check `results/` for output files. If empty, check data folder has `.parquet` files |
+| No results after run | Check `results_top6/` for output files. If empty, check data folder has `.parquet` files |
+| Dashboard shows "IDLE" | Engine hasn't started yet — launch `VIEW_TRAINING.py` after starting the engine, not before |
+| Dashboard not found | `VIEW_TRAINING.py` must be in the engine root folder — restore it with `git checkout HEAD -- VIEW_TRAINING.py` |
 
 ---
 
