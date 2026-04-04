@@ -7,8 +7,8 @@ An institutional-style quantitative research platform built as a personal projec
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue?style=flat-square&logo=python)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat-square)
 ![Status](https://img.shields.io/badge/Status-Active%20Research-brightgreen?style=flat-square)
-![Features](https://img.shields.io/badge/Features-72%20Cross--Sectional-red?style=flat-square)
-![ML](https://img.shields.io/badge/ML-XGBoost%20Regression%20CUDA-blueviolet?style=flat-square)
+![Features](https://img.shields.io/badge/Features-10%20Stable-red?style=flat-square)
+![ML](https://img.shields.io/badge/ML-ElasticNet%20%2B%20XGBoost%20Challenger-blueviolet?style=flat-square)
 ![CV](https://img.shields.io/badge/CV-Purged%20K--Fold-orange?style=flat-square)
 ![Version](https://img.shields.io/badge/Engine-v6.0-gold?style=flat-square)
 
@@ -20,165 +20,147 @@ An institutional-style quantitative research platform built as a personal projec
 
 Azalyst Alpha Research Engine is a research infrastructure project for discovering and validating systematic alpha signals in cryptocurrency markets. It is designed as a rigorous quantitative research system — not a trading bot, not a signal service, not a financial product.
 
-### Latest Update (Apr 4, 2026) — v6.0 Consensus Rebuild
+The engine is a consensus rebuild synthesized from recommendations by 7 independent AI models (GPT 5.4, Gemini 3.1 Pro, Claude Opus 4.6, Qwen, DeepSeek, GLM5, Mistral) after a comprehensive audit. All 7 recommendations were evaluated, ranked, and merged into a single consensus engine.
 
-**v6** is a ground-up rebuild of the prediction pipeline, informed by recommendations from 7 independent AI models (GPT 5.4, Gemini 3.1 Pro, Claude Opus 4.6, Qwen, DeepSeek, GLM5, Mistral) after a comprehensive audit proved v5 was overfitting (96% IC decay IS→OOS). All 7 recommendations were evaluated, ranked, and merged into a consensus engine.
-
-### v5 vs v6
-
-| Aspect | v5 | v6 (Consensus Rebuild) |
-|---|---|---|
-| **Model** | XGBRegressor (complex) | ElasticNetCV (simple, interpretable) |
-| **Challenger** | — | XGBoost (must beat Elastic Net by IC margin) |
-| **Target** | Raw forward log return | **Beta-neutral** (daily cross-sectional demeaned) |
-| **Training window** | Expanding (all history) | **Rolling 26 weeks** (recent data only) |
-| **Features** | 72 → IC-filtered ~46 (unstable, Jaccard 0.20–0.36) | **10 stable** (3 core + 7 stable, turnover cap ≤3/retrain) |
-| **Feature selection** | IC threshold 0.005, recomputed each retrain | **Stability-tracked**: need +IC in ≥2 periods to add, −IC in ≥3 to drop |
-| **Regime handling** | Detect only (no portfolio impact) | **Regime-gated**: no shorts in BULL_TREND, half size in HIGH_VOL |
-| **`--force-invert`** | Required (model signal inverted) | **Removed** — beta-neutral target fixes sign problem |
-| **Confidence model** | XGBClassifier 2nd-stage | **Removed** — equal-weight positions |
-| **Retraining** | Every 13 weeks (always adopt) | Every 13 weeks, **IC-gated** (reject if OOS IC ≤ 0) |
-| **Kill criteria** | DD only (−15%) | **4-gate**: OOS IC + feature stability + regime survival + beat baseline |
-| **Falsification** | None | **Built-in** campaign (single-factor baselines vs ML) |
-| **PnL tracking** | Combined | **Long/short decomposed** separately |
-| **Portfolio** | Top-15 per side, 3× leverage | **Top-5 per side**, 1× leverage (conservative) |
-| **Output dir** | `results_top6/` | `results_v6/` |
-
-**v5** was a ground-up rebuild from v4 (binary classifier → XGBoost regression), inspired by Jane Street's Kaggle competition approach:
-2. **Short horizons** — 1hr (12 bars) and 15min (3 bars) instead of 4hr (48 bars)
-3. **Reversal-dominated features** — 72 features with 8 reversal signals, 6 pump-dump indicators, and 4 quantile-ranked features (Jane Street technique)
-4. **Per-bar prediction** — no week-averaging that destroys signal
-5. **Pump-dump detection** — multi-signal detector to filter manipulated coins
-6. **IC-gating kill-switch** — halt trading when model signal inverts
-7. **Weighted R² metric** — penalizes direction + magnitude errors (Jane Street metric)
-8. **Confidence model** — P(direction correct) for position sizing
-
-The engine processes 3+ years of 5-minute OHLCV data across 444 Binance pairs, engineers 72 cross-sectional features, trains an XGBoost regression model using purged K-Fold cross-validation with an expanding training window, and validates strictly out-of-sample across 2 full years (Y2+Y3).
+The engine processes 3+ years of 5-minute OHLCV data across 444 Binance pairs, engineers 72 cross-sectional features (selecting 10 stable ones for training), trains an Elastic Net model with optional XGBoost challenger using purged K-Fold cross-validation with a rolling 26-week training window, and validates strictly out-of-sample across 2 full years (Y2+Y3).
 
 ---
 
-## v5 Architecture
+## v6 Architecture
 
 ```
-                     AZALYST v5.0 RESEARCH ENGINE
+                     AZALYST v6.0 CONSENSUS REBUILD ENGINE
 
-  DATA LAYER              FEATURE ENGINE             SIGNAL SOURCES
- Polars+DuckDB    72 cross-sectional  Regression return pred
- 444 coins               features, TF-aware         Confidence model
- 26M+ rows               8 reversal signals         Pump/dump filter
- 3-year 5min             4 quantile-ranked          IC-gated selection
+  DATA LAYER              FEATURE ENGINE            SIGNAL SOURCES
+ Polars+DuckDB    72 computed,          Beta-neutral return pred
+ 444 coins               10 stable selected         Regime-gated portfolio
+ 26M+ rows               Stability-tracked          Falsification campaign
+ 3-year 5min             Turnover cap ≤3            4-gate kill criteria
 
-                            SIGNAL COMBINER
-                           Regime-adaptive
-                           IC-weighted fusion
-                           4-state detector
+                          REGIME GATING
+                         BULL_TREND → long-only, half size
+                         HIGH_VOL   → half position size
+                         BEAR/LOW   → full long-short
 
-  PRIMARY MODEL         CONFIDENCE MODEL        WALK-FORWARD
-                        (replaces meta-label)
- XGBRegressor CUDA   2nd-stage XGBoost   Expanding window
- Purged K-Fold         P(direction correct)     Walk Y2+Y3 (2yr)
- 12-bar horizon        Magnitude sizing         Quarterly retrain
- Weighted R²                                    IC feature gating
+  PRIMARY MODEL         CHALLENGER MODEL        WALK-FORWARD
+ ElasticNetCV           XGBoost (optional)      Rolling 26-week window
+ Purged K-Fold          Must beat EN by IC      Walk Y2+Y3 (2yr)
+ 12-bar horizon         IC margin = 0.005       Quarterly retrain
+ Beta-neutral target                            IC-gated adoption
 
-  RISK INTEGRATION      KILL-SWITCHES           PERSISTENCE
- VaR / CVaR            -15% max DD             SQLite (azalyst.db)
- Position risk cap     IC-gating threshold     SHAP per cycle
- Magnitude sizing      Pump-dump filter        Full run history
+  RISK INTEGRATION      KILL CRITERIA           PERSISTENCE
+ Equal-weight           4-gate evaluation       SQLite (azalyst_v6.db)
+ 1× leverage            OOS IC positive         Feature stability log
+ Top-5 per side         Feature Jaccard >0.5    Long/short PnL decomp
+ 0.2% round-trip fee    Regime survival ≥2      Full run history
+                        ML beats baseline
 ```
-
-### What Changed from v4 → v5
-
-| Aspect | v4 (broken) | v5 (rebuilt) |
-|---|---|---|
-| Model type | XGBClassifier (binary) | XGBRegressor (continuous returns) |
-| Objective | `binary:logistic` + AUC | `reg:squarederror` + Weighted R² |
-| Features | 56 (momentum-dominated) | 72 (reversal-dominated + pump-dump + qrank) |
-| Horizon | 48 bars (4hr) | 12 bars (1hr) / 3 bars (15min) |
-| Label | Binary: `r > cross-sectional median` | Continuous: raw forward return |
-| Prediction | `predict_proba()[:, 1]` averaged per week | `predict()` per bar |
-| Sizing | Meta-labeling P(correct) | Confidence model + predicted magnitude |
-| IC threshold | -0.02 (too lax) | 0.00 (strict) + IC-gating at -0.03 |
-| Pump-dump | Not integrated | Multi-signal detector with regime classification |
-| Kill-switches | DD only (-15%) | DD (-15%) + IC-gating + pump-dump filter |
 
 ### Core Capabilities
 
-- **72 cross-sectional features** across 11 categories — returns, volume, volatility, technical, microstructure, price structure, WorldQuant alphas, regime, fractional differentiation, **reversal signals**, **pump-dump indicators**, and **quantile-ranked features**
-- **XGBoost Regression** — continuous return prediction, Weighted R² metric (Jane Street)
-- **Short-horizon forecasting** — 1hr (12 bars) and 15min (3 bars) forward returns
-- **Pump-dump detection** — multi-signal composite score filtering manipulated coins
-- **IC-gating** — halt all trading when rolling IC drops below configurable threshold (default `-0.03`; OPT-1 sets to `-1.00` to allow all-regime trading)
-- **Expanding training window** — train on Y1, then Y1+Y2, then Y1+Y2+Y3
+- **10 stable features** — 3 core (`ret_1w`, `ret_3d`, `vol_regime`) + 7 stable, with turnover cap ≤3 per retrain
+- **Elastic Net regression** — interpretable linear model with built-in alpha/l1_ratio cross-validation
+- **XGBoost challenger** — optional second model that must beat Elastic Net by IC margin to be adopted
+- **Beta-neutral target** — daily cross-sectional demeaned forward returns, eliminates the need for `--force-invert`
+- **Rolling 26-week training window** — uses only recent data, adapts to changing market conditions
+- **Regime-gated portfolio** — no shorts in BULL_TREND, half position size in HIGH_VOL
+- **Feature stability tracking** — Jaccard overlap across retrains, positive IC in ≥2 periods to add, negative IC in ≥3 to drop
+- **Built-in falsification campaign** — single-factor baselines vs ML to prove signal exists
+- **4-gate kill criteria** — OOS IC + feature stability + regime survival + beat baseline
+- **IC-gated retraining** — model updates rejected if OOS IC ≤ 0
+- **Long/short PnL decomposition** — separate tracking of each portfolio leg
 - **2-year out-of-sample** — walk-forward on Y2+Y3 (104 weeks, never seen during initial training)
-- **Risk integration** — VaR/CVaR scaled position sizing, 3% per-position risk cap
-- **SHAP explainability** — TreeExplainer after every training cycle
-- **SQLite persistence** — all trades, metrics, SHAP, models in `results/azalyst.db`
-- **GPU-accelerated** — NVIDIA CUDA via XGBoost
+- **SQLite persistence** — all trades, metrics, models in `results_v6/azalyst_v6.db`
 
 ---
 
-## Feature Engineering — 72 Features, 11 Categories
+## Feature Engineering — 10 Stable Features
 
-| Category | Count | Features |
-|---|---|---|
-| Returns | 7 | `ret_1bar` `ret_1h` `ret_4h` `ret_1d` `ret_2d` `ret_3d` `ret_1w` |
-| Volume | 6 | `vol_ratio` `vol_ret_1h` `vol_ret_1d` `obv_change` `vpt_change` `vol_momentum` |
-| Volatility | 7 | `rvol_1h` `rvol_4h` `rvol_1d` `vol_ratio_1h_1d` `atr_norm` `parkinson_vol` `garman_klass` |
-| Technical | 10 | `rsi_14` `rsi_6` `macd_hist` `bb_pos` `bb_width` `stoch_k` `stoch_d` `cci_14` `adx_14` `dmi_diff` |
-| Microstructure | 6 | `vwap_dev` `amihud` `kyle_lambda` `spread_proxy` `body_ratio` `candle_dir` |
-| Price Structure | 6 | `wick_top` `wick_bot` `price_accel` `skew_1d` `kurt_1d` `max_ret_4h` |
-| WorldQuant Alphas | 6 | `wq_alpha001` `wq_alpha012` `wq_alpha031` `wq_alpha098` `vol_adjusted_mom` `trend_consistency` |
-| Regime | 5 | `vol_regime` `trend_strength` `corr_btc_proxy` `hurst_exp` `fft_strength` |
-| Memory-Preserving | 1 | `frac_diff_close` — fractional differentiation d=0.4 (AFML Ch. 5) |
-| **Reversal** (new) | **8** | `rev_1h` `rev_4h` `rev_1d` `rev_2d` `mean_rev_zscore_1h` `mean_rev_zscore_4h` `overbought_rev` `oversold_rev` |
-| **Pump-Dump** (new) | **6** | `pump_score` `dump_score` `vol_spike_zscore` `ret_vol_ratio_1h` `tail_risk_1h` `abnormal_range` |
-| **Quantile Rank** (new) | **4** | `qrank_ret_1h` `qrank_rvol_1d` `qrank_rev_1h` `qrank_vol_ratio` |
+72 cross-sectional features are computed from raw OHLCV data, but only 10 are selected for the model based on stability and economic interpretability.
+
+### Core Features (never dropped)
+
+| Feature | Description |
+|---|---|
+| `ret_1w` | 1-week return — momentum/reversal signal |
+| `ret_3d` | 3-day return — short-term momentum |
+| `vol_regime` | Volatility regime — state variable |
+
+### Stable Features (default set)
+
+| Feature | Description |
+|---|---|
+| `rvol_1d` | Daily realized volatility |
+| `rsi_14` | Mean reversion indicator |
+| `skew_1d` | Distribution asymmetry / tail risk |
+| `adx_14` | Trend strength |
+| `kyle_lambda` | Price impact / liquidity |
+| `mean_rev_zscore_1h` | Z-score of 1hr mean reversion |
+| `vol_ratio_1h_1d` | Intraday vs daily volatility ratio |
+
+### Feature Stability Rules
+
+- **Turnover cap**: max 3 features added/removed per retrain
+- **Add rule**: positive IC in ≥2 recent periods
+- **Drop rule**: negative IC in ≥3 recent periods
+- **Candidates**: `ret_1d`, `ret_2d`, `rev_1h`, `rev_1d`, `rvol_4h`, `atr_norm`, `cci_14`, `bb_pos`, `vwap_dev`, `amihud`, `trend_strength`, `frac_diff_close`, `vol_ret_1d`
 
 ---
 
 ## ML Pipeline
 
-### Training Target — Continuous Forward Returns (v5)
+### Training Target — Beta-Neutral Forward Returns
 
-The model predicts the **raw forward return** at the 1hr horizon. No binary conversion, no cross-sectional median — the model learns to predict magnitude and direction simultaneously.
+The model predicts the **beta-neutral forward return** — the raw 1hr forward log return minus the daily cross-sectional mean. This removes market-wide moves and focuses on relative outperformance.
 
-$$\hat{r}_{i,t+12} = f(X_{i,t}) \quad \text{where } r \text{ is the log return over 12 bars (1hr)}$$
+$$\hat{r}^{*}_{i,t+12} = f(X_{i,t}) \quad \text{where } r^{*} = r_{i} - \bar{r}_{\text{day}} \text{ (demeaned)}$$
 
 ### Prediction → Trade Signal
 
 - **Predicted return > 0** → candidate long (ranked by magnitude)
 - **Predicted return < 0** → candidate short (ranked by magnitude)
-- **Default mode** — Top 15% by predicted return → longs | Bottom 15% → shorts (quantile)
-- **`--top-n N` mode** — Take exactly N highest-ranked coins as longs and N lowest-ranked as shorts every week, regardless of universe size. Replaces the percentage quantile. Recommended for large universes (e.g. `--top-n 6` on 443 coins → 6 longs + 6 shorts/week)
-- **Position size** ∝ confidence model probability × risk scale × leverage
+- **Top-N mode** (default) — top 5 longs + bottom 5 shorts per week
+- **Equal-weight positions** — no confidence model, no magnitude sizing
 
-### Pump-Dump Filter
+### Regime-Gated Portfolio
 
-Multi-signal detector with 4 components:
-- Price spike z-score (sudden price jumps)
-- Volume spike z-score (abnormal volume)
-- Range spike z-score (wick expansion)
-- Reversal pattern score (quick reversal after spike)
+The portfolio is regime-aware with concrete position rules:
 
-Composite score [0, 1]. Symbols exceeding threshold (0.6) are filtered from the tradeable universe.
+| Regime | Longs | Shorts | Position Scale |
+|---|---|---|---|
+| BULL_TREND | Top-N | **None** | 0.5× |
+| HIGH_VOL_LATERAL | Top-N | Bottom-N | 0.5× |
+| BEAR_TREND | Top-N | Bottom-N | 1.0× |
+| LOW_VOL_GRIND | Top-N | Bottom-N | 1.0× |
 
-### IC-Gating Kill-Switch (v5)
+### IC-Gated Retraining
 
-When the rolling average feature IC drops below the configured threshold (`IC_GATING_THRESHOLD`, default `-0.03`; set to `-1.00` by OPT-1 to disable the kill-switch), the model's signal has inverted. Instead of trading on an inverted signal (losing money systematically), IC-gating halts all predictions until the signal recovers.
+Model retraining occurs every 13 weeks (quarterly) using a rolling 26-week window. New models are only adopted if OOS IC > 0 — otherwise the previous model is kept.
 
 ```
-If avg_recent_IC < IC_GATING_THRESHOLD  →  SKIP week (no trades, no risk)
-If cumulative DD > -15%                 →  HALT 4 weeks (standard kill-switch)
+If retrained model IC > 0        →  ADOPT new model
+If retrained model IC ≤ 0        →  REJECT, keep previous
+If cumulative DD > -15%          →  HALT 4 weeks (kill-switch)
 ```
-Override via CLI: `--ic-gating-threshold -1.0` (disable) or `--ic-gating-threshold 0.02` (strict)
 
-### Confidence Model (replaces Meta-Labeling)
+### Falsification Campaign
 
-A second-stage XGBoost classifier trained on the meta-question: **"When the regression model predicted a direction, was it correct?"**
+Before trusting ML predictions, the engine runs single-factor baselines:
+- `ret_1w` rank alone
+- `ret_3d` rank alone
+- `vol_regime` rank alone
+- Composite rank (average of core features)
+- Random predictions (null hypothesis)
 
-- Uses OOS fold predictions from base model + scaled features
-- Output: P(direction correct) ∈ [0, 1]
-- Directly scales position size: high confidence → larger position
+ML must beat the best baseline IC to justify its complexity.
+
+### 4-Gate Kill Criteria
+
+All 4 gates must pass for the strategy to continue:
+1. **OOS IC positive** — mean IC > 0, positive in >50% of weeks
+2. **Feature stability** — Jaccard overlap > 0.5 across retrains
+3. **Regime survival** — positive returns in ≥2 regimes
+4. **ML beats baseline** — ML IC ≥ best single-factor baseline IC
 
 ---
 
@@ -186,103 +168,40 @@ A second-stage XGBoost classifier trained on the meta-question: **"When the regr
 
 ### Option 1 — Windows One-Click
 
-Double-click **`RUN_AZALYST.bat`** — auto-detects GPU, installs dependencies, runs engine. The launcher prompts for universe mode:
-
-- **[1] Top-15 config** — v5 engine, rank all coins, trade top-15 per side
-- **[2] Full standard** — v5 engine, all coins, top/bottom 15% quantile each week
-- **[3] V6 Consensus** — v6 engine, Elastic Net, beta-neutral, regime-gated, rolling 26wk window, top-5 per side
+Double-click **`RUN_AZALYST.bat`** — auto-detects GPU, installs dependencies, runs the v6 engine with Elastic Net, beta-neutral target, regime-gated portfolio, rolling 26-week window, top-5 per side.
 
 ### Option 2 — CLI
 
 ```bash
-# v6 — Consensus Rebuild (recommended)
+# Default — Elastic Net, CPU, top-5 per side
 python azalyst_v6_engine.py --no-gpu --top-n 5
 
-# v6 — with XGBoost challenger + GPU
+# With XGBoost challenger + GPU
 python azalyst_v6_engine.py --gpu --xgb-challenger --top-n 5
 
-# v5 — GPU run (full universe, 15% quantile)
-python azalyst_v5_engine.py --gpu
-
-# Top-6 dynamic selection — winning config (train on all coins, trade top/bottom 6 each week)
-python azalyst_v5_engine.py --gpu --no-shap \
-  --data-dir "./data" --feature-dir "./feature_cache" --out-dir "./results_top6" \
-  --target 5d --force-invert --leverage 3 --ic-gating-threshold -1.0 --max-dd -1.0 \
-  --top-n 6
-
 # Custom top-N (e.g. top 10 longs + 10 shorts)
-python azalyst_v5_engine.py --gpu --no-shap --target 5d --force-invert --top-n 10
+python azalyst_v6_engine.py --gpu --top-n 10
+
+# Custom rolling window (e.g. 52 weeks instead of 26)
+python azalyst_v6_engine.py --no-gpu --rolling-window 52
+
+# Skip falsification campaign
+python azalyst_v6_engine.py --no-gpu --no-falsify
 ```
-
----
-
-## Top-N Dynamic Selection Strategy (v5)
-
-### Why the 50-coin run hit +8,111%
-
-The engine scored every coin with XGBoost each week, applied `--force-invert` (the model's signal was anti-correlated so inverting it made it predictive), then **ranked all 50 coins** and took:
-- **Top 15%** (~7-8 coins) → Longs
-- **Bottom 15%** (~7-8 coins) → Shorts
-
-The picks changed **dynamically every week** based on whoever ranked highest/lowest.
-
-### The 443-coin problem
-
-Scaling this logic to 443 coins at 15% quantile = **~66 longs + 66 shorts per week** — too many noisy picks, higher execution cost, diluted signal quality.
-
-### The fix: `--top-n`
-
-Instead of a percentage, use a fixed **N = 6** each week regardless of universe size:
-- Model trains on **all 443 coins** (full cross-sectional signal)
-- Each week: rank all 443 predictions → take **top 6 as longs**, **bottom 6 as shorts**
-- Concentrated, high-conviction positions from the full universe
-
-This scales cleanly: same logic as the winning 50-coin run, just narrower basket.
-
-**Persistence analysis** (103-week OOS on 50-coin run) confirmed the model consistently returned these coins in the top long basket:
-
-| Rank | Symbol | Weeks in Long Basket | Persistence |
-|---|---|---|---|
-| 1 | `1000SATSUSDT` | 49/103 | 47.6% |
-| 2 | `BONKUSDT` | 49/103 | 47.6% |
-| 3 | `ADXUSDT` | 38/103 | 36.9% |
-| 4 | `FDUSDUSDT` | 30/103 | 29.1% |
-| 5 | `WINUSDT` | 27/103 | 26.2% |
-| 6 | `AEURUSDT` | 23/103 | 22.3% |
-
-### `--top-n` Flag
-
-```bash
---top-n 6    # trade exactly 6 longs + 6 shorts per week (replaces 15% quantile)
---top-n 10   # trade exactly 10 longs + 10 shorts per week
---top-n 0    # disabled — use standard 15% quantile (default)
-```
-
-The selection is **dynamic and weekly** — whoever ranks highest/lowest among all coins that week gets traded. No fixed list of coins.
-
-### Winning Backtest Config (50-coin run, 103 weeks OOS)
-
-| Metric | Value |
-|---|---|
-| Total return | **+8,111.85%** |
-| Annualised | **+825.79%** |
-| Sharpe ratio | **3.68** |
-| Win rate | **70.87%** (73W / 30L) |
-| Coins traded per week | ~7 longs + 7 shorts (15% of 50) |
-| Horizon | 5-day forward return |
-| Inversion | `--force-invert` (anti-signal mode) |
-| Leverage | 3× |
-| IC gate | disabled (`-1.0` threshold) |
 
 **What you'll see during training:**
 ```
-  AZALYST v5  —  Short-Horizon Regression Engine
-  Model: XGBoost Regressor (1hr forward return)
-  Features: Reversal-dominated + Pump-Dump + Quantile Rank
+  AZALYST v6  —  Consensus Rebuild Engine
+  Model        : Elastic Net (linear)
+  Target       : future_ret_1h (beta-neutral)
+  Window       : Rolling 26 weeks
+  Features     : 10 stable + turnover cap 3
+  Portfolio    : top-5 per side, regime-gated
 
-  Week  4 [Y2] | ret=+0.32%  IC=+0.0312  cum=+1.2%  DD=-0.4%  BULL_TREND
-  Week 13 [Y2]: QUARTERLY RETRAIN (expanding window to 2024-06-15)...
-    R²=0.0023  IC=0.0156  ICIR=0.4821  (42.3s)
+  Week  4 [Y2]:   5 trades (5L/0S) | ret=+0.32% (L=+0.32% S=+0.00%) | IC=+0.0312 | cum=+1.2% | DD=0.4% | BULL_TREND
+  Week 13 [Y2]: QUARTERLY RETRAIN (rolling 26wk to 2024-06-15)...
+    [v6_w013] ElasticNet: alpha=0.000312  l1_ratio=0.50  nonzero=8/10  R²=0.0023  IC=0.0156  ICIR=0.4821
+    Adopted new model (IC=+0.0156 > 0)  (2.3s)
   ...
 ```
 
@@ -290,16 +209,19 @@ The selection is **dynamic and weekly** — whoever ranks highest/lowest among a
 
 ## Outputs
 
-All output files are written to `results_top6/` (default) or the directory passed via `--out-dir`.
+All output files are written to `results_v6/` (default) or the directory passed via `--out-dir`.
 
 | File | Description |
 |------|-------------|
-| `results_top6/checkpoint_v4_latest.json` | Live checkpoint — weekly summary, trades, run state (read by dashboard) |
-| `results_top6/run_log.txt` | Full pipeline log (read by dashboard) |
-| `results_top6/train_summary_v4.json` | Final training metrics |
-| `results_top6/feature_importance_v4_*.csv` | SHAP feature importances per retrain cycle |
-| `results_top6/azalyst.db` | SQLite database with full run history |
-| `results_top6/models/` | XGBoost models (base + quarterly retrains) |
+| `results_v6/checkpoint_v6_latest.json` | Live checkpoint — weekly summary, trades, run state |
+| `results_v6/run_log_v6.txt` | Full pipeline log |
+| `results_v6/train_summary_v6.json` | Training metrics (model type, IC, R², beta-neutral flag) |
+| `results_v6/feature_importance_v6_*.csv` | Feature importances per retrain cycle |
+| `results_v6/all_trades_v6.csv` | All trades with long/short PnL decomposition |
+| `results_v6/weekly_summary_v6.csv` | Weekly metrics (return, IC, regime, long/short PnL) |
+| `results_v6/performance_v6.json` | Final performance report + 4-gate kill criteria |
+| `results_v6/azalyst_v6.db` | SQLite database with full run history |
+| `results_v6/models/` | Elastic Net / XGBoost models (base + quarterly retrains) |
 
 ---
 
@@ -319,7 +241,7 @@ All output files are written to `results_top6/` (default) or the directory passe
 **How to use:**
 - **Auto:** Select `Monitor: 1` in `RUN_AZALYST.bat` — dashboard opens automatically
 - **Manual:** Run `python VIEW_TRAINING.py` from a terminal, or press **F5** in Spyder
-- Refreshes every **5 seconds** — reads `results_top6/checkpoint_v4_latest.json` and `results_top6/run_log.txt`
+- Refreshes every **5 seconds** — reads `results_v6/checkpoint_v6_latest.json` and `results_v6/run_log_v6.txt`
 - Close the window or press `Ctrl+C` to exit
 
 ---
@@ -331,18 +253,18 @@ All output files are written to `results_top6/` (default) or the directory passe
 | File | Purpose |
 |---|---|
 | `azalyst_v6_engine.py` | **v6 engine** — Elastic Net consensus rebuild, beta-neutral target, regime-gated portfolio, rolling window, falsification campaign, 4-gate kill criteria |
-| `azalyst_v5_engine.py` | **v5 engine** — XGBoost regression walk-forward, IC-gating, pump-dump filter, confidence model, SHAP, SQLite |
-| `azalyst_db.py` | SQLite persistence — trades, metrics, SHAP, model artifacts (7 tables, WAL mode) |
+| `azalyst_v5_engine.py` | Shared infrastructure — `LazySymbolStore`, `detect_regime`, `build_feature_store`, `PurgedTimeSeriesCV`, checkpoint utilities |
+| `azalyst_db.py` | SQLite persistence — trades, metrics, model artifacts (7 tables, WAL mode) |
 | `azalyst_factors_v2.py` | 72 cross-sectional features — reversal signals, pump-dump indicators, quantile rank, WQ alphas, frac. diff |
-| `azalyst_pump_dump.py` | **NEW** — Multi-signal pump-dump detector with regime classification |
-| `azalyst_train.py` | Training module — XGBRegressor, XGBClassifier confidence model, PurgedTimeSeriesCV, Weighted R² |
-| `azalyst_ml.py` | ML module v5 — XGBoost regression predictor class |
+| `azalyst_pump_dump.py` | Multi-signal pump-dump detector with regime classification |
+| `azalyst_train.py` | Training utilities — `compute_ic`, PurgedTimeSeriesCV |
+| `azalyst_ml.py` | ML utilities — XGBoost regression predictor class |
 | `azalyst_risk.py` | Portfolio risk — MVO, HRP, Black-Litterman, VaR/CVaR, position constraints |
 | `azalyst_signal_combiner.py` | IC-weighted regime-adaptive signal fusion — 4 sources, 4-state detector |
 | `azalyst_tf_utils.py` | Timeframe-aware bar count utilities |
 | `build_feature_cache.py` | Precompute features → parquet cache (5–20x speedup) |
 | `validate_startup.py` | Pre-flight checks — directories, modules, engine config |
-| `VIEW_TRAINING.py` | **Live 4-panel Spyder Monitor** — reads `results_top6/` every 5 s, shows PnL, win rate, Sharpe, log tail |
+| `VIEW_TRAINING.py` | **Live 4-panel Spyder Monitor** — reads `results_v6/` every 5 s, shows PnL, win rate, Sharpe, log tail |
 | `RUN_AZALYST.bat` | Windows one-click launcher — GPU detection, auto-install, optional dashboard launch |
 
 ---
@@ -351,29 +273,23 @@ All output files are written to `results_top6/` (default) or the directory passe
 
 | Parameter | Value |
 |---|---|
-| Model | XGBRegressor (`reg:squarederror`) |
-| XGBoost trees | 1,000 (primary) / 500 (confidence) |
-| Learning rate | 0.02 |
-| Max depth | 6 (primary) / 4 (confidence) |
-| Min child weight | 30 (primary) / 50 (confidence) |
-| Subsample | 0.8 |
-| Column sample | 0.7 (tree) / 0.7 (level) |
-| Regularisation | alpha=0.1, lambda=1.0 |
+| Primary model | ElasticNetCV (`l1_ratio` ∈ [0.1, 0.3, 0.5, 0.7, 0.9], 50 alphas) |
+| Challenger model | XGBoost (`--xgb-challenger`, max_depth=3, n_estimators=500) |
+| Target | Beta-neutral 1hr forward log return (daily cross-sectional demeaned) |
 | CV splits | 5, purged (48-bar gap) |
-| VRAM guard | 2M rows (RTX 2050) / 4M rows (T4) |
-| Training | Expanding window (Y1 → Y1+Y2 → Y1+Y2+Y3) |
+| VRAM guard | 2M rows max training matrix |
+| Training | Rolling 26-week window (configurable via `--rolling-window`) |
 | Walk-forward | Y2 + Y3 (2-year strict OOS) |
-| Retrain | Every 13 weeks (quarterly, expanding window) |
-| Feature selection | Rolling 8-week IC, threshold 0.00, min 20 features |
-| IC-gating | Halt when avg IC < threshold (default `-0.03` · OPT-1: `-1.00`) |
+| Retrain | Every 13 weeks (quarterly), IC-gated adoption (reject if IC ≤ 0) |
+| Features | 10 stable (3 core + 7 stable), turnover cap ≤3 per retrain |
+| Regime gating | BULL_TREND → long-only half size, HIGH_VOL → half size |
+| Kill criteria | 4-gate: OOS IC + feature stability + regime survival + beat baseline |
 | DD kill-switch | -15% max drawdown, 4-week pause |
-| Risk cap | 3% portfolio risk per position (VaR-based) |
 | Universe | 444 coins cross-sectional pooling |
-| Horizon | 1hr (12 × 5-min bars) default / 5d (1440 × 5-min bars) with `--target 5d` |
-| Portfolio | Long top 15%, short bottom 15% (default) — or fixed N per side via `--top-n` (e.g. `--top-n 6` = 6 longs + 6 shorts from full ranked universe) |
+| Horizon | 1hr (12 × 5-min bars) default |
+| Portfolio | Top-5 per side (default), equal-weight, 1× leverage |
 | Fees | 0.2% round-trip, position-tracked |
-| Pump-dump threshold | 0.6 composite score |
-| Frac. diff. d | 0.4 (FFD method, threshold 1e-5) |
+| Falsification | Single-factor baselines (ret_1w, ret_3d, vol_regime, composite, random) |
 
 ---
 
@@ -383,9 +299,9 @@ All output files are written to `results_top6/` (default) or the directory passe
 |---|---|---|
 | Feature engineering | **Lopez de Prado** — *Advances in Financial Machine Learning* | Fractional differentiation, purged K-Fold CV |
 | Signal combination | **Grinold & Kahn** — *Active Portfolio Management* | IC-weighted signal fusion, information ratio targeting |
-| Competition ML | **Jane Street Kaggle** | Regression objective, Weighted R², quantile rank features, per-timestep prediction |
+| Model selection | **Consensus of 7 AI models** | Elastic Net default, XGBoost challenger, falsification campaign |
 | Robust estimation | **Huber** — *Robust Statistics* (via RobustScaler) | Median/IQR scaling for fat-tailed crypto distributions |
-| Factor models | **Fama & French**, **Barra** | Cross-sectional alpha, factor decomposition |
+| Factor models | **Fama & French**, **Barra** | Cross-sectional alpha, beta-neutral target |
 | Microstructure | **Kyle (1985)**, **Amihud (2002)** | Kyle lambda, Amihud illiquidity ratio |
 | Volatility | **Garman & Klass (1980)**, **Parkinson (1980)** | Range-based volatility estimators |
 | Time series | **Hurst (1951)**, **FFT** | Regime detection, cyclical pattern identification |
@@ -424,7 +340,7 @@ timestamp | open | high | low | close | volume
 | Feature cache stale | Delete `feature_cache/` and re-run — rebuilds automatically |
 | OOM / freeze | Reduce `MAX_TRAIN_ROWS` in config (2M for RTX 2050, 4M for T4) |
 | Pipeline closes immediately | Confirm Python path has no spaces; use `RUN_AZALYST.bat` |
-| No results after run | Check `results_top6/` for output files. If empty, check data folder has `.parquet` files |
+| No results after run | Check `results_v6/` for output files. If empty, check data folder has `.parquet` files |
 | Dashboard shows "IDLE" | Engine hasn't started yet — launch `VIEW_TRAINING.py` after starting the engine, not before |
 | Dashboard not found | `VIEW_TRAINING.py` must be in the engine root folder — restore it with `git checkout HEAD -- VIEW_TRAINING.py` |
 
