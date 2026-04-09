@@ -22,7 +22,7 @@ Azalyst Alpha Research Engine is a research infrastructure project for discoveri
 
 The engine is a consensus rebuild synthesized from recommendations by 7 independent AI models (GPT 5.4, Gemini 3.1 Pro, Claude Opus 4.6, Qwen, DeepSeek, GLM5, Mistral) after a comprehensive audit. All 7 recommendations were evaluated, ranked, and merged into a single consensus engine.
 
-The engine processes 3+ years of 5-minute OHLCV data across 444 Binance pairs, engineers 72 cross-sectional features (selecting 10 stable ones for training), trains an Elastic Net model with optional XGBoost challenger using purged K-Fold cross-validation with a rolling 26-week training window, and validates strictly out-of-sample across 2 full years (Y2+Y3).
+The engine processes 3+ years of 5-minute OHLCV data across 444 Binance pairs, engineers 72 cross-sectional features (selecting 10 stable ones for training), trains an Elastic Net model with optional XGBoost challenger using purged K-Fold cross-validation with a rolling 13-week training window, and validates strictly out-of-sample across 2 full years (Y2+Y3).
 
 ---
 
@@ -43,13 +43,13 @@ The engine processes 3+ years of 5-minute OHLCV data across 444 Binance pairs, e
                          BEAR/LOW   → full long-short
 
   PRIMARY MODEL         CHALLENGER MODEL        WALK-FORWARD
- ElasticNetCV           XGBoost (optional)      Rolling 26-week window
+ ElasticNetCV           XGBoost (optional)      Rolling 13-week window
  Purged K-Fold          Must beat EN by IC      Walk Y2+Y3 (2yr)
  12-bar horizon         IC margin = 0.005       Quarterly retrain
  Beta-neutral target                            IC-gated adoption
 
   RISK INTEGRATION      KILL CRITERIA           PERSISTENCE
- Equal-weight           4-gate evaluation       SQLite (azalyst_v6.db)
+ Vol-scaled longs       4-gate evaluation       SQLite (azalyst_v6.db)
  1× leverage            OOS IC positive         Feature stability log
  Top-5 per side         Feature Jaccard >0.5    Long/short PnL decomp
  0.2% round-trip fee    Regime survival ≥2      Full run history
@@ -62,8 +62,8 @@ The engine processes 3+ years of 5-minute OHLCV data across 444 Binance pairs, e
 - **Elastic Net regression** — interpretable linear model with built-in alpha/l1_ratio cross-validation
 - **XGBoost challenger** — optional second model that must beat Elastic Net by IC margin to be adopted
 - **Beta-neutral target** — daily cross-sectional demeaned forward returns, eliminates the need for `--force-invert`
-- **Rolling 26-week training window** — uses only recent data, adapts to changing market conditions
-- **Regime-gated portfolio** — no shorts in BULL_TREND, half position size in HIGH_VOL
+- **Rolling 13-week training window** — uses only recent data, adapts to changing market conditions
+- **Regime-gated portfolio** — no shorts in BULL_TREND, vol-scaled long sizing, HIGH_VOL_LATERAL skip option
 - **Feature stability tracking** — Jaccard overlap across retrains, positive IC in ≥2 periods to add, negative IC in ≥3 to drop
 - **Built-in falsification campaign** — single-factor baselines vs ML to prove signal exists
 - **4-gate kill criteria** — OOS IC + feature stability + regime survival + beat baseline
@@ -119,8 +119,10 @@ $$\hat{r}^{*}_{i,t+12} = f(X_{i,t}) \quad \text{where } r^{*} = r_{i} - \bar{r}_
 
 - **Predicted return > 0** → candidate long (ranked by magnitude)
 - **Predicted return < 0** → candidate short (ranked by magnitude)
+- **Long filter** — only enter longs where predicted return > 0 (prevents low-beta fake signals)
 - **Top-N mode** (default) — top 5 longs + bottom 5 shorts per week
-- **Equal-weight positions** — no confidence model, no magnitude sizing
+- **Vol-scaled long sizing** — long positions sized inversely to `rvol_1d`; shorts equal-weight
+- **PnL cap** — no single position can lose more than 100%
 
 ### Regime-Gated Portfolio
 
@@ -128,19 +130,19 @@ The portfolio is regime-aware with concrete position rules:
 
 | Regime | Longs | Shorts | Position Scale |
 |---|---|---|---|
-| BULL_TREND | Top-N | **None** | 0.5× |
-| HIGH_VOL_LATERAL | Top-N | Bottom-N | 0.5× |
-| BEAR_TREND | Top-N | Bottom-N | 1.0× |
-| LOW_VOL_GRIND | Top-N | Bottom-N | 1.0× |
+| BULL_TREND | Top-N (pred > 0 only) | **None** | 0.5×, vol-scaled by rvol_1d |
+| HIGH_VOL_LATERAL | Top-N (pred > 0 only) | Bottom-N | 0.5× (or skip with `--no-trade-high-vol`) |
+| BEAR_TREND | Top-N (pred > 0 only) | Bottom-N | 1.0× |
+| LOW_VOL_GRIND | Top-N (pred > 0 only) | Bottom-N | 1.0× |
 
 ### IC-Gated Retraining
 
-Model retraining occurs every 13 weeks (quarterly) using a rolling 26-week window. New models are only adopted if OOS IC > 0 — otherwise the previous model is kept.
+Model retraining occurs every 13 weeks (quarterly) using a rolling 13-week window. New models are only adopted if OOS IC > 0 — otherwise the previous model is kept.
 
 ```
 If retrained model IC > 0        →  ADOPT new model
 If retrained model IC ≤ 0        →  REJECT, keep previous
-If cumulative DD > -15%          →  HALT 4 weeks (kill-switch)
+If cumulative DD < -20%          →  PAUSE until DD recovers above -10%
 ```
 
 ### Falsification Campaign
@@ -168,7 +170,7 @@ All 4 gates must pass for the strategy to continue:
 
 ### Option 1 — Windows One-Click
 
-Double-click **`RUN_AZALYST.bat`** — auto-detects GPU, installs dependencies, runs the v6 engine with Elastic Net, beta-neutral target, regime-gated portfolio, rolling 26-week window, top-5 per side.
+Double-click **`RUN_AZALYST.bat`** — auto-detects GPU, installs dependencies, runs the v6 engine with Elastic Net, beta-neutral target, regime-gated portfolio, rolling 13-week window, top-5 per side.
 
 ### Option 2 — CLI
 
@@ -258,10 +260,7 @@ All output files are written to `results_v6/` (default) or the directory passed 
 | `azalyst_factors_v2.py` | 72 cross-sectional features — reversal signals, pump-dump indicators, quantile rank, WQ alphas, frac. diff |
 | `azalyst_pump_dump.py` | Multi-signal pump-dump detector with regime classification |
 | `azalyst_train.py` | Training utilities — `compute_ic`, PurgedTimeSeriesCV |
-| `azalyst_ml.py` | ML utilities — XGBoost regression predictor class |
 | `azalyst_risk.py` | Portfolio risk — MVO, HRP, Black-Litterman, VaR/CVaR, position constraints |
-| `azalyst_signal_combiner.py` | IC-weighted regime-adaptive signal fusion — 4 sources, 4-state detector |
-| `azalyst_tf_utils.py` | Timeframe-aware bar count utilities |
 | `build_feature_cache.py` | Precompute features → parquet cache (5–20x speedup) |
 | `validate_startup.py` | Pre-flight checks — directories, modules, engine config |
 | `VIEW_TRAINING.py` | **Live 4-panel Spyder Monitor** — reads `results_v6/` every 5 s, shows PnL, win rate, Sharpe, log tail |
@@ -278,16 +277,16 @@ All output files are written to `results_v6/` (default) or the directory passed 
 | Target | Beta-neutral 1hr forward log return (daily cross-sectional demeaned) |
 | CV splits | 5, purged (48-bar gap) |
 | VRAM guard | 2M rows max training matrix |
-| Training | Rolling 26-week window (configurable via `--rolling-window`) |
+| Training | Rolling 13-week window (configurable via `--rolling-window`) |
 | Walk-forward | Y2 + Y3 (2-year strict OOS) |
 | Retrain | Every 13 weeks (quarterly), IC-gated adoption (reject if IC ≤ 0) |
-| Features | 10 stable (3 core + 7 stable), turnover cap ≤3 per retrain |
-| Regime gating | BULL_TREND → long-only half size, HIGH_VOL → half size |
+| Features | 10 stable (3 core + 7 stable), turnover cap ≤3, regime-conditional IC tracking |
+| Regime gating | BULL_TREND → long-only, vol-scaled longs; HIGH_VOL_LATERAL → optional skip |
 | Kill criteria | 4-gate: OOS IC + feature stability + regime survival + beat baseline |
-| DD kill-switch | -15% max drawdown, 4-week pause |
+| DD kill-switch | -20% max drawdown, resume when DD recovers above -10% |
 | Universe | 444 coins cross-sectional pooling |
 | Horizon | 1hr (12 × 5-min bars) default |
-| Portfolio | Top-5 per side (default), equal-weight, 1× leverage |
+| Portfolio | Top-5 per side (default), vol-scaled longs, 1× leverage |
 | Fees | 0.2% round-trip, position-tracked |
 | Falsification | Single-factor baselines (ret_1w, ret_3d, vol_regime, composite, random) |
 
