@@ -95,8 +95,9 @@ HORIZON_BARS     = 12
 TARGET_COL          = "future_ret_1h"
 TARGET_COL_FALLBACK = "future_ret"
 
-# Rolling window (not expanding) — consensus from 5/7 recs
-ROLLING_WINDOW_WEEKS = 26
+# Rolling window (not expanding) — Priority 5 fix: reduced from 26 to 13 weeks
+# Recent 3-6 months of crypto data are more regime-relevant than a full 6 months
+ROLLING_WINDOW_WEEKS = 13
 
 # Retraining interval
 RETRAIN_WEEKS = 13
@@ -107,7 +108,8 @@ ROUND_TRIP_FEE = FEE_RATE * 2
 DEFAULT_TOP_N  = 5       # Conservative default (GPT 5.4: weak ranker → fewer picks)
 
 # Kill switches
-MAX_DRAWDOWN_KILL = -0.15
+MAX_DRAWDOWN_KILL = -0.20  # P2: raised from -15% to -20% for crypto volatility
+KILL_SWITCH_RECOVERY_THRESHOLD = -0.10  # P2: must recover above this to resume
 
 # Feature stability
 MAX_FEATURE_TURNOVER = 3   # Max features to add/remove per retrain (GPT 5.4)
@@ -161,6 +163,9 @@ class FeatureStabilityTracker:
     - Max 3 features added/removed per retrain
     - Need positive IC in ≥2 recent periods to be added
     - Need negative IC in ≥3 recent periods to be dropped
+
+    P4 fix: Tag each IC observation with the regime at that time.
+    Use regime-conditional IC for propose_update.
     """
 
     def __init__(self, core: List[str], initial_set: List[str],
@@ -168,54 +173,75 @@ class FeatureStabilityTracker:
         self.core = set(core)
         self.active = list(initial_set)
         self.max_turnover = max_turnover
-        self.ic_history: Dict[str, List[float]] = {}
+        # ic_history[feat] = list of (ic_value, regime) tuples
+        self.ic_history: Dict[str, List[Tuple[float, str]]] = {}
         self.retrain_feature_sets: List[Set[str]] = [set(initial_set)]
 
-    def record_ic(self, feature_ics: Dict[str, float]):
-        """Record IC measurements for all features."""
+    def record_ic(self, feature_ics: Dict[str, float], regime: str = "UNKNOWN"):
+        """Record IC measurements for all features, tagged with regime."""
         for feat, ic_val in feature_ics.items():
             if feat not in self.ic_history:
                 self.ic_history[feat] = []
-            self.ic_history[feat].append(ic_val)
+            self.ic_history[feat].append((ic_val, regime))
 
-    def propose_update(self, candidate_pool: List[str]) -> List[str]:
-        """Propose a new feature set respecting turnover cap."""
+    def propose_update(self, candidate_pool: List[str],
+                       current_regime: str = None) -> List[str]:
+        """Propose a new feature set respecting turnover cap.
+
+        P4 fix: regime-conditional IC for mean-reversion features.
+        """
         current_set = set(self.active)
         proposed = set(self.core)  # Core always stays
+
+        mean_reversion_regimes = {"LOW_VOL_GRIND", "HIGH_VOL_LATERAL"}
 
         # Evaluate current non-core features for removal
         removals = []
         for feat in self.active:
             if feat in self.core:
                 continue
-            ics = self.ic_history.get(feat, [])
-            if len(ics) >= 3:
-                recent = ics[-4:]  # last 4 measurements
-                neg_count = sum(1 for ic in recent if ic < 0)
+            observations = self.ic_history.get(feat, [])
+            if len(observations) >= 3:
+                recent = observations[-4:]
+                is_mr_feature = feat in ("rsi_14", "mean_rev_zscore_1h", "bb_pos")
+                neg_count = 0
+                for ic_val, reg in recent:
+                    if is_mr_feature and reg not in mean_reversion_regimes:
+                        continue
+                    if ic_val < 0:
+                        neg_count += 1
                 if neg_count >= 3:
                     removals.append(feat)
                 else:
-                    proposed.add(feat)  # Keep it
+                    proposed.add(feat)
             else:
-                proposed.add(feat)  # Not enough history to judge, keep
+                proposed.add(feat)
 
         # Evaluate candidates for addition
         additions = []
         for feat in candidate_pool:
             if feat in proposed:
                 continue
-            ics = self.ic_history.get(feat, [])
-            if len(ics) >= 2:
-                recent = ics[-4:]
-                pos_count = sum(1 for ic in recent if ic > 0)
-                if pos_count >= MIN_IC_PERIODS_TO_ADD:
-                    avg_ic = float(np.mean(recent))
+            observations = self.ic_history.get(feat, [])
+            if len(observations) >= 2:
+                recent = observations[-4:]
+                is_mr_feature = feat in ("rsi_14", "mean_rev_zscore_1h", "bb_pos")
+                pos_count = 0
+                ic_sum = 0.0
+                ic_n = 0
+                for ic_val, reg in recent:
+                    if is_mr_feature and reg not in mean_reversion_regimes:
+                        continue
+                    ic_sum += ic_val
+                    ic_n += 1
+                    if ic_val > 0:
+                        pos_count += 1
+                avg_ic = ic_sum / max(ic_n, 1)
+                if ic_n == 0 or pos_count >= MIN_IC_PERIODS_TO_ADD:
                     additions.append((feat, avg_ic))
 
-        # Sort additions by average IC (best first)
         additions.sort(key=lambda x: -x[1])
 
-        # Apply turnover cap
         n_removed = min(len(removals), self.max_turnover)
         actual_removals = removals[:n_removed]
         for feat in actual_removals:
@@ -538,7 +564,11 @@ def predict_week_v6(model, scaler, symbols, week_start, week_end,
             c_start = float(week_data["close"].iloc[0])
             c_end = float(week_data["close"].iloc[-1])
             if c_start > 0 and np.isfinite(c_start) and np.isfinite(c_end):
-                actual_close_rets[sym] = float(np.log(c_end / c_start))
+                actual_ret = float(np.log(c_end / c_start))
+                # P3: Outlier filter — skip >50% weekly move (delist/halt)
+                if abs(actual_ret) > 0.5:
+                    continue
+                actual_close_rets[sym] = actual_ret
         except Exception:
             pass
 
@@ -553,16 +583,20 @@ def simulate_weekly_trades_v6(predictions, actual_close_rets,
                               prev_longs, prev_shorts,
                               regime: str,
                               leverage: float = 1.0,
-                              top_n: int = DEFAULT_TOP_N):
+                              top_n: int = DEFAULT_TOP_N,
+                              symbol_rvol: Optional[Dict[str, float]] = None,
+                              no_trade_high_vol: bool = False):
     """Regime-gated portfolio construction with long/short PnL decomposition.
 
-    Regime rules (consensus from all 7 recs):
-    - BULL_TREND:       Long-only, half position size (NO SHORTS)
-    - BEAR_TREND:       Full long-short
-    - LOW_VOL_GRIND:    Full long-short
-    - HIGH_VOL_LATERAL: Long-short, half position size
+    P1: Vol-scaled long sizing + raw predicted return > 0 floor.
+    P3: Hard PnL clip at ±100% per position.
+    P6: HIGH_VOL_LATERAL no-trade override.
     """
     if not predictions:
+        return [], 0.0, 0.0, 0.0, set(), set()
+
+    # P6: Skip HIGH_VOL_LATERAL if flag set
+    if regime == "HIGH_VOL_LATERAL" and no_trade_high_vol:
         return [], 0.0, 0.0, 0.0, set(), set()
 
     pred_series = pd.Series(predictions)
@@ -573,18 +607,26 @@ def simulate_weekly_trades_v6(predictions, actual_close_rets,
         return [], 0.0, 0.0, 0.0, set(), set()
 
     sorted_syms = pred_series.sort_values(ascending=False)
-    cur_longs = set(sorted_syms.head(n).index)
 
-    # Regime gating: NO SHORTS in BULL_TREND (data-proven: removing BULL = +7.19%)
+    # P1: Long filter — only go long if predicted return > 0
+    candidates_long = []
+    for sym in sorted_syms.index:
+        if predictions[sym] > 0:
+            candidates_long.append(sym)
+        if len(candidates_long) >= n:
+            break
+    cur_longs = set(candidates_long)
+
+    # Regime gating
     if regime == "BULL_TREND":
         cur_shorts = set()
-        position_scale = 0.5 * leverage
+        base_position_scale = 0.5 * leverage
     elif regime == "HIGH_VOL_LATERAL":
         cur_shorts = set(sorted_syms.tail(n).index)
-        position_scale = 0.5 * leverage
+        base_position_scale = 0.5 * leverage
     else:  # BEAR_TREND, LOW_VOL_GRIND
         cur_shorts = set(sorted_syms.tail(n).index)
-        position_scale = 1.0 * leverage
+        base_position_scale = 1.0 * leverage
 
     trades = []
     long_pnl_sum = 0.0
@@ -597,7 +639,17 @@ def simulate_weekly_trades_v6(predictions, actual_close_rets,
         if not np.isfinite(ret):
             ret = 0.0
         fee = 0.0 if sym in prev_longs else ROUND_TRIP_FEE
-        pnl = (ret - fee) * position_scale
+
+        # P1: Vol-scaled sizing for longs (inverse to rvol_1d)
+        if symbol_rvol and sym in symbol_rvol:
+            rvol = symbol_rvol[sym]
+            position_scale = base_position_scale / max(rvol, 0.01)
+        else:
+            position_scale = base_position_scale
+
+        # P3: Hard clip at ±100%
+        pnl = np.clip((ret - fee) * position_scale, -1.0, None)
+
         trades.append({
             "symbol": sym, "signal": "BUY",
             "pred_ret": round(predictions[sym] * 100, 5),
@@ -605,7 +657,7 @@ def simulate_weekly_trades_v6(predictions, actual_close_rets,
             "raw_ret_pct": round(ret * 100, 4),
             "position_scale": round(position_scale, 4),
         })
-        long_pnl_sum += ret - fee
+        long_pnl_sum += pnl
         n_long += 1
 
     for sym in cur_shorts:
@@ -613,7 +665,11 @@ def simulate_weekly_trades_v6(predictions, actual_close_rets,
         if not np.isfinite(ret):
             ret = 0.0
         fee = 0.0 if sym in prev_shorts else ROUND_TRIP_FEE
-        pnl = (-ret - fee) * position_scale
+        position_scale = base_position_scale
+
+        # P3: Hard clip at ±100%
+        pnl = np.clip((-ret - fee) * position_scale, -1.0, None)
+
         trades.append({
             "symbol": sym, "signal": "SELL",
             "pred_ret": round(predictions[sym] * 100, 5),
@@ -621,15 +677,13 @@ def simulate_weekly_trades_v6(predictions, actual_close_rets,
             "raw_ret_pct": round(ret * 100, 4),
             "position_scale": round(position_scale, 4),
         })
-        short_pnl_sum += -ret - fee
+        short_pnl_sum += pnl
         n_short += 1
 
-    # Equal-weight average returns per leg
-    long_ret = (long_pnl_sum / n_long * position_scale) if n_long > 0 else 0.0
-    short_ret = (short_pnl_sum / n_short * position_scale) if n_short > 0 else 0.0
+    long_ret = (long_pnl_sum / n_long) if n_long > 0 else 0.0
+    short_ret = (short_pnl_sum / n_short) if n_short > 0 else 0.0
     total_positions = n_long + n_short
-    week_ret = (long_pnl_sum / max(n_long, 1) + short_pnl_sum / max(n_short, 1)) / (
-        2.0 if n_short > 0 else 1.0) * position_scale if total_positions > 0 else 0.0
+    week_ret = (long_pnl_sum + short_pnl_sum) / max(total_positions, 1) if total_positions > 0 else 0.0
 
     return trades, week_ret, long_ret, short_ret, cur_longs, cur_shorts
 
@@ -926,6 +980,8 @@ def main():
     parser.add_argument("--pin-coins", type=str, default="",
                         help="Comma-separated symbols to restrict universe")
     parser.add_argument("--no-shap", action="store_true")
+    parser.add_argument("--no-trade-high-vol", action="store_true",
+                        help="Skip trading in HIGH_VOL_LATERAL regime (P6)")
     args = parser.parse_args()
 
     global DATA_DIR, RESULTS_DIR, CACHE_DIR, TARGET_COL, HORIZON_BARS
@@ -965,6 +1021,7 @@ def main():
     print(f"  Leverage     : {args.leverage:.1f}x")
     print(f"  Kill-switch  : {dd_kill*100:.0f}% max drawdown")
     print(f"  Falsification: {'enabled' if not args.no_falsify else 'disabled'}")
+    print(f"  HV skip      : {'ON' if args.no_trade_high_vol else 'OFF'}")
     print("=" * 72 + "\n")
 
     os.makedirs(RESULTS_DIR, exist_ok=True)
@@ -1081,9 +1138,9 @@ def main():
         is_linear = ckpt.get("is_linear", True)
         feature_tracker = FeatureStabilityTracker(
             core=V6_CORE_FEATURES, initial_set=active_features)
-        # Restore IC history
+        # Restore IC history (stored as [ic_value, regime] lists in JSON)
         for k, v in ckpt.get("feature_ic_history", {}).items():
-            feature_tracker.ic_history[k] = list(v)
+            feature_tracker.ic_history[k] = [(x[0], x[1]) for x in v]
     else:
         _log("\nSTEP 4: Initial training on Y1 (rolling window)\n")
 
@@ -1193,16 +1250,23 @@ def main():
         if week_num <= resume_from_week:
             continue
 
-        # Kill-switch pause
-        if week_num <= ks_pause_until:
-            continue
+        # Kill-switch pause: P2 — regime-conditional restart
+        if ks_pause_until > week_num:
+            if current_dd > KILL_SWITCH_RECOVERY_THRESHOLD:
+                _log(f"  Week {week_num}: Kill switch pause expired — "
+                     f"DD recovered to {current_dd*100:.1f}% "
+                     f"(>{KILL_SWITCH_RECOVERY_THRESHOLD*100:.0f}%), resuming.")
+                ks_pause_until = 0
+            else:
+                continue
 
         current_dd = compute_drawdown(weekly_returns)
         if current_dd < dd_kill:
             _log(f"\n  *** KILL SWITCH *** Week {week_num}: "
                  f"DD={current_dd*100:.1f}% < {dd_kill*100:.0f}%")
             kill_switch_hit = True
-            ks_pause_until = min(week_num + 3, len(weeks) - 1)
+            # P2: Set pause to max — resume only when DD recovers
+            ks_pause_until = len(weeks)
             for skip in range(4):
                 if week_num + skip <= len(weeks) - 1:
                     weekly_returns.append(0.0)
@@ -1224,15 +1288,25 @@ def main():
             # Compute IC for ALL features (active + candidates)
             all_feats_to_check = list(set(active_features + V6_CANDIDATE_FEATURES))
             fic = compute_feature_ic_v6(symbols, ws, we, all_feats_to_check)
-            feature_tracker.record_ic(fic)
+            # P4: Tag IC with current regime
+            feature_tracker.record_ic(fic, regime=regime)
 
         # Quarterly retrain with ROLLING WINDOW
         if week_num % RETRAIN_WEEKS == 0:
             _log(f"\n  Week {week_num:3d}: QUARTERLY RETRAIN "
                  f"(rolling {args.rolling_window}wk to {we.date()})...")
 
-            # Feature stability: propose update with turnover cap
-            new_features = feature_tracker.propose_update(V6_CANDIDATE_FEATURES)
+            # P5: IC decay monitoring
+            if len(weekly_summary) >= 4:
+                recent_4_ic = [m.get("ic", 0.0) for m in weekly_summary[-4:]]
+                avg_recent_ic = float(np.mean(recent_4_ic))
+                if abs(avg_recent_ic) < 0.005:
+                    _log(f"    GOVERNANCE_WARNING: Model IC decay detected — "
+                         f"4-week rolling IC = {avg_recent_ic:+.5f} (threshold: 0.005)")
+
+            # P4: Feature stability with regime-conditional IC
+            new_features = feature_tracker.propose_update(
+                V6_CANDIDATE_FEATURES, current_regime=regime)
             jaccard = feature_tracker.jaccard_overlap()
             _log(f"    Features: {len(active_features)} → {len(new_features)} "
                  f"(Jaccard={jaccard:.3f})")
@@ -1267,6 +1341,24 @@ def main():
                         f"{RESULTS_DIR}/feature_importance_v6_week{week_num:03d}.csv")
                     _log(f"    Adopted new model (IC={ic_n:+.4f} > 0)  "
                          f"({time.time()-t0:.1f}s)")
+
+                    # P5: Governance report at each retrain
+                    try:
+                        from azalyst_validator import generate_governance_report
+                        ic_oos_val = avg_recent_ic if len(weekly_summary) >= 4 else 0.0
+                        governance = generate_governance_report(
+                            run_id=run_id, retrain_label=f"w{week_num:03d}",
+                            week_num=week_num, ic_in_sample=ic_n, ic_oos=ic_oos_val,
+                            importance_current=imp_new,
+                            importance_previous=importance if 'importance' in dir() else None,
+                            pred_distribution=np.array(list(predictions.values())),
+                            pred_distribution_prev=None, output_dir=RESULTS_DIR,
+                        )
+                        if governance.get("warnings"):
+                            for w in governance["warnings"]:
+                                _log(f"    GOVERNANCE: {w}")
+                    except Exception:
+                        pass
 
                     # Optional XGBoost challenger at retrain
                     if args.xgb_challenger:
@@ -1314,6 +1406,19 @@ def main():
             continue
 
         # Regime-gated portfolio construction
+        # P1: Build rvol snapshot for vol-scaled long sizing
+        symbol_rvol = {}
+        if regime in ("BULL_TREND",):
+            for sym, df in symbols.items():
+                try:
+                    pre_week_df = df[df.index < ws]
+                    if len(pre_week_df) >= 5 and "rvol_1d" in pre_week_df.columns:
+                        last_rvol = float(pre_week_df["rvol_1d"].iloc[-1])
+                        if np.isfinite(last_rvol) and last_rvol > 0:
+                            symbol_rvol[sym] = last_rvol
+                except Exception:
+                    pass
+
         trades, week_ret, long_ret, short_ret, cur_longs, cur_shorts = \
             simulate_weekly_trades_v6(
                 predictions, actual_close_rets,
@@ -1321,6 +1426,8 @@ def main():
                 regime=regime,
                 leverage=args.leverage,
                 top_n=args.top_n,
+                symbol_rvol=symbol_rvol if symbol_rvol else None,
+                no_trade_high_vol=args.no_trade_high_vol,
             )
         weekly_returns.append(week_ret)
 
@@ -1385,7 +1492,7 @@ def main():
             "prev_shorts": list(prev_shorts),
             "retrains": retrains,
             "active_features": active_features,
-            "feature_ic_history": {k: list(v)
+            "feature_ic_history": {k: [[x[0], x[1]] for x in v]
                                    for k, v in feature_tracker.ic_history.items()},
             "kill_switch_hit": kill_switch_hit,
             "ks_pause_until": ks_pause_until,
