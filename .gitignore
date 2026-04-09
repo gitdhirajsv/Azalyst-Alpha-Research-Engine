@@ -82,6 +82,12 @@ debug*.bat
 test*.bat
 test_pkg.bat
 
+# ── Superseded legacy modules (kept locally, not tracked) ──
+azalyst_ic_filter.py
+azalyst_ml.py
+azalyst_signal_combiner.py
+azalyst_tf_utils.py
+
 # ── IDE and editor ──
 .idea/
 .vscode/
