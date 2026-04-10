@@ -104,11 +104,6 @@ def compute_pump_dump_scores(df: pd.DataFrame,
     rev_window = cfg['reversal_window_bars']
     rev_thresh = cfg['reversal_thresh']
 
-    # Forward-looking reversal (for labeling, NOT features — shifted later)
-    # Check if a spike reverses within the window
-    max_up = ret_1h.rolling(rev_window, min_periods=1).max()
-    max_down = ret_1h.rolling(rev_window, min_periods=1).min()
-
     # Reversal: price went up sharply then came back down (or vice versa)
     # Use trailing data only (no look-ahead)
     trailing_max = ret_1h.shift(1).rolling(rev_window, min_periods=1).max()

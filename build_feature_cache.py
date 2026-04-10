@@ -90,26 +90,19 @@ def _process_symbol(args: Tuple) -> Tuple[str, bool, str]:
         # This aligns with azalyst_local_gpu.py and the notebook.
         feats["future_ret"] = np.log(df["close"].shift(-hor) / df["close"])
 
-        # v5 FIX: Also compute short-horizon returns required by v5 engine
-        # 15min horizon = 3 bars at 5-min frequency
-        # 1hr horizon = 12 bars at 5-min frequency
-        horizon_15m = max(1, 15 // max(1, {'1min':1,'3min':3,'5min':5,'15min':15,
-                          '30min':30,'1h':60,'4h':240,'1d':1440}.get(resample, 5)))
-        horizon_1h = max(1, 60 // max(1, {'1min':1,'3min':3,'5min':5,'15min':15,
-                         '30min':30,'1h':60,'4h':240,'1d':1440}.get(resample, 5)))
+        # Horizon-in-bars for each forward-return target.
+        # Use tf constants to handle all timeframes correctly.
+        bars_per_min = bph / 60.0
+        horizon_15m = max(1, int(round(15 * bars_per_min)))
+        horizon_1h = max(1, int(round(60 * bars_per_min)))
+        horizon_1d = max(1, bpd)
+        horizon_5d = max(1, bpd * 5)
         feats["future_ret_15m"] = np.log(
             df["close"].shift(-horizon_15m) / df["close"]
         ).astype(np.float32)
         feats["future_ret_1h"] = np.log(
             df["close"].shift(-horizon_1h) / df["close"]
         ).astype(np.float32)
-
-        # 1-day horizon = 288 bars at 5-min frequency (for optional daily-target mode)
-        horizon_1d = max(1, 1440 // max(1, {'1min':1,'3min':3,'5min':5,'15min':15,
-                         '30min':30,'1h':60,'4h':240,'1d':1440}.get(resample, 5)))
-        # 5-day (weekly) horizon — aligns with 1-week holding period
-        horizon_5d = max(1, 7200 // max(1, {'1min':1,'3min':3,'5min':5,'15min':15,
-                         '30min':30,'1h':60,'4h':240,'1d':1440}.get(resample, 5)))
         feats["future_ret_1d"] = np.log(
             df["close"].shift(-horizon_1d) / df["close"]
         ).astype(np.float32)
@@ -126,7 +119,8 @@ def _process_symbol(args: Tuple) -> Tuple[str, bool, str]:
         #   azalyst_weekly_loop.py → build_training_matrix()
 
         # ── Save: keep only valid feature rows ───────────────────────────────
-        feats = feats.dropna(subset=FEATURE_COLS, how="all").astype(np.float32)
+        min_non_nan = int(0.80 * len(FEATURE_COLS))
+        feats = feats.dropna(subset=FEATURE_COLS, thresh=min_non_nan).astype(np.float32)
         feats.to_parquet(out_path, engine="pyarrow", compression="snappy")
 
         return symbol, True, f"{len(feats):,} rows saved"

@@ -20,6 +20,8 @@ class RiskManager:
     """
 
     def __init__(self, entry_fee: float = 0.001, exit_fee: float = 0.001):
+        # NOTE: These values are stored for reference only. Fees are applied
+        # in azalyst_v6_engine.py at position entry/exit time, not here.
         self.entry_fee = entry_fee
         self.exit_fee = exit_fee
 
@@ -28,12 +30,26 @@ class RiskManager:
     def compute_mvo_weights(self, 
                             returns_df: pd.DataFrame, 
                             target_return: Optional[float] = None,
-                            risk_free_rate: float = 0.0) -> pd.Series:
+                            risk_free_rate: float = 0.0,
+                            use_shrinkage: bool = True) -> pd.Series:
         """
         Mean-Variance Optimization (Sharpe Maximization).
+        Uses Ledoit-Wolf covariance shrinkage by default.
         """
         mu = returns_df.mean()
-        sigma = returns_df.cov()
+        if use_shrinkage:
+            try:
+                from sklearn.covariance import LedoitWolf
+                lw = LedoitWolf().fit(returns_df.fillna(0).values)
+                sigma = pd.DataFrame(
+                    lw.covariance_,
+                    index=returns_df.columns,
+                    columns=returns_df.columns,
+                )
+            except Exception:
+                sigma = returns_df.cov()
+        else:
+            sigma = returns_df.cov()
         n = len(mu)
         
         if n == 0:

@@ -27,9 +27,15 @@ from scipy import stats
 
 class PurgedTimeSeriesCV:
     """
-    Lopez de Prado (2018) purged walk-forward CV.
-    Prevents look-ahead bias from autocorrelated features.
-    gap = embargo period in bars (default 48 = 4 hours at 5-min frequency).
+    Lopez de Prado (AFML Ch. 7) purged walk-forward CV with two-sided embargo.
+
+    Prevents look-ahead bias from autocorrelated features and overlapping labels.
+    For a forward-return label with horizon h, gap must be >= h to prevent leakage.
+
+    Args:
+        n_splits: Number of folds
+        gap: Embargo period in bars (default 48 = 4 hours at 5-min frequency).
+             MUST be >= label horizon.
     """
     def __init__(self, n_splits=5, gap=48):
         self.n_splits = n_splits
@@ -37,7 +43,14 @@ class PurgedTimeSeriesCV:
 
     def split(self, X):
         n = len(X)
-        fold_size = n // (self.n_splits + 1)
+        total_embargo = self.gap * 2 * self.n_splits
+        usable = n - total_embargo
+        if usable <= 0:
+            raise ValueError(
+                f"Dataset too small ({n} rows) for {self.n_splits} splits "
+                f"with gap={self.gap}. Need > {total_embargo} rows."
+            )
+        fold_size = usable // (self.n_splits + 1)
         for i in range(self.n_splits):
             train_end = (i + 1) * fold_size
             val_start = train_end + self.gap
@@ -61,8 +74,12 @@ def compute_ic(y_pred, y_true):
 
 def weighted_r2_score(y_true, y_pred, weights=None):
     """
-    Weighted R² metric (Jane Street competition metric).
-    R² = 1 - Σw(y-ŷ)² / Σw(y-ȳ)²
+    R² metric with optional sample weights.
+
+    If weights is None, computes standard R² = 1 - SS_res/SS_tot.
+    If weights is provided, uses the weighted form (Jane Street comp metric).
+    Note: to actually get the "Jane Street" behavior, you must pass
+    economically-meaningful weights. Passing None gives plain R².
     """
     if weights is None:
         weights = np.ones_like(y_true)
@@ -159,8 +176,9 @@ def make_xgb_model(use_gpu=True):
 
 # ── v5 Regression Training Pipeline ─────────────────────────────────────────
 
-def train_regression_model(X, y_ret, feature_cols, label="", use_gpu=True, 
-                           use_ic_filtering=True, ic_threshold=0.005):
+def train_regression_model(X, y_ret, feature_cols, label="", use_gpu=True,
+                           use_ic_filtering=True, ic_threshold=0.005,
+                           cv_gap=48):
     """
     v5 regression training pipeline with optional IC-based feature filtering.
 
@@ -182,22 +200,31 @@ def train_regression_model(X, y_ret, feature_cols, label="", use_gpu=True,
             use_gpu = False
             print(f"[{label}] GPU: CUDA unavailable — falling back to CPU")
 
-    # IC-based feature filtering (NEW v5.1)
+    # IC-based feature filtering (v5.1) — leak-free when module is available
     if use_ic_filtering and len(feature_cols) > 30:
-        from azalyst_ic_filter import filter_features_by_ic
-        X_filtered, selected_features, ic_info = filter_features_by_ic(
-            X, y_ret, feature_cols, 
-            ic_threshold=ic_threshold,
-            min_features=20,
-            verbose=True
-        )
-        X = X_filtered
-        feature_cols = selected_features
+        try:
+            from azalyst_ic_filter import filter_features_by_ic
+            cutoff = int(len(X) * 0.70)
+            X_filter_set = X[:cutoff]
+            y_filter_set = y_ret[:cutoff]
+            _, selected_features, ic_info = filter_features_by_ic(
+                X_filter_set, y_filter_set, feature_cols,
+                ic_threshold=ic_threshold,
+                min_features=20,
+                verbose=True
+            )
+            selected_indices = np.array([feature_cols.index(n) for n in selected_features])
+            X = X[:, selected_indices]
+            feature_cols = selected_features
+            print(f"  [LEAK-FREE] Feature selection used first {cutoff:,} rows only")
+        except Exception as e:
+            print(f"  [WARN] IC filtering skipped ({e})")
     
     scaler = RobustScaler()
     Xs = scaler.fit_transform(X).astype(np.float32)
 
-    cv = PurgedTimeSeriesCV(n_splits=5, gap=48)
+    cv = PurgedTimeSeriesCV(n_splits=5, gap=cv_gap)
+    print(f"  [CV] Purged K-Fold with gap={cv_gap} bars (must be >= label horizon)")
     r2s, ics = [], []
 
     for fold, (tr, val) in enumerate(cv.split(Xs), 1):
@@ -237,7 +264,7 @@ def train_regression_model(X, y_ret, feature_cols, label="", use_gpu=True,
 # ── v5 Confidence Model — replaces meta-labeling ────────────────────────────
 
 def train_confidence_model(base_model, base_scaler, X, y_ret, feature_cols,
-                           label="confidence", use_gpu=True):
+                           label="confidence", use_gpu=True, cv_gap=48):
     """
     v5 confidence model (replaces meta-labeling from AFML Ch. 3):
     - Predicts P(base model direction is correct)
@@ -256,7 +283,7 @@ def train_confidence_model(base_model, base_scaler, X, y_ret, feature_cols,
     Xs = base_scaler.transform(X).astype(np.float32)
 
     # Collect OOS predictions from purged CV
-    cv = PurgedTimeSeriesCV(n_splits=5, gap=48)
+    cv = PurgedTimeSeriesCV(n_splits=5, gap=cv_gap)
     oos_preds = np.full(len(y_ret), np.nan, dtype=np.float32)
 
     for fold, (tr, val) in enumerate(cv.split(Xs), 1):
@@ -300,7 +327,7 @@ def train_confidence_model(base_model, base_scaler, X, y_ret, feature_cols,
 
 # ── Legacy v4 Classification Training (backward compat) ─────────────────────
 
-def train_model(X, y, y_ret, feature_cols, label="", use_gpu=True):
+def train_model(X, y, y_ret, feature_cols, label="", use_gpu=True, cv_gap=48):
     """
     Legacy v4 binary classification training — kept for backward compat.
     The v5 engine uses train_regression_model() instead.
@@ -315,7 +342,7 @@ def train_model(X, y, y_ret, feature_cols, label="", use_gpu=True):
     scaler = RobustScaler()
     Xs = scaler.fit_transform(X)
 
-    cv = PurgedTimeSeriesCV(n_splits=5, gap=48)
+    cv = PurgedTimeSeriesCV(n_splits=5, gap=cv_gap)
     aucs, ics = [], []
 
     for fold, (tr, val) in enumerate(cv.split(Xs), 1):

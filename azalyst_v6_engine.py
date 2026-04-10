@@ -405,7 +405,7 @@ def build_training_matrix_v6(symbols, train_end, features: List[str],
 # ══════════════════════════════════════════════════════════════════════════════
 
 def train_elastic_net(X, y, features: List[str],
-                      label: str = "") -> Tuple:
+                      label: str = "", cv_gap: int = 48) -> Tuple:
     """Train Elastic Net with built-in alpha/l1_ratio CV.
 
     Returns: (model, scaler, importance, mean_r2, mean_ic, icir)
@@ -425,7 +425,7 @@ def train_elastic_net(X, y, features: List[str],
     model.fit(Xs, y)
 
     # Evaluate with PurgedTimeSeriesCV for honest metrics
-    cv = PurgedTimeSeriesCV(n_splits=5, gap=48)
+    cv = PurgedTimeSeriesCV(n_splits=5, gap=cv_gap)
     r2s, ics = [], []
 
     for fold, (tr, val) in enumerate(cv.split(Xs), 1):
@@ -466,7 +466,7 @@ def train_elastic_net(X, y, features: List[str],
 
 
 def train_xgb_challenger(X, y, features: List[str], cuda_api,
-                         label: str = "") -> Tuple:
+                         label: str = "", cv_gap: int = 48) -> Tuple:
     """Train XGBoost as a challenger model. Must beat Elastic Net to be used."""
     import xgboost as xgb
 
@@ -494,7 +494,7 @@ def train_xgb_challenger(X, y, features: List[str], cuda_api,
     elif cuda_api == "old":
         params["tree_method"] = "gpu_hist"
 
-    cv = PurgedTimeSeriesCV(n_splits=5, gap=48)
+    cv = PurgedTimeSeriesCV(n_splits=5, gap=cv_gap)
     r2s, ics = [], []
 
     for fold, (tr, val) in enumerate(cv.split(Xs), 1):
@@ -1079,6 +1079,7 @@ def main():
     target_bars = {"1h": 12, "1d": 288, "5d": 1440}
     TARGET_COL = target_map.get(args.target, "future_ret_1h")
     HORIZON_BARS = target_bars.get(args.target, 12)
+    cv_gap = HORIZON_BARS
 
     use_gpu = args.gpu and not args.no_gpu
     dd_kill = args.max_dd
@@ -1102,6 +1103,7 @@ def main():
     print(f"  Compute      : {'GPU (CUDA)' if use_gpu else 'CPU'}")
     print(f"  Leverage     : {args.leverage:.1f}x")
     print(f"  Kill-switch  : {dd_kill*100:.0f}% max drawdown")
+    print(f"  CV embargo   : {cv_gap} bars")
     print(f"  Falsification: {'enabled' if not args.no_falsify else 'disabled'}")
     print(f"  HV skip      : {'ON' if args.no_trade_high_vol else 'OFF'}")
     print("=" * 72 + "\n")
@@ -1140,6 +1142,7 @@ def main():
             "max_dd_kill": dd_kill, "retrain_weeks": RETRAIN_WEEKS,
             "rolling_window_weeks": args.rolling_window,
             "horizon_bars": HORIZON_BARS,
+            "cv_gap": cv_gap,
             "model_type": "ElasticNet",
             "top_n": args.top_n,
         })
@@ -1237,9 +1240,27 @@ def main():
             return
 
         _log(f"\n  Training Elastic Net on {len(X_train):,} rows...")
+        from azalyst_leak_test import run_leak_test
+        _log("\n[LEAK TEST] Running pre-training sanity checks...")
+        leak_results = run_leak_test(X_train, y_neutral, active_features, embargo_bars=cv_gap)
+        for k, v in leak_results.items():
+            _log(f"  {k}: {v}")
+        if not leak_results["shuffled_test_pass"]:
+            raise RuntimeError(
+                f"LEAK TEST FAILED: shuffled target has |IC|="
+                f"{leak_results['shuffled_mean_abs_ic']:.4f} > 0.02."
+            )
+        if not leak_results["leaked_test_pass"]:
+            raise RuntimeError(
+                f"LEAK TEST FAILED: IC computation issue "
+                f"(leaked IC={leak_results['leaked_feature_ic']:.4f}, expected > 0.95)."
+            )
+        _log("[LEAK TEST] Passed.\n")
         t0 = time.time()
         current_model, current_scaler, importance, mean_r2, mean_ic, icir = \
-            train_elastic_net(X_train, y_neutral, active_features, label="base_y1")
+            train_elastic_net(
+                X_train, y_neutral, active_features, label="base_y1", cv_gap=cv_gap
+            )
         is_linear = True
         _log(f"  Time: {time.time()-t0:.1f}s")
 
@@ -1258,7 +1279,7 @@ def main():
             t0 = time.time()
             xgb_model, xgb_scaler, xgb_imp, xgb_r2, xgb_ic, xgb_icir = \
                 train_xgb_challenger(X_train, y_neutral, active_features,
-                                     cuda_api, label="xgb_y1")
+                                     cuda_api, label="xgb_y1", cv_gap=cv_gap)
             _log(f"  Time: {time.time()-t0:.1f}s")
 
             # Select winner
@@ -1328,6 +1349,7 @@ def main():
         ks_pause_until = 0
         resume_from_week = 0
 
+    current_dd = compute_drawdown(weekly_returns)
     for week_num, (ws, we) in enumerate(zip(weeks[:-1], weeks[1:]), 1):
         if week_num <= resume_from_week:
             continue
@@ -1404,7 +1426,7 @@ def main():
                 t0 = time.time()
                 m_new, s_new, imp_new, r2_n, ic_n, icir_n = train_elastic_net(
                     X_rt, y_neutral_rt, active_features,
-                    label=f"v6_w{week_num:03d}")
+                    label=f"v6_w{week_num:03d}", cv_gap=cv_gap)
 
                 # IC-gated retraining (Mistral): only adopt if OOS IC > 0
                 if ic_n > 0:
@@ -1446,7 +1468,7 @@ def main():
                     if args.xgb_challenger:
                         xgb_m, xgb_s, _, _, xgb_ic, _ = train_xgb_challenger(
                             X_rt, y_neutral_rt, active_features, cuda_api,
-                            label=f"xgb_w{week_num:03d}")
+                            label=f"xgb_w{week_num:03d}", cv_gap=cv_gap)
                         if xgb_ic > ic_n + 0.005:
                             _log(f"    >>> XGBoost beats EN at retrain "
                                  f"(IC {xgb_ic:+.4f} > {ic_n:+.4f})")
@@ -1619,6 +1641,25 @@ def main():
     ic_std = float(ic_s.std()) if len(ic_s) > 1 else 0.0
     icir_val = ic_mean / (ic_std + 1e-8)
 
+    # Capacity-related summaries
+    avg_turnover = float(summary_df["turnover_pct"].mean()) if "turnover_pct" in summary_df.columns and len(summary_df) > 0 else 0.0
+    symbol_turnover = {}
+    for t in all_trades:
+        sym = t.get("symbol")
+        if not sym:
+            continue
+        symbol_turnover[sym] = symbol_turnover.get(sym, 0) + 1
+    top_traded = sorted(symbol_turnover.items(), key=lambda x: x[1], reverse=True)[:10]
+    # Proxy stress test: bottom 20% by available symbol count in weekly universe.
+    if len(summary_df) > 5 and "n_symbols" in summary_df.columns:
+        q20 = summary_df["n_symbols"].quantile(0.2)
+        stress = summary_df[summary_df["n_symbols"] <= q20]
+        stress_rets = (stress["week_return_pct"] / 100.0).to_numpy(dtype=float)
+        stress_std = float(np.std(stress_rets)) if len(stress_rets) > 1 else 0.0
+        stress_sharpe = float(np.mean(stress_rets)) / stress_std * np.sqrt(52) if stress_std > 0 else 0.0
+    else:
+        stress_sharpe = 0.0
+
     # Long/short PnL decomposition
     long_rets = [m.get("long_return_pct", 0) for m in weekly_summary
                  if m.get("regime") not in ("KILL_SWITCH",)]
@@ -1689,7 +1730,26 @@ def main():
         "beta_neutral": True,
         "regime_gated": True,
         "gates": gates,
+        "avg_weekly_turnover_pct": round(avg_turnover, 2),
+        "liquidity_stress_sharpe_proxy": round(stress_sharpe, 4),
+        "top_traded_symbols": top_traded,
     }
+
+    # Deflated Sharpe Ratio
+    try:
+        from azalyst_deflated_sharpe import deflated_sharpe_ratio
+        rets_arr = np.array(weekly_returns, dtype=float)
+        if len(rets_arr) >= 20:
+            dsr = deflated_sharpe_ratio(
+                sharpe_observed=sharpe,
+                n_returns=len(rets_arr),
+                skew=float(stats.skew(rets_arr)),
+                kurtosis=float(stats.kurtosis(rets_arr)),
+                n_trials=100,
+            )
+            perf["deflated_sharpe"] = dsr
+    except Exception:
+        pass
 
     with open(f"{RESULTS_DIR}/performance_v6.json", "w") as f:
         json.dump(perf, f, indent=2, default=str)
@@ -1714,6 +1774,15 @@ def main():
     _log(f"  {'─'*68}")
     _log(f"  LONG  total PnL   : {total_long_pnl:+.2f}%")
     _log(f"  SHORT total PnL   : {total_short_pnl:+.2f}%")
+    _log(f"  {'─'*68}")
+    _log(f"  avg_turnover_pct  : {avg_turnover:.2f}%")
+    _log(f"  liq_stress_sharpe : {stress_sharpe:.4f} (proxy)")
+    if top_traded:
+        _log("  top_traded_symbols:")
+        for sym, ntr in top_traded:
+            _log(f"    - {sym}: {ntr} trades")
+    if "deflated_sharpe" in perf:
+        _log(f"  deflated_sharpe   : {perf['deflated_sharpe'].get('deflated_sharpe_ratio', 0):.4f}")
     _log(f"  {'─'*68}")
     for r, s in regime_stats.items():
         avg_ret = float(np.mean(s["rets"]))
