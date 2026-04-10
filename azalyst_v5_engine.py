@@ -533,13 +533,30 @@ def compute_feature_ic(symbols: dict, week_start, week_end,
     feature_ics = {}
     week_data = {}
 
-    for sym, df in symbols.items():
-        mask = (df.index >= week_start) & (df.index < week_end)
-        subset = df.loc[mask]
-        tcol = TARGET_COL if TARGET_COL in subset.columns else TARGET_COL_FALLBACK
-        if len(subset) < 3 or tcol not in subset.columns:
-            continue
-        week_data[sym] = (subset, tcol)
+    # MEMORY FIX: Process symbols in chunks to avoid loading all DataFrames at once
+    symbol_list = list(symbols.keys())
+    chunk_size = 20
+    
+    for chunk_start in range(0, len(symbol_list), chunk_size):
+        chunk_end = min(chunk_start + chunk_size, len(symbol_list))
+        chunk_symbols = symbol_list[chunk_start:chunk_end]
+        
+        for sym in chunk_symbols:
+            try:
+                df = symbols[sym]
+                mask = (df.index >= week_start) & (df.index < week_end)
+                subset = df.loc[mask]
+                tcol = TARGET_COL if TARGET_COL in subset.columns else TARGET_COL_FALLBACK
+                if len(subset) < 3 or tcol not in subset.columns:
+                    continue
+                week_data[sym] = (subset, tcol)
+            except Exception:
+                pass
+        
+        if hasattr(symbols, '_cache'):
+            while len(symbols._cache) > 5:
+                symbols._cache.popitem(last=False)
+        gc.collect()
 
     if len(week_data) < 5:
         return {f: 0.0 for f in features}
@@ -617,18 +634,34 @@ def build_training_matrix(symbols: dict, train_end,
     eligible = []
     total_rows = 0
 
-    for sym, df in symbols.items():
-        tcol = TARGET_COL if TARGET_COL in df.columns else TARGET_COL_FALLBACK
-        if tcol not in df.columns:
-            continue
-        # P-LEAK-2: use safe_end (train_end minus horizon) for eligibility check
-        safe_end_elig = train_end - pd.Timedelta(minutes=5 * HORIZON_BARS_1H)
-        mask = df.index < safe_end_elig
-        row_count = int(mask.sum())
-        if row_count < HORIZON_BARS + 50:
-            continue
-        eligible.append(sym)
-        total_rows += row_count
+    # MEMORY FIX: Process symbols in chunks
+    symbol_list = list(symbols.keys())
+    chunk_size = 20
+    
+    for chunk_start in range(0, len(symbol_list), chunk_size):
+        chunk_end = min(chunk_start + chunk_size, len(symbol_list))
+        chunk_symbols = symbol_list[chunk_start:chunk_end]
+        
+        for sym in chunk_symbols:
+            try:
+                df = symbols[sym]
+                tcol = TARGET_COL if TARGET_COL in df.columns else TARGET_COL_FALLBACK
+                if tcol not in df.columns:
+                    continue
+                safe_end_elig = train_end - pd.Timedelta(minutes=5 * HORIZON_BARS_1H)
+                mask = df.index < safe_end_elig
+                row_count = int(mask.sum())
+                if row_count < HORIZON_BARS + 50:
+                    continue
+                eligible.append(sym)
+                total_rows += row_count
+            except Exception:
+                pass
+        
+        if hasattr(symbols, '_cache'):
+            while len(symbols._cache) > 5:
+                symbols._cache.popitem(last=False)
+        gc.collect()
 
     if not eligible:
         print("  ERROR: no valid symbol data")
@@ -653,47 +686,47 @@ def build_training_matrix(symbols: dict, train_end,
         feat_arr = np.resize(feat_arr, (new_size, n_feat))
         ret_arr = np.resize(ret_arr, new_size)
 
-    for sym in eligible:
-        try:
-            df = symbols[sym]
-            tcol = TARGET_COL if TARGET_COL in df.columns else TARGET_COL_FALLBACK
-            # FIX (Step-02 SUSPECT, P-LEAK-2): Drop the last HORIZON_BARS rows before
-            # train_end.  The target future_ret_1h[T] = log(close[T+12]/close[T]) for
-            # the final HORIZON_BARS rows of the training window uses close values from
-            # AFTER train_end, contaminating training labels with test-period prices.
-            # Removing these rows eliminates the boundary leakage with negligible
-            # training-data loss (≤12 rows per symbol per retrain).
-            safe_end = train_end - pd.Timedelta(minutes=5 * HORIZON_BARS_1H)
-            subset = df.loc[df.index < safe_end, use_features + [tcol]]
-            if len(subset) < HORIZON_BARS + 50:
-                continue
+    # MEMORY FIX: Process eligible symbols in chunks
+    for chunk_start in range(0, len(eligible), chunk_size):
+        chunk_end = min(chunk_start + chunk_size, len(eligible))
+        chunk_eligible = eligible[chunk_start:chunk_end]
+        
+        for sym in chunk_eligible:
+            try:
+                df = symbols[sym]
+                tcol = TARGET_COL if TARGET_COL in df.columns else TARGET_COL_FALLBACK
+                safe_end = train_end - pd.Timedelta(minutes=5 * HORIZON_BARS_1H)
+                subset = df.loc[df.index < safe_end, use_features + [tcol]]
+                if len(subset) < HORIZON_BARS + 50:
+                    continue
 
-            f = subset[use_features].to_numpy(dtype=np.float32)
-            r = subset[tcol].to_numpy(dtype=np.float32)
+                f = subset[use_features].to_numpy(dtype=np.float32)
+                r = subset[tcol].to_numpy(dtype=np.float32)
 
-            valid = np.isfinite(f).all(axis=1) & np.isfinite(r)
-            if sample_prob < 1.0:
-                valid &= rng.random(len(valid)) < sample_prob
+                valid = np.isfinite(f).all(axis=1) & np.isfinite(r)
+                if sample_prob < 1.0:
+                    valid &= rng.random(len(valid)) < sample_prob
 
-            keep = np.flatnonzero(valid)
-            # P13: Non-overlapping return subsample
-            # Step size = HORIZON_BARS so adjacent rows have non-overlapping target windows.
-            # For 1h target (12 bars): every 12th row. For 1d/5d: every 288 rows (daily
-            # spacing) — taking every 1440 rows for 5d gives too few training samples.
-            _p13_step = (288 if TARGET_COL in ("future_ret_1d", "future_ret_5d")
-                         else HORIZON_BARS_1H)
-            if len(keep) > 0:
-                keep = keep[::_p13_step]
-            if len(keep) == 0:
-                continue
+                keep = np.flatnonzero(valid)
+                _p13_step = (288 if TARGET_COL in ("future_ret_1d", "future_ret_5d")
+                             else HORIZON_BARS_1H)
+                if len(keep) > 0:
+                    keep = keep[::_p13_step]
+                if len(keep) == 0:
+                    continue
 
-            end = cursor + len(keep)
-            grow(end)
-            feat_arr[cursor:end] = f[keep]
-            ret_arr[cursor:end] = r[keep]
-            cursor = end
-        except Exception:
-            pass
+                end = cursor + len(keep)
+                grow(end)
+                feat_arr[cursor:end] = f[keep]
+                ret_arr[cursor:end] = r[keep]
+                cursor = end
+            except Exception:
+                pass
+        
+        if hasattr(symbols, '_cache'):
+            while len(symbols._cache) > 5:
+                symbols._cache.popitem(last=False)
+        gc.collect()
 
     feat_arr = feat_arr[:cursor]
     ret_arr = ret_arr[:cursor]
@@ -943,59 +976,67 @@ def predict_week(model, scaler, symbols, week_start, week_end,
     actual_close_rets = {}     # same — used for PnL simulation
     meta_confs = {}
 
-    for sym, df in symbols.items():
-        try:
-            # ── PREDICTION: use last bar BEFORE week_start only ───────────────
-            # This is the only info available when entering the trade on Monday.
-            pre_week = df[df.index < week_start]
-            if len(pre_week) < 1:
-                continue
+    # MEMORY FIX: Process symbols in chunks
+    symbol_list = list(symbols.keys())
+    chunk_size = 20
+    
+    for chunk_start in range(0, len(symbol_list), chunk_size):
+        chunk_end = min(chunk_start + chunk_size, len(symbol_list))
+        chunk_symbols = symbol_list[chunk_start:chunk_end]
+        
+        for sym in chunk_symbols:
+            try:
+                df = symbols[sym]
+                pre_week = df[df.index < week_start]
+                if len(pre_week) < 1:
+                    continue
 
-            # Use the last HORIZON_BARS_1H rows (= 1hr of bars) before week_start
-            # for a more robust feature estimate, but all bars are strictly pre-week.
-            pre_snap = pre_week.iloc[-HORIZON_BARS_1H:] if len(pre_week) >= HORIZON_BARS_1H else pre_week
+                pre_snap = pre_week.iloc[-HORIZON_BARS_1H:] if len(pre_week) >= HORIZON_BARS_1H else pre_week
 
-            feat = pre_snap[features_used].values.astype(np.float32)
-            valid = np.isfinite(feat).all(axis=1)
-            if valid.sum() < 1:
-                continue
+                feat = pre_snap[features_used].values.astype(np.float32)
+                valid = np.isfinite(feat).all(axis=1)
+                if valid.sum() < 1:
+                    continue
 
-            feat_scaled = scaler.transform(feat[valid])
-            pred_rets   = model.predict(feat_scaled)
-            predictions[sym] = float(np.mean(pred_rets))
+                feat_scaled = scaler.transform(feat[valid])
+                pred_rets   = model.predict(feat_scaled)
+                predictions[sym] = float(np.mean(pred_rets))
 
-            if meta_model is not None and meta_scaler is not None:
-                try:
-                    meta_input  = np.column_stack([feat_scaled,
-                                                   pred_rets.reshape(-1, 1)])
-                    meta_scaled = meta_scaler.transform(meta_input)
-                    meta_probs  = meta_model.predict_proba(meta_scaled)[:, 1]
-                    meta_confs[sym] = float(meta_probs.mean())
-                except Exception:
-                    pass
+                if meta_model is not None and meta_scaler is not None:
+                    try:
+                        meta_input  = np.column_stack([feat_scaled,
+                                                       pred_rets.reshape(-1, 1)])
+                        meta_scaled = meta_scaler.transform(meta_input)
+                        meta_probs  = meta_model.predict_proba(meta_scaled)[:, 1]
+                        meta_confs[sym] = float(meta_probs.mean())
+                    except Exception:
+                        pass
 
-            # ── ACTUALS: full-week close-to-close return for PnL & honest IC ──
-            week_data = df[(df.index >= week_start) & (df.index < week_end)]
-            if len(week_data) < 2:
-                continue
+                week_data = df[(df.index >= week_start) & (df.index < week_end)]
+                if len(week_data) < 2:
+                    continue
 
-            if "close" in week_data.columns:
-                c_start = float(week_data["close"].iloc[0])
-                c_end   = float(week_data["close"].iloc[-1])
-                if c_start > 0 and np.isfinite(c_start) and np.isfinite(c_end):
-                    wk_ret = float(np.log(c_end / c_start))
-                    actual_close_rets[sym] = wk_ret
-                    # IC uses the same weekly return (honest test of pre-week signal)
-                    actual_rets[sym] = wk_ret
-            elif "ret_1bar" in week_data.columns:
-                bars = week_data["ret_1bar"].values
-                finite_bars = bars[np.isfinite(bars)]
-                if len(finite_bars) > 0:
-                    wk_ret = float(np.sum(finite_bars))
-                    actual_close_rets[sym] = wk_ret
-                    actual_rets[sym] = wk_ret
-        except Exception:
-            pass
+                if "close" in week_data.columns:
+                    c_start = float(week_data["close"].iloc[0])
+                    c_end   = float(week_data["close"].iloc[-1])
+                    if c_start > 0 and np.isfinite(c_start) and np.isfinite(c_end):
+                        wk_ret = float(np.log(c_end / c_start))
+                        actual_close_rets[sym] = wk_ret
+                        actual_rets[sym] = wk_ret
+                elif "ret_1bar" in week_data.columns:
+                    bars = week_data["ret_1bar"].values
+                    finite_bars = bars[np.isfinite(bars)]
+                    if len(finite_bars) > 0:
+                        wk_ret = float(np.sum(finite_bars))
+                        actual_close_rets[sym] = wk_ret
+                        actual_rets[sym] = wk_ret
+            except Exception:
+                pass
+        
+        if hasattr(symbols, '_cache'):
+            while len(symbols._cache) > 5:
+                symbols._cache.popitem(last=False)
+        gc.collect()
 
     return predictions, actual_rets, actual_close_rets, meta_confs
 
