@@ -32,7 +32,7 @@ The engine processes 3+ years of 5-minute OHLCV data across 444 Binance pairs, e
                      AZALYST v6.0 CONSENSUS REBUILD ENGINE
 
   DATA LAYER              FEATURE ENGINE            SIGNAL SOURCES
- Polars+DuckDB    72 computed,          Beta-neutral return pred
+ Parquet + cache  72 computed,          Beta-neutral return pred
  444 coins               10 stable selected         Regime-gated portfolio
  26M+ rows               Stability-tracked          Falsification campaign
  3-year 5min             Turnover cap ≤3            4-gate kill criteria
@@ -201,7 +201,7 @@ python azalyst_v6_engine.py --no-gpu --no-falsify
   Portfolio    : top-5 per side, regime-gated
 
   Week  4 [Y2]:   5 trades (5L/0S) | ret=+0.32% (L=+0.32% S=+0.00%) | IC=+0.0312 | cum=+1.2% | DD=0.4% | BULL_TREND
-  Week 13 [Y2]: QUARTERLY RETRAIN (rolling 26wk to 2024-06-15)...
+  Week 13 [Y2]: QUARTERLY RETRAIN (rolling 13wk to 2024-06-15)...
     [v6_w013] ElasticNet: alpha=0.000312  l1_ratio=0.50  nonzero=8/10  R²=0.0023  IC=0.0156  ICIR=0.4821
     Adopted new model (IC=+0.0156 > 0)  (2.3s)
   ...
@@ -258,9 +258,13 @@ All output files are written to `results_v6/` (default) or the directory passed 
 | `azalyst_v5_engine.py` | Shared infrastructure — `LazySymbolStore`, `detect_regime`, `build_feature_store`, `PurgedTimeSeriesCV`, checkpoint utilities |
 | `azalyst_db.py` | SQLite persistence — trades, metrics, model artifacts (7 tables, WAL mode) |
 | `azalyst_factors_v2.py` | 72 cross-sectional features — reversal signals, pump-dump indicators, quantile rank, WQ alphas, frac. diff |
+| `azalyst_ic_filter.py` | IC/ICIR feature filtering utilities used by training module |
 | `azalyst_pump_dump.py` | Multi-signal pump-dump detector with regime classification |
 | `azalyst_train.py` | Training utilities — `compute_ic`, PurgedTimeSeriesCV |
 | `azalyst_risk.py` | Portfolio risk — MVO, HRP, Black-Litterman, VaR/CVaR, position constraints |
+| `azalyst_tf_utils.py` | Timeframe constants helper for robust horizon conversion |
+| `azalyst_leak_test.py` | Pre-training leakage sanity checks |
+| `azalyst_deflated_sharpe.py` | Deflated Sharpe Ratio calculator |
 | `build_feature_cache.py` | Precompute features → parquet cache (5–20x speedup) |
 | `validate_startup.py` | Pre-flight checks — directories, modules, engine config |
 | `VIEW_TRAINING.py` | **Live 4-panel Spyder Monitor** — reads `results_v6/` every 5 s, shows PnL, win rate, Sharpe, log tail |
@@ -275,7 +279,7 @@ All output files are written to `results_v6/` (default) or the directory passed 
 | Primary model | ElasticNetCV (`l1_ratio` ∈ [0.1, 0.3, 0.5, 0.7, 0.9], 50 alphas) |
 | Challenger model | XGBoost (`--xgb-challenger`, max_depth=3, n_estimators=500) |
 | Target | Beta-neutral 1hr forward log return (daily cross-sectional demeaned) |
-| CV splits | 5, purged (48-bar gap) |
+| CV splits | 5, purged (gap matches target horizon: 1h=12, 1d=288, 5d=1440 bars) |
 | VRAM guard | 2M rows max training matrix |
 | Training | Rolling 13-week window (configurable via `--rolling-window`) |
 | Walk-forward | Y2 + Y3 (2-year strict OOS) |
