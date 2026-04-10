@@ -309,37 +309,55 @@ def build_training_matrix_v6(symbols, train_end, features: List[str],
     rng = np.random.default_rng(42)
     eligible = 0
 
-    for sym, df in symbols.items():
-        tcol = TARGET_COL if TARGET_COL in df.columns else TARGET_COL_FALLBACK
-        if tcol not in df.columns:
-            continue
+    # MEMORY FIX: Process symbols in chunks to avoid loading all DataFrames at once
+    symbol_list = list(symbols.keys())
+    chunk_size = 20  # Process 20 symbols at a time
+    
+    for chunk_start in range(0, len(symbol_list), chunk_size):
+        chunk_end = min(chunk_start + chunk_size, len(symbol_list))
+        chunk_symbols = symbol_list[chunk_start:chunk_end]
+        
+        for sym in chunk_symbols:
+            try:
+                df = symbols[sym]
+                tcol = TARGET_COL if TARGET_COL in df.columns else TARGET_COL_FALLBACK
+                if tcol not in df.columns:
+                    continue
 
-        # ROLLING WINDOW: only data within the window
-        mask = (df.index >= rolling_start) & (df.index < safe_end)
-        subset = df.loc[mask, features + [tcol]]
-        if len(subset) < HORIZON_BARS + 50:
-            continue
-        eligible += 1
+                # ROLLING WINDOW: only data within the window
+                mask = (df.index >= rolling_start) & (df.index < safe_end)
+                subset = df.loc[mask, features + [tcol]]
+                if len(subset) < HORIZON_BARS + 50:
+                    continue
+                eligible += 1
 
-        f = subset[features].to_numpy(dtype=np.float32)
-        r = subset[tcol].to_numpy(dtype=np.float32)
-        ts = subset.index.values
+                f = subset[features].to_numpy(dtype=np.float32)
+                r = subset[tcol].to_numpy(dtype=np.float32)
+                ts = subset.index.values
 
-        valid = np.isfinite(f).all(axis=1) & np.isfinite(r)
-        keep = np.flatnonzero(valid)
+                valid = np.isfinite(f).all(axis=1) & np.isfinite(r)
+                keep = np.flatnonzero(valid)
 
-        # P13: Non-overlapping return subsample (every 12th bar for 1hr target)
-        if len(keep) > 0:
-            keep = keep[::HORIZON_BARS_1H]
-        if len(keep) == 0:
-            continue
+                # P13: Non-overlapping return subsample (every 12th bar for 1hr target)
+                if len(keep) > 0:
+                    keep = keep[::HORIZON_BARS_1H]
+                if len(keep) == 0:
+                    continue
 
-        end = cursor + len(keep)
-        grow(end)
-        feat_arr[cursor:end] = f[keep]
-        ret_arr[cursor:end] = r[keep]
-        ts_arr[cursor:end] = ts[keep]
-        cursor = end
+                end = cursor + len(keep)
+                grow(end)
+                feat_arr[cursor:end] = f[keep]
+                ret_arr[cursor:end] = r[keep]
+                ts_arr[cursor:end] = ts[keep]
+                cursor = end
+            except Exception:
+                pass
+        
+        # Evict cache after each chunk to free memory
+        if hasattr(symbols, '_cache'):
+            while len(symbols._cache) > 5:
+                symbols._cache.popitem(last=False)
+        gc.collect()
 
     feat_arr = feat_arr[:cursor]
     ret_arr = ret_arr[:cursor]
@@ -540,37 +558,52 @@ def predict_week_v6(model, scaler, symbols, week_start, week_end,
     predictions = {}
     actual_close_rets = {}
 
-    for sym, df in symbols.items():
-        try:
-            pre_week = df[df.index < week_start]
-            if len(pre_week) < 1:
-                continue
-
-            # Use last HORIZON_BARS_1H rows before week_start
-            pre_snap = pre_week.iloc[-HORIZON_BARS_1H:]
-            feat = pre_snap[features_used].values.astype(np.float32)
-            valid = np.isfinite(feat).all(axis=1)
-            if valid.sum() < 1:
-                continue
-
-            feat_scaled = scaler.transform(feat[valid])
-            pred_rets = model.predict(feat_scaled)
-            predictions[sym] = float(np.mean(pred_rets))
-
-            # Actual weekly close-to-close return
-            week_data = df[(df.index >= week_start) & (df.index < week_end)]
-            if len(week_data) < 2 or "close" not in week_data.columns:
-                continue
-            c_start = float(week_data["close"].iloc[0])
-            c_end = float(week_data["close"].iloc[-1])
-            if c_start > 0 and np.isfinite(c_start) and np.isfinite(c_end):
-                actual_ret = float(np.log(c_end / c_start))
-                # P3: Outlier filter — skip >50% weekly move (delist/halt)
-                if abs(actual_ret) > 0.5:
+    # MEMORY FIX: Process symbols in chunks to avoid loading all DataFrames at once
+    symbol_list = list(symbols.keys())
+    chunk_size = 20  # Process 20 symbols at a time
+    
+    for chunk_start in range(0, len(symbol_list), chunk_size):
+        chunk_end = min(chunk_start + chunk_size, len(symbol_list))
+        chunk_symbols = symbol_list[chunk_start:chunk_end]
+        
+        for sym in chunk_symbols:
+            try:
+                df = symbols[sym]
+                pre_week = df[df.index < week_start]
+                if len(pre_week) < 1:
                     continue
-                actual_close_rets[sym] = actual_ret
-        except Exception:
-            pass
+
+                # Use last HORIZON_BARS_1H rows before week_start
+                pre_snap = pre_week.iloc[-HORIZON_BARS_1H:]
+                feat = pre_snap[features_used].values.astype(np.float32)
+                valid = np.isfinite(feat).all(axis=1)
+                if valid.sum() < 1:
+                    continue
+
+                feat_scaled = scaler.transform(feat[valid])
+                pred_rets = model.predict(feat_scaled)
+                predictions[sym] = float(np.mean(pred_rets))
+
+                # Actual weekly close-to-close return
+                week_data = df[(df.index >= week_start) & (df.index < week_end)]
+                if len(week_data) < 2 or "close" not in week_data.columns:
+                    continue
+                c_start = float(week_data["close"].iloc[0])
+                c_end = float(week_data["close"].iloc[-1])
+                if c_start > 0 and np.isfinite(c_start) and np.isfinite(c_end):
+                    actual_ret = float(np.log(c_end / c_start))
+                    # P3: Outlier filter — skip >50% weekly move (delist/halt)
+                    if abs(actual_ret) > 0.5:
+                        continue
+                    actual_close_rets[sym] = actual_ret
+            except Exception:
+                pass
+        
+        # Evict cache after each chunk to free memory
+        if hasattr(symbols, '_cache'):
+            while len(symbols._cache) > 5:
+                symbols._cache.popitem(last=False)
+        gc.collect()
 
     return predictions, actual_close_rets
 
@@ -714,10 +747,10 @@ def run_falsification(symbols, test_weeks, active_features: List[str],
     print(f"{'='*72}\n")
 
     baselines = {
-        "ret_1w": lambda df: df["ret_1w"].iloc[-1] if "ret_1w" in df.columns else 0.0,
-        "ret_3d": lambda df: df["ret_3d"].iloc[-1] if "ret_3d" in df.columns else 0.0,
-        "vol_regime": lambda df: -df["vol_regime"].iloc[-1] if "vol_regime" in df.columns else 0.0,
-        "random": lambda df: np.random.randn(),
+        "ret_1w": lambda feat_dict: feat_dict.get("ret_1w", 0.0),
+        "ret_3d": lambda feat_dict: feat_dict.get("ret_3d", 0.0),
+        "vol_regime": lambda feat_dict: -feat_dict.get("vol_regime", 0.0),
+        "random": lambda feat_dict: np.random.randn(),
     }
 
     results = {name: [] for name in baselines}
@@ -731,24 +764,55 @@ def run_falsification(symbols, test_weeks, active_features: List[str],
         sym_features = {}
         actual_rets = {}
 
-        for sym, df in symbols.items():
-            try:
-                pre_week = df[df.index < ws]
-                if len(pre_week) < 1:
-                    continue
+        # MEMORY FIX: Process symbols in chunks with aggressive cache eviction
+        # to avoid loading all 382 DataFrames into memory simultaneously
+        symbol_list = list(symbols.keys())
+        chunk_size = 20  # Process only 20 symbols at a time
+        
+        for chunk_start in range(0, len(symbol_list), chunk_size):
+            chunk_end = min(chunk_start + chunk_size, len(symbol_list))
+            chunk_symbols = symbol_list[chunk_start:chunk_end]
+            
+            for sym in chunk_symbols:
+                try:
+                    df = symbols[sym]
+                    
+                    # Extract only the last row before week_start (minimal memory)
+                    pre_week_mask = df.index < ws
+                    pre_week_indices = np.flatnonzero(pre_week_mask)
+                    if len(pre_week_indices) < 1:
+                        continue
+                    
+                    # Get only the last row's feature values as a dict (not a Series)
+                    last_idx = pre_week_indices[-1]
+                    feat_dict = {}
+                    for feat in V6_CORE_FEATURES + ['close']:
+                        if feat in df.columns:
+                            val = df.iloc[last_idx][feat]
+                            if np.isfinite(val):
+                                feat_dict[feat] = float(val)
+                    sym_features[sym] = feat_dict
 
-                pre_snap = pre_week.iloc[-1]
-                sym_features[sym] = pre_snap
-
-                week_data = df[(df.index >= ws) & (df.index < we)]
-                if len(week_data) < 2 or "close" not in week_data.columns:
-                    continue
-                c_s = float(week_data["close"].iloc[0])
-                c_e = float(week_data["close"].iloc[-1])
-                if c_s > 0 and np.isfinite(c_s) and np.isfinite(c_e):
-                    actual_rets[sym] = float(np.log(c_e / c_s))
-            except Exception:
-                pass
+                    # Extract only close prices for the week
+                    week_mask = (df.index >= ws) & (df.index < we)
+                    week_indices = np.flatnonzero(week_mask)
+                    if len(week_indices) < 2:
+                        continue
+                    
+                    if "close" in df.columns:
+                        c_s = float(df.iloc[week_indices[0]]["close"])
+                        c_e = float(df.iloc[week_indices[-1]]["close"])
+                        if c_s > 0 and np.isfinite(c_s) and np.isfinite(c_e):
+                            actual_rets[sym] = float(np.log(c_e / c_s))
+                except Exception:
+                    pass
+            
+            # Aggressively evict cache after each chunk
+            if hasattr(symbols, '_cache'):
+                # Keep only 5 most recent, evict the rest
+                while len(symbols._cache) > 5:
+                    symbols._cache.popitem(last=False)
+            gc.collect()
 
         common = set(sym_features.keys()) & set(actual_rets.keys())
         if len(common) < 10:
@@ -775,7 +839,7 @@ def run_falsification(symbols, test_weeks, active_features: List[str],
         for s in common:
             vals = []
             for feat in V6_CORE_FEATURES:
-                if feat in sym_features[s].index:
+                if feat in sym_features[s]:  # dict.keys() check
                     v = sym_features[s][feat]
                     if np.isfinite(v):
                         vals.append(v)
@@ -890,13 +954,31 @@ def compute_feature_ic_v6(symbols, week_start, week_end,
     feature_ics = {}
     week_data = {}
 
-    for sym, df in symbols.items():
-        tcol = TARGET_COL if TARGET_COL in df.columns else TARGET_COL_FALLBACK
-        mask = (df.index >= week_start) & (df.index < week_end)
-        subset = df.loc[mask]
-        if len(subset) < 3 or tcol not in subset.columns:
-            continue
-        week_data[sym] = (subset, tcol)
+    # MEMORY FIX: Process symbols in chunks to avoid loading all DataFrames at once
+    symbol_list = list(symbols.keys())
+    chunk_size = 20  # Process 20 symbols at a time
+    
+    for chunk_start in range(0, len(symbol_list), chunk_size):
+        chunk_end = min(chunk_start + chunk_size, len(symbol_list))
+        chunk_symbols = symbol_list[chunk_start:chunk_end]
+        
+        for sym in chunk_symbols:
+            try:
+                df = symbols[sym]
+                tcol = TARGET_COL if TARGET_COL in df.columns else TARGET_COL_FALLBACK
+                mask = (df.index >= week_start) & (df.index < week_end)
+                subset = df.loc[mask]
+                if len(subset) < 3 or tcol not in subset.columns:
+                    continue
+                week_data[sym] = (subset, tcol)
+            except Exception:
+                pass
+        
+        # Evict cache after each chunk to free memory
+        if hasattr(symbols, '_cache'):
+            while len(symbols._cache) > 5:
+                symbols._cache.popitem(last=False)
+        gc.collect()
 
     if len(week_data) < 5:
         return {f: 0.0 for f in features}
@@ -1409,15 +1491,27 @@ def main():
         # P1: Build rvol snapshot for vol-scaled long sizing
         symbol_rvol = {}
         if regime in ("BULL_TREND",):
-            for sym, df in symbols.items():
-                try:
-                    pre_week_df = df[df.index < ws]
-                    if len(pre_week_df) >= 5 and "rvol_1d" in pre_week_df.columns:
-                        last_rvol = float(pre_week_df["rvol_1d"].iloc[-1])
-                        if np.isfinite(last_rvol) and last_rvol > 0:
-                            symbol_rvol[sym] = last_rvol
-                except Exception:
-                    pass
+            # MEMORY FIX: Process in chunks
+            symbol_list_rvol = list(symbols.keys())
+            chunk_size_rvol = 20
+            for chunk_start_rvol in range(0, len(symbol_list_rvol), chunk_size_rvol):
+                chunk_end_rvol = min(chunk_start_rvol + chunk_size_rvol, len(symbol_list_rvol))
+                chunk_symbols_rvol = symbol_list_rvol[chunk_start_rvol:chunk_end_rvol]
+                for sym in chunk_symbols_rvol:
+                    try:
+                        df = symbols[sym]
+                        pre_week_df = df[df.index < ws]
+                        if len(pre_week_df) >= 5 and "rvol_1d" in pre_week_df.columns:
+                            last_rvol = float(pre_week_df["rvol_1d"].iloc[-1])
+                            if np.isfinite(last_rvol) and last_rvol > 0:
+                                symbol_rvol[sym] = last_rvol
+                    except Exception:
+                        pass
+                # Evict cache
+                if hasattr(symbols, '_cache'):
+                    while len(symbols._cache) > 5:
+                        symbols._cache.popitem(last=False)
+                gc.collect()
 
         trades, week_ret, long_ret, short_ret, cur_longs, cur_shorts = \
             simulate_weekly_trades_v6(

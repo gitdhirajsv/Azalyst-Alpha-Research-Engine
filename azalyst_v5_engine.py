@@ -200,7 +200,9 @@ class LazySymbolStore:
             df.index = pd.to_datetime(df.index, utc=True)
         elif df.index.tz is None:
             df.index = df.index.tz_localize("UTC")
-        return df.sort_index()
+        # Sort in-place to avoid memory duplication on large DataFrames
+        df.sort_index(inplace=True)
+        return df
 
     # ── dict-compatible interface ────────────────────────────────────────────
 
