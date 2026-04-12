@@ -389,7 +389,7 @@ if "!COMPUTE_CHOICE!"=="gpu" set "GPU_FLAG=--gpu"
 set "SHAP_FLAG="
 if "!SKIP_SHAP!"=="1" set "SHAP_FLAG=--no-shap"
 
-call :RUN_PYTHON -u "%~dp0azalyst_v6_engine.py" --data-dir "!DATA_DIR_ARG!" --feature-dir "!CACHE_DIR_ARG!" --out-dir "!OUT_DIR_ARG!" --top-n !TOP_N_ARG! --leverage 1.0 !GPU_FLAG! !SHAP_FLAG! !NO_RESUME_FLAG! !NO_FALSIFY_FLAG!
+call :RUN_PYTHON -u "%~dp0azalyst_v6_engine.py" --data-dir "!DATA_DIR_ARG!" --feature-dir "!CACHE_DIR_ARG!" --out-dir "!OUT_DIR_ARG!" --top-n !TOP_N_ARG! --rolling-window 104 --leverage 1.0 !GPU_FLAG! !SHAP_FLAG! !NO_RESUME_FLAG! !NO_FALSIFY_FLAG!
 
 :POST_RUN
 set "EXIT_CODE=!errorlevel!"

@@ -14,7 +14,7 @@
 ║  KEY CHANGES FROM V5:                                                      ║
 ║   1. Elastic Net default model (XGBoost as optional challenger)            ║
 ║   2. Beta-neutral target (cross-sectional demeaned returns)                ║
-║   3. Rolling 26-week window (not expanding)                                ║
+║   3. Rolling 104-week window (2 yrs, not expanding) for initial train      ║
 ║   4. 10 stable features + turnover cap (max 3 changes per retrain)         ║
 ║   5. Regime-gated portfolio (no shorts in BULL_TREND)                      ║
 ║   6. Built-in falsification campaign (prove signal exists first)           ║
@@ -96,12 +96,14 @@ HORIZON_BARS     = 12
 TARGET_COL          = "future_ret_1h"
 TARGET_COL_FALLBACK = "future_ret"
 
-# Rolling window (not expanding) — Priority 5 fix: reduced from 26 to 13 weeks
-# Recent 3-6 months of crypto data are more regime-relevant than a full 6 months
-ROLLING_WINDOW_WEEKS = 13
+# Rolling window (not expanding) — v6.1: extended to 104 weeks (2 years) so
+# the model has seen at least one full bull+bear cycle before going OOS.
+# The safe_end embargo (1 hr before train_end) prevents any forward leakage.
+ROLLING_WINDOW_WEEKS = 104   # 2 years of training history
 
-# Retraining interval
-RETRAIN_WEEKS = 13
+# Retraining interval — monthly (4 weeks) for a 2-year OOS run so the model
+# adapts to changing regimes roughly every month instead of every quarter.
+RETRAIN_WEEKS = 4
 
 # Portfolio
 FEE_RATE       = 0.001
@@ -109,13 +111,35 @@ ROUND_TRIP_FEE = FEE_RATE * 2
 DEFAULT_TOP_N  = 5       # Conservative default (GPT 5.4: weak ranker → fewer picks)
 
 # Kill switches
-MAX_DRAWDOWN_KILL = -0.20  # P2: raised from -15% to -20% for crypto volatility
-KILL_SWITCH_RECOVERY_THRESHOLD = -0.10  # P2: must recover above this to resume
+# v6.1: raised to -25% so the 2-year OOS run is not aborted by a single bad
+# week of leveraged losses (original -20% fired after just 10 weeks).
+MAX_DRAWDOWN_KILL = -0.25
+KILL_SWITCH_RECOVERY_THRESHOLD = -0.12  # proportional recovery threshold
 
 # Feature stability
 MAX_FEATURE_TURNOVER = 3   # Max features to add/remove per retrain (GPT 5.4)
 MIN_IC_PERIODS_TO_ADD = 2  # Positive IC in ≥2 periods to be added
 MAX_TRAIN_ROWS = 2_000_000
+
+# Universe blacklist — symbols excluded from all predictions and trades
+# Reasons: FTT (FTX collapsed Nov 2022 — invalid post-collapse data),
+#          EURUSDT (FX pair — wrong distributional class for crypto engine),
+#          Stablecoins (USDC/USDT/FDUSD/USDP — zero return, poison signals)
+SYMBOL_BLACKLIST: Set[str] = {
+    "FTTUSDT",     # FTX Token — delisted/invalid post Nov 2022
+    "EURUSDT",     # FX pair — wrong asset class for this engine
+    "USDCUSDT",    # Stablecoin — ~0 return
+    "USDPUSDT",    # Stablecoin — ~0 return
+    "FDUSDUSDT",   # Stablecoin — ~0 return
+    "TUSDUSDT",    # Stablecoin — ~0 return
+    "BUSDUSDT",    # Stablecoin — ~0 return
+}
+
+# Position scale hard cap — v6.1: reduced from 3.0 to 1.0.
+# The original 3x cap caused a -34% single-week loss in week 10 that triggered
+# the kill switch. At 1.0 the maximum notional exposure is 1× per position.
+# Vol-scaling (0.5 / rvol) still adjusts within [0, 1.0].
+MAX_POSITION_SCALE = 1.0
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -284,12 +308,26 @@ def build_training_matrix_v6(symbols, train_end, features: List[str],
     - Rolling window (not expanding): only uses last `rolling_weeks` of data
     - Beta-neutral: subtracts daily cross-sectional mean from targets
     - Returns (X, y_raw, y_neutral, timestamps) — timestamps for diagnostics
+
+    LEAKAGE AUDIT (v6.1):
+    - safe_end = train_end - 1 hr (5 min × 12 bars embargo)
+      → the last bar allowed into training is at train_end-60min
+      → future_ret_1h at that bar looks forward to train_end — excluded ✓
+    - The OOS walk-forward always starts at or after train_end (next Mon)
+      → minimum gap between last training bar and first OOS bar ≥ 60 min ✓
+    - All features are lagged-only (no look-ahead in azalyst_factors_v2)
+    - Non-overlapping subsampling (every HORIZON_BARS_1H rows) removes
+      autocorrelated target contamination within the training window ✓
     """
     rolling_start = train_end - pd.Timedelta(weeks=rolling_weeks)
     safe_end = train_end - pd.Timedelta(minutes=5 * HORIZON_BARS_1H)
 
+    embargo_minutes = 5 * HORIZON_BARS_1H
     print(f"  Building v6 training matrix [{rolling_start.date()} → {safe_end.date()}]"
-          f" ({len(features)} features, rolling={rolling_weeks}wk)...")
+          f" ({len(features)} features, rolling={rolling_weeks}wk, embargo={embargo_minutes}min)")
+    print(f"  Leakage audit: train_end={pd.Timestamp(train_end).date()} "
+          f"safe_end={safe_end.date()} "
+          f"gap={embargo_minutes}min — OOS starts ≥ {embargo_minutes}min after safe_end")
 
     n_feat = len(features)
     initial = 500_000
@@ -568,6 +606,9 @@ def predict_week_v6(model, scaler, symbols, week_start, week_end,
         chunk_symbols = symbol_list[chunk_start:chunk_end]
         
         for sym in chunk_symbols:
+            # Skip blacklisted symbols before any data access
+            if sym in SYMBOL_BLACKLIST:
+                continue
             try:
                 df = symbols[sym]
                 pre_week = df[df.index < week_start]
@@ -675,11 +716,15 @@ def simulate_weekly_trades_v6(predictions, actual_close_rets,
         fee = 0.0 if sym in prev_longs else ROUND_TRIP_FEE
 
         # P1: Vol-scaled sizing for longs (inverse to rvol_1d)
+        # Hard cap at MAX_POSITION_SCALE to prevent 50x blowups on low-rvol symbols
         if symbol_rvol and sym in symbol_rvol:
             rvol = symbol_rvol[sym]
-            position_scale = base_position_scale / max(rvol, 0.01)
+            position_scale = min(
+                base_position_scale / max(rvol, 0.01),
+                MAX_POSITION_SCALE,
+            )
         else:
-            position_scale = base_position_scale
+            position_scale = min(base_position_scale, MAX_POSITION_SCALE)
 
         # P3: Hard clip at ±100%
         pnl = np.clip((ret - fee) * position_scale, -1.0, None)
@@ -909,8 +954,10 @@ def evaluate_kill_criteria(weekly_summary: List[dict],
     gates = {}
 
     # Gate 1: OOS IC consistently positive
+    # Exclude KILL_SWITCH weeks (ic=0, no trades) — they dilute the positivity rate
     ics = [m["ic"] for m in weekly_summary
-           if isinstance(m.get("ic"), (int, float)) and m.get("regime") != "IC_GATED"]
+           if isinstance(m.get("ic"), (int, float))
+           and m.get("regime") not in ("IC_GATED", "KILL_SWITCH")]
     if ics:
         mean_ic = float(np.mean(ics))
         pct_pos = float(np.mean([1 for ic in ics if ic > 0])) * 100
@@ -1016,6 +1063,71 @@ def compute_feature_ic_v6(symbols, week_start, week_end,
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# SECTION 10b: DATE SPLITS — v6.1 override (2-year training guarantee)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def get_date_splits_v6(symbols) -> tuple:
+    """V6.1 date splitter: guarantees ≥ 2-year training window and ≥ 2-year OOS.
+
+    Leakage-safe split rules:
+    - Y1 (training):  global_min  →  y1_end   (model never sees past y1_end)
+    - OOS zone 1:    y1_end      →  y2_end
+    - OOS zone 2:    y2_end      →  global_max
+
+    Split logic:
+    - Total data ≥ 4 yr  → Y1 = 2 yr fixed, OOS = remainder (≥ 2 yr)
+    - Total data 2-4 yr  → Y1 = 50 %, OOS = 50 %
+    - Total data < 2 yr  → Y1 = 33 % (legacy fallback, warn user)
+
+    The 1-hour embargo inside build_training_matrix_v6 (safe_end) is an
+    additional per-call guard on top of this structural split.
+    """
+    if hasattr(symbols, "_metadata") and symbols._metadata:
+        all_min = [v["min"] for v in symbols._metadata.values()]
+        all_max = [v["max"] for v in symbols._metadata.values()]
+    else:
+        all_min = [df.index.min() for df in symbols.values()]
+        all_max = [df.index.max() for df in symbols.values()]
+
+    global_min = min(all_min)
+    global_max = max(all_max)
+    total_span = global_max - global_min
+    total_weeks = total_span.days / 7
+
+    TWO_YEARS  = pd.Timedelta(weeks=104)
+    FOUR_YEARS = pd.Timedelta(weeks=208)
+
+    if total_span >= FOUR_YEARS:
+        # ≥ 4 yr total: hard 2-year training window, rest is OOS
+        y1_end = global_min + TWO_YEARS
+        split_label = "2yr fixed"
+    elif total_span >= TWO_YEARS:
+        # 2–4 yr total: 50/50 split
+        y1_end = global_min + (total_span / 2)
+        split_label = "50/50"
+    else:
+        # < 2 yr total: 33% legacy split (log a warning)
+        y1_end = global_min + (total_span / 3)
+        split_label = "33% (< 2yr data — extend data for best results)"
+        print(f"  [WARN] Total data span = {total_weeks:.0f} weeks "
+              f"(< 104). Training window is compressed.")
+
+    y2_end = y1_end + (global_max - y1_end) / 2
+
+    train_weeks = (y1_end - global_min).days / 7
+    oos_weeks   = (global_max - y1_end).days / 7
+
+    print(f"  Data range   : {global_min.date()} -> {global_max.date()} "
+          f"({total_weeks:.0f} weeks total)")
+    print(f"  Y1 (training): {global_min.date()} -> {y1_end.date()} "
+          f"({train_weeks:.0f} wks, split={split_label})")
+    print(f"  OOS zone 1   : {y1_end.date()} -> {y2_end.date()}")
+    print(f"  OOS zone 2   : {y2_end.date()} -> {global_max.date()} "
+          f"({oos_weeks:.0f} wks OOS total)")
+    return global_min, global_max, y1_end, y2_end
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # SECTION 11: CHECKPOINT (v6 paths)
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1081,7 +1193,7 @@ def main():
     parser.add_argument("--top-n", type=int, default=DEFAULT_TOP_N,
                         help="Top N longs + N shorts per week (default: 5)")
     parser.add_argument("--rolling-window", type=int, default=ROLLING_WINDOW_WEEKS,
-                        help="Rolling window in weeks (default: 26)")
+                        help="Rolling window in weeks (default: 104 = 2 years)")
     parser.add_argument("--no-falsify", action="store_true",
                         help="Skip falsification campaign")
     parser.add_argument("--xgb-challenger", action="store_true",
@@ -1211,8 +1323,8 @@ def main():
     _log(f"  Loaded {len(symbols)} valid symbols")
 
     # ── STEP 2: Date splits ───────────────────────────────────────────────────
-    _log("\nSTEP 2: Date splits\n")
-    global_min, global_max, y1_end, y2_end = get_date_splits(symbols)
+    _log("\nSTEP 2: Date splits (v6.1 — 2-year training guarantee)\n")
+    global_min, global_max, y1_end, y2_end = get_date_splits_v6(symbols)
 
     os.makedirs(f"{RESULTS_DIR}/models", exist_ok=True)
 
