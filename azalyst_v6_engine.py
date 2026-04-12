@@ -35,6 +35,7 @@ import time
 import traceback
 import warnings
 from collections import OrderedDict
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -43,6 +44,10 @@ import pandas as pd
 from scipy import stats
 from sklearn.linear_model import ElasticNetCV, ElasticNet, RidgeCV
 from sklearn.preprocessing import RobustScaler
+try:
+    from threadpoolctl import threadpool_limits
+except Exception:
+    threadpool_limits = None
 
 warnings.filterwarnings("ignore")
 
@@ -529,53 +534,60 @@ def train_elastic_net(X, y, features: List[str],
 
     Returns: (model, scaler, importance, mean_r2, mean_ic, icir)
     """
-    scaler = RobustScaler()
-    Xs = scaler.fit_transform(X).astype(np.float32)
+    limits_ctx = threadpool_limits(limits=1) if threadpool_limits else nullcontext()
 
-    # Elastic Net with built-in cross-validation for alpha selection
-    model = ElasticNetCV(
-        l1_ratio=[0.1, 0.3, 0.5, 0.7, 0.9],
-        n_alphas=50,
-        cv=5,
-        max_iter=10000,
-        random_state=42,
-        n_jobs=-1,
-    )
-    model.fit(Xs, y)
+    with limits_ctx:
+        scaler = RobustScaler()
+        Xs = scaler.fit_transform(X).astype(np.float32)
 
-    # Evaluate with PurgedTimeSeriesCV for honest metrics
-    cv = PurgedTimeSeriesCV(n_splits=5, gap=cv_gap)
-    r2s, ics = [], []
-
-    for fold, (tr, val) in enumerate(cv.split(Xs), 1):
-        m = ElasticNet(
-            alpha=model.alpha_,
-            l1_ratio=model.l1_ratio_,
+        # Windows safety: serial CV avoids repeated OpenMP / BLAS access violations
+        # seen during large monthly retrains on 2M-row matrices.
+        model = ElasticNetCV(
+            l1_ratio=[0.1, 0.3, 0.5, 0.7, 0.9],
+            n_alphas=50,
+            cv=5,
             max_iter=10000,
             random_state=42,
+            n_jobs=1,
         )
-        m.fit(Xs[tr], y[tr])
-        preds = m.predict(Xs[val])
+        model.fit(Xs, y)
 
-        ss_res = float(np.sum((y[val] - preds) ** 2))
-        ss_tot = float(np.sum((y[val] - np.mean(y[val])) ** 2))
-        r2 = 1.0 - ss_res / (ss_tot + 1e-12)
-        r2s.append(r2)
+        # Evaluate with PurgedTimeSeriesCV for honest metrics
+        cv = PurgedTimeSeriesCV(n_splits=5, gap=cv_gap)
+        r2s, ics = [], []
 
-        ic = compute_ic(preds, y[val])
-        if np.isfinite(ic):
-            ics.append(ic)
+        for fold, (tr, val) in enumerate(cv.split(Xs), 1):
+            m = ElasticNet(
+                alpha=model.alpha_,
+                l1_ratio=model.l1_ratio_,
+                max_iter=10000,
+                random_state=42,
+            )
+            m.fit(Xs[tr], y[tr])
+            preds = m.predict(Xs[val])
 
-    mean_r2 = float(np.mean(r2s)) if r2s else 0.0
-    mean_ic = float(np.mean(ics)) if ics else 0.0
-    icir = float(np.mean(ics) / (np.std(ics) + 1e-8)) if len(ics) > 1 else 0.0
+            ss_res = float(np.sum((y[val] - preds) ** 2))
+            ss_tot = float(np.sum((y[val] - np.mean(y[val])) ** 2))
+            r2 = 1.0 - ss_res / (ss_tot + 1e-12)
+            r2s.append(r2)
 
-    # Feature importance from coefficients
-    coefs = np.abs(model.coef_)
-    importance = pd.Series(coefs, index=features, name="importance"
-                           ).sort_values(ascending=False)
+            ic = compute_ic(preds, y[val])
+            if np.isfinite(ic):
+                ics.append(ic)
 
-    n_nonzero = int((np.abs(model.coef_) > 1e-8).sum())
+        mean_r2 = float(np.mean(r2s)) if r2s else 0.0
+        mean_ic = float(np.mean(ics)) if ics else 0.0
+        icir = float(np.mean(ics) / (np.std(ics) + 1e-8)) if len(ics) > 1 else 0.0
+
+        # Feature importance from coefficients
+        coefs = np.abs(model.coef_)
+        importance = pd.Series(coefs, index=features, name="importance"
+                               ).sort_values(ascending=False)
+
+        n_nonzero = int((np.abs(model.coef_) > 1e-8).sum())
+
+    del Xs
+    gc.collect()
     print(f"  [{label}] ElasticNet: alpha={model.alpha_:.6f}  "
           f"l1_ratio={model.l1_ratio_:.2f}  "
           f"nonzero={n_nonzero}/{len(features)}  "
