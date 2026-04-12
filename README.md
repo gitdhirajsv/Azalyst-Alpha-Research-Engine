@@ -191,12 +191,22 @@ python azalyst_v6_engine.py --no-gpu --rolling-window 52
 python azalyst_v6_engine.py --no-gpu --no-falsify
 ```
 
+### Rerun Order
+
+For normal reruns you do **not** need to rebuild the feature cache. Start from the existing `feature_cache/` and run `azalyst_v6_engine.py` or `RUN_AZALYST.bat`.
+
+Rebuild `feature_cache/` only when one of these changes:
+- `azalyst_factors_v2.py`
+- `build_feature_cache.py`
+- raw parquet files in `data/`
+- timeframe / resample assumptions used for cached features
+
 **What you'll see during training:**
 ```
   AZALYST v6  —  Consensus Rebuild Engine
   Model        : Elastic Net (linear)
   Target       : future_ret_1h (beta-neutral)
-  Window       : Rolling 26 weeks
+  Window       : Rolling 13 weeks
   Features     : 10 stable + turnover cap 3
   Portfolio    : top-5 per side, regime-gated
 
@@ -212,6 +222,8 @@ python azalyst_v6_engine.py --no-gpu --no-falsify
 ## Outputs
 
 All output files are written to `results_v6/` (default) or the directory passed via `--out-dir`.
+
+`results_v6/` is a generated output directory and is usually kept out of Git so reruns do not pollute commits.
 
 | File | Description |
 |------|-------------|
@@ -244,6 +256,7 @@ All output files are written to `results_v6/` (default) or the directory passed 
 - **Auto:** Select `Monitor: 1` in `RUN_AZALYST.bat` — dashboard opens automatically
 - **Manual:** Run `python VIEW_TRAINING.py` from a terminal, or press **F5** in Spyder
 - Refreshes every **5 seconds** — reads `results_v6/checkpoint_v6_latest.json` and `results_v6/run_log_v6.txt`
+- If a run has already finished, it can also fall back to `results_v6/weekly_summary_v6.csv` for a completed-run view
 - Close the window or press `Ctrl+C` to exit
 
 ---
@@ -255,7 +268,7 @@ All output files are written to `results_v6/` (default) or the directory passed 
 | File | Purpose |
 |---|---|
 | `azalyst_v6_engine.py` | **v6 engine** — Elastic Net consensus rebuild, beta-neutral target, regime-gated portfolio, rolling window, falsification campaign, 4-gate kill criteria |
-| `azalyst_v5_engine.py` | Shared infrastructure — `LazySymbolStore`, `detect_regime`, `build_feature_store`, `PurgedTimeSeriesCV`, checkpoint utilities |
+| `azalyst_v5_engine.py` | Shared infrastructure retained by v6 — `LazySymbolStore`, `detect_regime`, `build_feature_store`, `PurgedTimeSeriesCV`, checkpoint utilities. Do not delete until these helpers are migrated. |
 | `azalyst_db.py` | SQLite persistence — trades, metrics, model artifacts (7 tables, WAL mode) |
 | `azalyst_factors_v2.py` | 72 cross-sectional features — reversal signals, pump-dump indicators, quantile rank, WQ alphas, frac. diff |
 | `azalyst_ic_filter.py` | IC/ICIR feature filtering utilities used by training module |
@@ -266,9 +279,10 @@ All output files are written to `results_v6/` (default) or the directory passed 
 | `azalyst_leak_test.py` | Pre-training leakage sanity checks |
 | `azalyst_deflated_sharpe.py` | Deflated Sharpe Ratio calculator |
 | `build_feature_cache.py` | Precompute features → parquet cache (5–20x speedup) |
-| `validate_startup.py` | Pre-flight checks — directories, modules, engine config |
+| `validate_startup.py` | Pre-flight checks for the current v6 layout — `data/`, `feature_cache/`, `results_v6/`, imports, and core config |
 | `VIEW_TRAINING.py` | **Live 4-panel Spyder Monitor** — reads `results_v6/` every 5 s, shows PnL, win rate, Sharpe, log tail |
 | `RUN_AZALYST.bat` | Windows one-click launcher — GPU detection, auto-install, optional dashboard launch |
+| `AZALYST_V6_FIX_INSTRUCTIONS.md` | v6 migration and fix notes that explain the current consensus rebuild design decisions |
 
 ---
 
@@ -340,7 +354,7 @@ timestamp | open | high | low | close | volume
 | Problem | Fix |
 |---|---|
 | No GPU detected | `python -c "import xgboost as xgb; print(xgb.__version__)"` — verify CUDA build |
-| Feature cache stale | Delete `feature_cache/` and re-run — rebuilds automatically |
+| Feature cache stale | Rebuild only if factors, cache-builder logic, raw `data/`, or timeframe assumptions changed. Otherwise reuse `feature_cache/` and run the engine directly |
 | OOM / freeze | Reduce `MAX_TRAIN_ROWS` in config (2M for RTX 2050, 4M for T4) |
 | Pipeline closes immediately | Confirm Python path has no spaces; use `RUN_AZALYST.bat` |
 | No results after run | Check `results_v6/` for output files. If empty, check data folder has `.parquet` files |

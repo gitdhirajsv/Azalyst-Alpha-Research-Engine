@@ -20,6 +20,7 @@ env/
 data/
 data_top6/
 results/
+results_v6/
 results_top6/
 results_full3y_aggr/
 feature_cache/
@@ -56,6 +57,8 @@ pipeline_output.txt
 crash_log.txt
 trace_output.txt
 ANALYSIS_COMPLETE.txt
+AZALYST_FULL_ANALYSIS.xlsx
+azalyst_full_analysis_v6.py
 simple_test.txt
 fortest.txt
 chcp_test.txt
@@ -83,10 +86,8 @@ test*.bat
 test_pkg.bat
 
 # ── Superseded legacy modules (kept locally, not tracked) ──
-azalyst_ic_filter.py
 azalyst_ml.py
 azalyst_signal_combiner.py
-azalyst_tf_utils.py
 
 # ── IDE and editor ──
 .idea/

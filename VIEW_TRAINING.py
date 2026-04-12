@@ -1,15 +1,15 @@
 ﻿"""
-Azalyst Alpha Research Engine  ΓÇö  Spyder Monitor (Live)
+Azalyst Alpha Research Engine -- Spyder Monitor (Live)
 
 Auto-launched by RUN_AZALYST.bat when you choose Terminal + Spyder mode.
 Can also be run manually:  python VIEW_TRAINING.py  or F5 in Spyder.
 
-Reads results_top6/checkpoint_v4_latest.json and results_top6/run_log.txt every 5 s
+Reads results_v6/checkpoint_v6_latest.json and results_v6/run_log_v6.txt every 5 s
 and renders a 4-panel live dashboard:
-  ΓÇó Training Quality by Week  (win rate + rolling Sharpe)
-  ΓÇó PnL and Drawdown          (cumulative return + max drawdown curve)
-  ΓÇó Current Status            (week, trades, win rate, Sharpe, DD, PF)
-  ΓÇó Recent Log Tail           (last N lines from the engine log file)
+  - Training Quality by Week  (win rate + rolling Sharpe)
+  - PnL and Drawdown          (cumulative return + max drawdown curve)
+  - Current Status            (week, trades, win rate, Sharpe, DD, PF)
+  - Recent Log Tail           (last N lines from the engine log file)
 """
 from __future__ import annotations
 
@@ -24,16 +24,16 @@ import matplotlib.gridspec as gridspec
 import numpy as np
 import pandas as pd
 
-# ΓöÇΓöÇ Paths ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+# -- Paths ------------------------------------------------------------------
 ROOT = Path(__file__).resolve().parent
-RES  = ROOT / "results_top6"
-CKPT = RES  / "checkpoint_v4_latest.json"
-LOG  = RES  / "run_log.txt"
+RES  = ROOT / "results_v6"
+CKPT = RES  / "checkpoint_v6_latest.json"
+LOG  = RES  / "run_log_v6.txt"
 
 REFRESH = 5   # seconds between refreshes
 LOG_TAIL = 18  # log lines to show
 
-# ΓöÇΓöÇ Theme (dark navy bg + white card panels ΓÇö matches SVG design) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+# -- Theme (dark navy bg + white card panels) -------------------------------
 BG    = "#0d1422"   # dark navy figure background
 PANEL = "#f5f7fb"   # white card panels
 ACC1  = "#ff7f0e"   # orange (matplotlib default)
@@ -46,10 +46,48 @@ GRID  = "#e2e8f0"
 TITLE_FG = "#e7f5ee"  # light text for suptitle on dark bg
 
 
-# ΓöÇΓöÇ Data helpers ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+# -- Data helpers ------------------------------------------------------------
+# Fallback: also look for the completed weekly_summary_v6.csv when no live
+# checkpoint exists (i.e. after a completed run).
+SUMMARY_CSV = RES / "weekly_summary_v6.csv"
+
+
 def _load_ckpt() -> dict:
+    # 1. Try the live checkpoint first
     try:
-        return json.loads(CKPT.read_text(encoding="utf-8"))
+        data = json.loads(CKPT.read_text(encoding="utf-8"))
+        if data:
+            return data
+    except Exception:
+        pass
+
+    # 2. Fall back to completed-run CSV so the dashboard still renders
+    try:
+        df = pd.read_csv(SUMMARY_CSV)
+        weekly_returns = (df["week_return_pct"].fillna(0) / 100).tolist()
+        cum = 0.0
+        cum_rets = []
+        for r in weekly_returns:
+            cum = (1 + cum) * (1 + r) - 1
+            cum_rets.append(round(cum * 100, 4))
+        summary = df.to_dict(orient="records")
+        for i, row in enumerate(summary):
+            row["cum_return_pct"] = cum_rets[i]
+        # Build a minimal trades list from the CSV for win-rate computation
+        trades = []
+        for row in summary:
+            wr = row.get("week_return_pct", 0)
+            trades.append({"week": row["week"], "pnl_percent": wr})
+        return {
+            "run_id": "completed-run (from CSV)",
+            "ts": "(run finished)",
+            "last_week": int(df["week"].max()),
+            "retrains": 0,
+            "kill_switch_hit": "KILL_SWITCH" in df["regime"].values,
+            "weekly_summary": summary,
+            "weekly_returns": weekly_returns,
+            "all_trades": trades,
+        }
     except Exception:
         return {}
 
@@ -60,7 +98,7 @@ def _tail_log(n: int = LOG_TAIL) -> list[str]:
             lines = fh.readlines()
         return [ln.rstrip() for ln in lines[-n:]]
     except Exception:
-        return [f"Waiting for {LOG.name} ΓÇª  (pipeline not started yet)"]
+        return [f"Waiting for {LOG.name} ...  (pipeline not started yet)"]
 
 
 def _win_rates_by_week(all_trades: list) -> list[float]:
@@ -89,7 +127,7 @@ def _rolling_sharpe(weekly_returns: list, window: int = 4) -> list[float]:
     return out
 
 
-# ΓöÇΓöÇ Style ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+# -- Style ------------------------------------------------------------------
 def _apply_style() -> None:
     plt.rcParams.update({
         "figure.facecolor":  BG,
@@ -113,7 +151,7 @@ def _apply_style() -> None:
     })
 
 
-# ΓöÇΓöÇ Render one frame ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+# -- Render one frame -------------------------------------------------------
 def _render(fig: plt.Figure, axes: list, ckpt: dict, log_lines: list[str]) -> None:
     ax_qual, ax_pnl, ax_status, ax_log = axes
 
@@ -123,8 +161,8 @@ def _render(fig: plt.Figure, axes: list, ckpt: dict, log_lines: list[str]) -> No
     last_week      = ckpt.get("last_week", 0)
     retrains       = ckpt.get("retrains", 0)
     kill_sw        = ckpt.get("kill_switch_hit", False)
-    ts             = ckpt.get("ts", "ΓÇö")
-    run_id         = ckpt.get("run_id", "ΓÇö")
+    ts             = ckpt.get("ts", "--")
+    run_id         = ckpt.get("run_id", "--")
 
     weeks    = [m["week"]               for m in weekly_summary]
     cum_ret  = [m.get("cum_return_pct",  0) for m in weekly_summary]
@@ -133,7 +171,7 @@ def _render(fig: plt.Figure, axes: list, ckpt: dict, log_lines: list[str]) -> No
     win_rates = _win_rates_by_week(all_trades)
     sharpes   = _rolling_sharpe(weekly_returns)
 
-    # ΓöÇΓöÇ Panel 1: Training Quality by Cycle ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    # -- Panel 1: Training Quality by Cycle ----------------------------------
     ax_qual.clear()
     ax_qual.set_facecolor(PANEL)
     ax_qual.grid(True, alpha=0.4, color=GRID)
@@ -149,7 +187,7 @@ def _render(fig: plt.Figure, axes: list, ckpt: dict, log_lines: list[str]) -> No
                        labelcolor=[ACC2, ACC1][:len([x for x in [win_rates, sharpes] if x])])
     ax_qual.tick_params(colors=MUTED)
 
-    # ΓöÇΓöÇ Panel 2: PnL and Drawdown ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    # -- Panel 2: PnL and Drawdown -------------------------------------------
     ax_pnl.clear()
     ax_pnl.set_facecolor(PANEL)
     ax_pnl.grid(True, alpha=0.4, color=GRID)
@@ -164,7 +202,7 @@ def _render(fig: plt.Figure, axes: list, ckpt: dict, log_lines: list[str]) -> No
                       labelcolor=[ACC2, ACC1])
     ax_pnl.tick_params(colors=MUTED)
 
-    # ΓöÇΓöÇ Panel 3: Current Status ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    # -- Panel 3: Current Status ---------------------------------------------
     ax_status.clear()
     ax_status.set_facecolor(PANEL)
     ax_status.set_xticks([])
@@ -193,9 +231,9 @@ def _render(fig: plt.Figure, axes: list, ckpt: dict, log_lines: list[str]) -> No
 
     # monospace padded rows matching SVG layout
     status_rows = [
-        ("Run state     ", st_lbl,            st_col),
-        ("Run ID        ", str(run_id)[:20],  TXT),
-        ("Last ckpt     ", ts,                TXT),
+        ("Run state    ", st_lbl,           st_col),
+        ("Run ID       ", str(run_id)[:20], TXT),
+        ("Last ckpt    ", ts,               TXT),
         ("Current week  ", str(last_week),    TXT),
         ("Retrains      ", str(retrains),     TXT),
         (None, None, None),  # spacer
@@ -228,7 +266,7 @@ def _render(fig: plt.Figure, axes: list, ckpt: dict, log_lines: list[str]) -> No
 
     ax_status.set_title("Current Status")
 
-    # ΓöÇΓöÇ Panel 4: Recent Log Tail ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+    # -- Panel 4: Recent Log Tail --------------------------------------------
     ax_log.clear()
     ax_log.set_facecolor(PANEL)
     ax_log.set_xticks([])
@@ -247,7 +285,7 @@ def _render(fig: plt.Figure, axes: list, ckpt: dict, log_lines: list[str]) -> No
     ax_log.set_title("Recent Log Tail")
 
     fig.suptitle(
-        "Azalyst Alpha Research Engine  -  Spyder Monitor",
+        "Azalyst v6  --  Live Training Monitor",
         fontsize=15, fontweight="bold", color=TITLE_FG, y=0.984,
         fontfamily="Segoe UI",
     )
@@ -255,7 +293,7 @@ def _render(fig: plt.Figure, axes: list, ckpt: dict, log_lines: list[str]) -> No
     fig.canvas.flush_events()
 
 
-# ΓöÇΓöÇ Main loop ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+# -- Main loop --------------------------------------------------------------
 def run_dashboard(refresh: int = REFRESH) -> None:
     _apply_style()
 
@@ -271,9 +309,10 @@ def run_dashboard(refresh: int = REFRESH) -> None:
     plt.ion()
     plt.show(block=False)
 
-    print(f"[Azalyst Monitor] Live dashboard started ΓÇö refreshes every {refresh}s")
+    print(f"[Azalyst Monitor] Live dashboard started -- refreshes every {refresh}s")
     print(f"[Azalyst Monitor] Checkpoint : {CKPT}")
     print(f"[Azalyst Monitor] Log file   : {LOG}")
+    print("[Azalyst Monitor] Watching: checkpoint_v6_latest.json + run_log_v6.txt")
     print("[Azalyst Monitor] Close the window or Ctrl+C to exit.\n")
 
     try:

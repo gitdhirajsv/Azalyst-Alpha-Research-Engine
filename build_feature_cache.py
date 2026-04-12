@@ -1,15 +1,14 @@
 """
 ╔══════════════════════════════════════════════════════════════════════════════╗
          AZALYST ALPHA RESEARCH ENGINE    FEATURE CACHE BUILDER v2
-║   65 features  |  Vectorized Factor Engine  |  Multi-process Scaling        ║
+║   72 features  |  Vectorized Factor Engine  |  Multi-process Scaling        ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
 FIXES vs original:
-  - Renamed future_ret_4h → future_ret  (aligns with notebook + local GPU script)
+  - Renamed future_ret_4h → future_ret  (aligns with the current v6 workflow)
   - Removed per-symbol alpha_label computation — WRONG to compute per symbol.
-    Cross-sectional alpha_label (did coin outperform median at time t?) requires
-    ALL symbols pooled together. It is now computed inside build_training_matrix()
-    in azalyst_weekly_loop.py and azalyst_local_gpu.py AFTER pooling.
+    Cross-sectional labels require ALL symbols pooled together at the same
+    timestamp, so they are handled inside the training pipeline, not the cache.
 """
 
 import argparse
@@ -87,7 +86,7 @@ def _process_symbol(args: Tuple) -> Tuple[str, bool, str]:
         feats["close"] = df["close"].astype(np.float32)
 
         # ── FIX: column is now 'future_ret' (not 'future_ret_4h') ─────────────
-        # This aligns with azalyst_local_gpu.py and the notebook.
+        # This aligns with the current v6 engine and notebook.
         feats["future_ret"] = np.log(df["close"].shift(-hor) / df["close"])
 
         # Horizon-in-bars for each forward-return target.
@@ -111,12 +110,9 @@ def _process_symbol(args: Tuple) -> Tuple[str, bool, str]:
         ).astype(np.float32)
 
         # ── FIX: do NOT compute alpha_label here ──────────────────────────────
-        # alpha_label = "did this coin outperform the cross-sectional median?"
-        # That requires ALL symbols pooled at the SAME timestamps.
-        # Computing it per-symbol just gives "did the price go up?" which is
-        # the wrong objective. It is computed AFTER pooling in:
-        #   azalyst_local_gpu.py  →  build step 3
-        #   azalyst_weekly_loop.py → build_training_matrix()
+        # Cross-sectional labels require all symbols at the same timestamp.
+        # Per-symbol labels would just answer "did this coin go up?" which is
+        # not the current v6 relative-return objective.
 
         # ── Save: keep only valid feature rows ───────────────────────────────
         min_non_nan = int(0.80 * len(FEATURE_COLS))
@@ -131,7 +127,7 @@ def _process_symbol(args: Tuple) -> Tuple[str, bool, str]:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Azalyst Feature Cache Builder v2 — pre-compute 65 features for all symbols"
+        description="Azalyst Feature Cache Builder v2 — pre-compute 72 features for all symbols"
     )
     parser.add_argument("--data-dir",  required=True,  help="Directory with SYMBOL.parquet files")
     parser.add_argument("--out-dir",   default="./feature_cache", help="Output directory")

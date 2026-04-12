@@ -1242,7 +1242,10 @@ def main():
         _log(f"\n  Training Elastic Net on {len(X_train):,} rows...")
         from azalyst_leak_test import run_leak_test
         _log("\n[LEAK TEST] Running pre-training sanity checks...")
-        leak_results = run_leak_test(X_train, y_neutral, active_features, embargo_bars=cv_gap)
+        # Run leak test on y_raw (untransformed target) to avoid issues with
+        # beta-neutral daily demeaning breaking the roll-based correlation test
+        leak_results = run_leak_test(X_train, y_raw, active_features,
+                                     embargo_bars=cv_gap, timestamps=ts_train)
         for k, v in leak_results.items():
             _log(f"  {k}: {v}")
         if not leak_results["shuffled_test_pass"]:
