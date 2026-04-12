@@ -141,6 +141,76 @@ SYMBOL_BLACKLIST: Set[str] = {
 # Vol-scaling (0.5 / rvol) still adjusts within [0, 1.0].
 MAX_POSITION_SCALE = 1.0
 
+# Fiat / stablecoin-like bases to exclude from the crypto cross-section.
+# v6.1 bugfix: AEURUSDT/EURIUSDT still slipped through the original blacklist,
+# which polluted picks with fiat-pegged instruments and wasted retrain time.
+FIAT_STABLE_BASES: Set[str] = {
+    "AEUR",
+    "BFUSD",
+    "BUSD",
+    "DAI",
+    "EURI",
+    "EUR",
+    "FDUSD",
+    "FRAX",
+    "PYUSD",
+    "RLUSD",
+    "TUSD",
+    "USD1",
+    "USDC",
+    "USDE",
+    "USDP",
+    "UST",
+    "USTC",
+    "XUSD",
+}
+
+
+def is_excluded_symbol(sym: str) -> bool:
+    """Return True for non-tradeable symbols we do not want in the engine."""
+    sym_u = str(sym).upper().strip()
+    if sym_u in SYMBOL_BLACKLIST:
+        return True
+    if sym_u.endswith("USDT") and sym_u[:-4] in FIAT_STABLE_BASES:
+        return True
+    return False
+
+
+def get_tradeable_symbols(symbols) -> List[str]:
+    """Filter the lazy symbol universe down to tradeable crypto instruments."""
+    return [sym for sym in symbols.keys() if not is_excluded_symbol(sym)]
+
+
+def load_symbol_columns(symbols, sym: str, columns: List[str]) -> pd.DataFrame:
+    """Load only the requested columns for one symbol from the lazy store."""
+    needed_cols = list(dict.fromkeys(columns))
+
+    if hasattr(symbols, "_metadata") and sym in getattr(symbols, "_metadata", {}):
+        fpath = symbols._metadata[sym]["fpath"]
+        df_local = pd.read_parquet(fpath, columns=needed_cols)
+    else:
+        df_full = symbols[sym]
+        cols = [c for c in needed_cols if c in df_full.columns]
+        df_local = df_full.loc[:, cols].copy()
+
+    if not isinstance(df_local.index, pd.DatetimeIndex):
+        df_local.index = pd.to_datetime(df_local.index, utc=True)
+    elif df_local.index.tz is None:
+        df_local.index = df_local.index.tz_localize("UTC")
+    df_local.sort_index(inplace=True)
+    return df_local
+
+
+def retrain_cadence_label(weeks: int) -> str:
+    """Human-readable retrain cadence for operator logs."""
+    if weeks <= 1:
+        return "weekly"
+    if weeks <= 4:
+        return "monthly"
+    if weeks <= 13:
+        return "quarterly"
+    return f"every {weeks} weeks"
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 2: V6 STABLE FEATURE SET
@@ -349,8 +419,12 @@ def build_training_matrix_v6(symbols, train_end, features: List[str],
     eligible = 0
 
     # MEMORY FIX: Process symbols in chunks to avoid loading all DataFrames at once
-    symbol_list = list(symbols.keys())
+    all_symbols = list(symbols.keys())
+    symbol_list = [sym for sym in all_symbols if not is_excluded_symbol(sym)]
     chunk_size = 20  # Process 20 symbols at a time
+    excluded_count = len(all_symbols) - len(symbol_list)
+    print(f"  Training universe: {len(symbol_list)} tradeable symbols "
+          f"({excluded_count} excluded)")
     
     for chunk_start in range(0, len(symbol_list), chunk_size):
         chunk_end = min(chunk_start + chunk_size, len(symbol_list))
@@ -358,7 +432,9 @@ def build_training_matrix_v6(symbols, train_end, features: List[str],
         
         for sym in chunk_symbols:
             try:
-                df = symbols[sym]
+                df = load_symbol_columns(
+                    symbols, sym, features + [TARGET_COL, TARGET_COL_FALLBACK]
+                )
                 tcol = TARGET_COL if TARGET_COL in df.columns else TARGET_COL_FALLBACK
                 if tcol not in df.columns:
                     continue
@@ -397,6 +473,8 @@ def build_training_matrix_v6(symbols, train_end, features: List[str],
             while len(symbols._cache) > 5:
                 symbols._cache.popitem(last=False)
         gc.collect()
+        if chunk_end % 100 == 0 or chunk_end == len(symbol_list):
+            print(f"  [{chunk_end}/{len(symbol_list)}] training symbols scanned...")
 
     feat_arr = feat_arr[:cursor]
     ret_arr = ret_arr[:cursor]
@@ -598,7 +676,7 @@ def predict_week_v6(model, scaler, symbols, week_start, week_end,
     actual_close_rets = {}
 
     # MEMORY FIX: Process symbols in chunks to avoid loading all DataFrames at once
-    symbol_list = list(symbols.keys())
+    symbol_list = get_tradeable_symbols(symbols)
     chunk_size = 20  # Process 20 symbols at a time
     
     for chunk_start in range(0, len(symbol_list), chunk_size):
@@ -606,11 +684,8 @@ def predict_week_v6(model, scaler, symbols, week_start, week_end,
         chunk_symbols = symbol_list[chunk_start:chunk_end]
         
         for sym in chunk_symbols:
-            # Skip blacklisted symbols before any data access
-            if sym in SYMBOL_BLACKLIST:
-                continue
             try:
-                df = symbols[sym]
+                df = load_symbol_columns(symbols, sym, features_used + ["close"])
                 pre_week = df[df.index < week_start]
                 if len(pre_week) < 1:
                     continue
@@ -796,8 +871,10 @@ def run_falsification(symbols, test_weeks, active_features: List[str],
         return {}
 
     needed_cols = list(dict.fromkeys(V6_CORE_FEATURES + ["close"]))
-    symbol_list = list(symbols.keys())
+    all_symbols = list(symbols.keys())
+    symbol_list = [sym for sym in all_symbols if not is_excluded_symbol(sym)]
     rng = np.random.default_rng(42)
+    excluded_count = len(all_symbols) - len(symbol_list)
 
     # Collect all weekly baseline inputs in a compact structure so each symbol
     # is loaded only once instead of once per week.
@@ -812,22 +889,10 @@ def run_falsification(symbols, test_weeks, active_features: List[str],
         })
 
     def _load_symbol_subset(sym: str) -> pd.DataFrame:
-        if hasattr(symbols, "_metadata") and sym in getattr(symbols, "_metadata", {}):
-            fpath = symbols._metadata[sym]["fpath"]
-            df_local = pd.read_parquet(fpath, columns=needed_cols)
-        else:
-            df_full = symbols[sym]
-            cols = [c for c in needed_cols if c in df_full.columns]
-            df_local = df_full.loc[:, cols].copy()
+        return load_symbol_columns(symbols, sym, needed_cols)
 
-        if not isinstance(df_local.index, pd.DatetimeIndex):
-            df_local.index = pd.to_datetime(df_local.index, utc=True)
-        elif df_local.index.tz is None:
-            df_local.index = df_local.index.tz_localize("UTC")
-        df_local.sort_index(inplace=True)
-        return df_local
-
-    print(f"  Processing {len(symbol_list)} symbols once across {len(week_pairs)} weeks...")
+    print(f"  Processing {len(symbol_list)} tradeable symbols once across "
+          f"{len(week_pairs)} weeks ({excluded_count} excluded)...")
     for idx, sym in enumerate(symbol_list, 1):
         try:
             df = _load_symbol_subset(sym)
@@ -1011,13 +1076,18 @@ def evaluate_kill_criteria(weekly_summary: List[dict],
 
 def compute_feature_ic_v6(symbols, week_start, week_end,
                           features: List[str]) -> Dict[str, float]:
-    """Compute cross-sectional IC for each feature over a week."""
+    """Compute weekly cross-sectional IC using the same pre-week snapshot as trading."""
     feature_ics = {}
-    week_data = {}
+    feature_pairs = {feat: [] for feat in features}
 
-    # MEMORY FIX: Process symbols in chunks to avoid loading all DataFrames at once
-    symbol_list = list(symbols.keys())
+    # Use the same setup as the trading decision:
+    # last pre-week feature snapshot vs realized close-to-close weekly return.
+    all_symbols = list(symbols.keys())
+    symbol_list = [sym for sym in all_symbols if not is_excluded_symbol(sym)]
     chunk_size = 20  # Process 20 symbols at a time
+    excluded_count = len(all_symbols) - len(symbol_list)
+    print(f"    Feature IC snapshot [{week_start.date()} -> {week_end.date()}] "
+          f"on {len(symbol_list)} tradeable symbols ({excluded_count} excluded)")
     
     for chunk_start in range(0, len(symbol_list), chunk_size):
         chunk_end = min(chunk_start + chunk_size, len(symbol_list))
@@ -1025,13 +1095,37 @@ def compute_feature_ic_v6(symbols, week_start, week_end,
         
         for sym in chunk_symbols:
             try:
-                df = symbols[sym]
-                tcol = TARGET_COL if TARGET_COL in df.columns else TARGET_COL_FALLBACK
-                mask = (df.index >= week_start) & (df.index < week_end)
-                subset = df.loc[mask]
-                if len(subset) < 3 or tcol not in subset.columns:
+                df = load_symbol_columns(symbols, sym, features + ["close"])
+                if "close" not in df.columns:
                     continue
-                week_data[sym] = (subset, tcol)
+
+                pre_rows = df[df.index < week_start]
+                if pre_rows.empty:
+                    continue
+
+                week_close = df.loc[
+                    (df.index >= week_start) & (df.index < week_end),
+                    "close",
+                ].dropna()
+                if len(week_close) < 2:
+                    continue
+
+                c_s = float(week_close.iloc[0])
+                c_e = float(week_close.iloc[-1])
+                if not (np.isfinite(c_s) and np.isfinite(c_e)) or c_s <= 0:
+                    continue
+
+                actual_ret = float(np.log(c_e / c_s))
+                if abs(actual_ret) > 0.5:
+                    continue
+
+                last_row = pre_rows.iloc[-1]
+                for feat in features:
+                    if feat not in last_row.index:
+                        continue
+                    feat_val = last_row[feat]
+                    if np.isfinite(feat_val):
+                        feature_pairs[feat].append((float(feat_val), actual_ret))
             except Exception:
                 pass
         
@@ -1040,20 +1134,14 @@ def compute_feature_ic_v6(symbols, week_start, week_end,
             while len(symbols._cache) > 5:
                 symbols._cache.popitem(last=False)
         gc.collect()
-
-    if len(week_data) < 5:
-        return {f: 0.0 for f in features}
+        if chunk_end % 100 == 0 or chunk_end == len(symbol_list):
+            print(f"    [{chunk_end}/{len(symbol_list)}] IC symbols processed...")
 
     for feat in features:
-        feat_vals = []
-        ret_vals = []
-        for sym, (subset, tcol) in week_data.items():
-            if feat in subset.columns:
-                valid = subset[[feat, tcol]].dropna()
-                if len(valid) > 0:
-                    feat_vals.append(float(valid[feat].mean()))
-                    ret_vals.append(float(valid[tcol].mean()))
-        if len(feat_vals) >= 5:
+        pairs = feature_pairs.get(feat, [])
+        if len(pairs) >= 10:
+            feat_vals = np.array([p[0] for p in pairs], dtype=float)
+            ret_vals = np.array([p[1] for p in pairs], dtype=float)
             ic, _ = stats.spearmanr(feat_vals, ret_vals)
             feature_ics[feat] = float(ic) if np.isfinite(ic) else 0.0
         else:
@@ -1063,11 +1151,11 @@ def compute_feature_ic_v6(symbols, week_start, week_end,
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 10b: DATE SPLITS — v6.1 override (2-year training guarantee)
+# SECTION 10b: DATE SPLITS — v6.1 adaptive split (up to 2-year training)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def get_date_splits_v6(symbols) -> tuple:
-    """V6.1 date splitter: guarantees ≥ 2-year training window and ≥ 2-year OOS.
+    """V6.1 date splitter: targets up to a 2-year training window when possible.
 
     Leakage-safe split rules:
     - Y1 (training):  global_min  →  y1_end   (model never sees past y1_end)
@@ -1236,6 +1324,8 @@ def main():
           f"{'  +  XGBoost challenger' if args.xgb_challenger else ''}")
     print(f"  Target       : {TARGET_COL} (beta-neutral)")
     print(f"  Window       : Rolling {args.rolling_window} weeks")
+    print(f"  Retrain      : every {RETRAIN_WEEKS} weeks "
+          f"({retrain_cadence_label(RETRAIN_WEEKS)})")
     print(f"  Features     : {len(V6_DEFAULT_FEATURES)} stable"
           f" + turnover cap {MAX_FEATURE_TURNOVER}")
     print(f"  Portfolio    : top-{args.top_n} per side, regime-gated")
@@ -1320,10 +1410,13 @@ def main():
     if not symbols:
         _log("ERROR: No symbols loaded")
         return
-    _log(f"  Loaded {len(symbols)} valid symbols")
+    tradeable_symbol_count = len(get_tradeable_symbols(symbols))
+    _log(f"  Loaded {len(symbols)} valid symbols "
+         f"({tradeable_symbol_count} tradeable, "
+         f"{len(symbols) - tradeable_symbol_count} excluded)")
 
     # ── STEP 2: Date splits ───────────────────────────────────────────────────
-    _log("\nSTEP 2: Date splits (v6.1 — 2-year training guarantee)\n")
+    _log("\nSTEP 2: Date splits (v6.1 — adaptive split, up to 2-year train)\n")
     global_min, global_max, y1_end, y2_end = get_date_splits_v6(symbols)
 
     os.makedirs(f"{RESULTS_DIR}/models", exist_ok=True)
@@ -1547,9 +1640,9 @@ def main():
             # P4: Tag IC with current regime
             feature_tracker.record_ic(fic, regime=regime)
 
-        # Quarterly retrain with ROLLING WINDOW
+        # Scheduled retrain with rolling window
         if week_num % RETRAIN_WEEKS == 0:
-            _log(f"\n  Week {week_num:3d}: QUARTERLY RETRAIN "
+            _log(f"\n  Week {week_num:3d}: {retrain_cadence_label(RETRAIN_WEEKS).upper()} RETRAIN "
                  f"(rolling {args.rolling_window}wk to {we.date()})...")
 
             # P5: IC decay monitoring
@@ -1666,14 +1759,14 @@ def main():
         symbol_rvol = {}
         if regime in ("BULL_TREND",):
             # MEMORY FIX: Process in chunks
-            symbol_list_rvol = list(symbols.keys())
+            symbol_list_rvol = get_tradeable_symbols(symbols)
             chunk_size_rvol = 20
             for chunk_start_rvol in range(0, len(symbol_list_rvol), chunk_size_rvol):
                 chunk_end_rvol = min(chunk_start_rvol + chunk_size_rvol, len(symbol_list_rvol))
                 chunk_symbols_rvol = symbol_list_rvol[chunk_start_rvol:chunk_end_rvol]
                 for sym in chunk_symbols_rvol:
                     try:
-                        df = symbols[sym]
+                        df = load_symbol_columns(symbols, sym, ["rvol_1d"])
                         pre_week_df = df[df.index < ws]
                         if len(pre_week_df) >= 5 and "rvol_1d" in pre_week_df.columns:
                             last_rvol = float(pre_week_df["rvol_1d"].iloc[-1])
