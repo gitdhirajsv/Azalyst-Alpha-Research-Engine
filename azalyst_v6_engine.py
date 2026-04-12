@@ -70,9 +70,11 @@ from azalyst_v5_engine import (
     detect_cuda_api,
     _gpu_cleanup,
     _model_to_cpu,
-    PurgedTimeSeriesCV,
+    # NOTE: PurgedTimeSeriesCV intentionally NOT imported from v5_engine.
+    # v5_engine has the old one-sided embargo version.
+    # The fixed two-sided version lives in azalyst_train (imported below).
 )
-from azalyst_train import compute_ic
+from azalyst_train import compute_ic, PurgedTimeSeriesCV
 
 try:
     import pyarrow.parquet as pq
