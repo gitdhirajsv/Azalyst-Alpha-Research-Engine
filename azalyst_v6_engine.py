@@ -32,6 +32,7 @@ import os
 import pickle
 import sys
 import time
+import traceback
 import warnings
 from collections import OrderedDict
 from pathlib import Path
@@ -1033,6 +1034,19 @@ def load_checkpoint_v6(results_dir):
         return None
 
 
+def append_fatal_log_v6(exc: Exception) -> None:
+    """Best-effort fatal logging for batch launches."""
+    try:
+        os.makedirs(RESULTS_DIR, exist_ok=True)
+        log_path = os.path.join(RESULTS_DIR, "run_log_v6.txt")
+        with open(log_path, "a", encoding="utf-8") as fh:
+            fh.write(f"\n[FATAL] {type(exc).__name__}: {exc}\n")
+            fh.write("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
+            fh.write("\n[CHECKPOINT] Preserved — run again to resume.\n")
+    except Exception:
+        pass
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SECTION 12: MAIN ENGINE
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1128,6 +1142,12 @@ def main():
             except Exception:
                 pass
 
+    def _log_exception(prefix: str, exc: Exception) -> None:
+        _log(f"{prefix}{type(exc).__name__}: {exc}")
+        for line in traceback.format_exception(type(exc), exc, exc.__traceback__):
+            for subline in line.rstrip().splitlines():
+                _log(f"    {subline}")
+
     db = AzalystDB(f"{RESULTS_DIR}/azalyst_v6.db")
 
     if resuming:
@@ -1201,8 +1221,12 @@ def main():
         falsify_weeks = pd.date_range(start=falsify_start, end=min(falsify_end, global_max),
                                       freq="W-MON")
         if len(falsify_weeks) >= 3:
-            falsification_results = run_falsification(
-                symbols, falsify_weeks, active_features, top_n=args.top_n)
+            try:
+                falsification_results = run_falsification(
+                    symbols, falsify_weeks, active_features, top_n=args.top_n)
+            except Exception as exc:
+                _log_exception("  [WARN] Falsification failed — continuing without it: ", exc)
+                falsification_results = {}
         else:
             _log("  Not enough weeks for falsification")
     else:
@@ -1817,7 +1841,7 @@ if __name__ == "__main__":
         print("\n  [INTERRUPTED] Checkpoint preserved — run again to resume.")
         sys.exit(1)
     except Exception as _e:
-        import traceback
+        append_fatal_log_v6(_e)
         print(f"\n  [FATAL] {type(_e).__name__}: {_e}")
         traceback.print_exc()
         print("\n  [CHECKPOINT] Preserved — run again to resume.")

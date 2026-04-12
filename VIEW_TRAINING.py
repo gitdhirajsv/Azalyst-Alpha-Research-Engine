@@ -18,11 +18,20 @@ import sys
 from pathlib import Path
 
 import matplotlib
-matplotlib.use("TkAgg")          # works as a standalone window on Windows
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import numpy as np
 import pandas as pd
+
+# Prefer an interactive GUI backend, but do not hard-crash if one backend is
+# unavailable on the current Python install.
+if matplotlib.get_backend().lower() == "agg":
+    for _backend in ("QtAgg", "TkAgg"):
+        try:
+            plt.switch_backend(_backend)
+            break
+        except Exception:
+            continue
 
 # -- Paths ------------------------------------------------------------------
 ROOT = Path(__file__).resolve().parent
@@ -310,6 +319,7 @@ def run_dashboard(refresh: int = REFRESH) -> None:
     plt.show(block=False)
 
     print(f"[Azalyst Monitor] Live dashboard started -- refreshes every {refresh}s")
+    print(f"[Azalyst Monitor] Backend    : {matplotlib.get_backend()}")
     print(f"[Azalyst Monitor] Checkpoint : {CKPT}")
     print(f"[Azalyst Monitor] Log file   : {LOG}")
     print("[Azalyst Monitor] Watching: checkpoint_v6_latest.json + run_log_v6.txt")
