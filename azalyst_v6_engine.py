@@ -746,110 +746,123 @@ def run_falsification(symbols, test_weeks, active_features: List[str],
     print(f"  V6 FALSIFICATION CAMPAIGN — Prove Signal Exists")
     print(f"  Testing {len(test_weeks)-1} weeks with top-{top_n} per side")
     print(f"{'='*72}\n")
+    week_pairs = list(zip(test_weeks[:-1], test_weeks[1:]))
+    if not week_pairs:
+        return {}
 
-    baselines = {
-        "ret_1w": lambda feat_dict: feat_dict.get("ret_1w", 0.0),
-        "ret_3d": lambda feat_dict: feat_dict.get("ret_3d", 0.0),
-        "vol_regime": lambda feat_dict: -feat_dict.get("vol_regime", 0.0),
-        "random": lambda feat_dict: np.random.randn(),
-    }
+    needed_cols = list(dict.fromkeys(V6_CORE_FEATURES + ["close"]))
+    symbol_list = list(symbols.keys())
+    rng = np.random.default_rng(42)
 
-    results = {name: [] for name in baselines}
-    results["composite"] = []
+    # Collect all weekly baseline inputs in a compact structure so each symbol
+    # is loaded only once instead of once per week.
+    weekly_payloads = []
+    for _ in week_pairs:
+        weekly_payloads.append({
+            "actual": [],
+            "ret_1w": [],
+            "ret_3d": [],
+            "vol_regime": [],
+            "composite": [],
+        })
 
-    for i in range(len(test_weeks) - 1):
-        ws = test_weeks[i]
-        we = test_weeks[i + 1]
+    def _load_symbol_subset(sym: str) -> pd.DataFrame:
+        if hasattr(symbols, "_metadata") and sym in getattr(symbols, "_metadata", {}):
+            fpath = symbols._metadata[sym]["fpath"]
+            df_local = pd.read_parquet(fpath, columns=needed_cols)
+        else:
+            df_full = symbols[sym]
+            cols = [c for c in needed_cols if c in df_full.columns]
+            df_local = df_full.loc[:, cols].copy()
 
-        # Gather pre-week features and actual returns for all symbols
-        sym_features = {}
-        actual_rets = {}
+        if not isinstance(df_local.index, pd.DatetimeIndex):
+            df_local.index = pd.to_datetime(df_local.index, utc=True)
+        elif df_local.index.tz is None:
+            df_local.index = df_local.index.tz_localize("UTC")
+        df_local.sort_index(inplace=True)
+        return df_local
 
-        # MEMORY FIX: Process symbols in chunks with aggressive cache eviction
-        # to avoid loading all 382 DataFrames into memory simultaneously
-        symbol_list = list(symbols.keys())
-        chunk_size = 20  # Process only 20 symbols at a time
-        
-        for chunk_start in range(0, len(symbol_list), chunk_size):
-            chunk_end = min(chunk_start + chunk_size, len(symbol_list))
-            chunk_symbols = symbol_list[chunk_start:chunk_end]
-            
-            for sym in chunk_symbols:
-                try:
-                    df = symbols[sym]
-                    
-                    # Extract only the last row before week_start (minimal memory)
-                    pre_week_mask = df.index < ws
-                    pre_week_indices = np.flatnonzero(pre_week_mask)
-                    if len(pre_week_indices) < 1:
-                        continue
-                    
-                    # Get only the last row's feature values as a dict (not a Series)
-                    last_idx = pre_week_indices[-1]
-                    feat_dict = {}
-                    for feat in V6_CORE_FEATURES + ['close']:
-                        if feat in df.columns:
-                            val = df.iloc[last_idx][feat]
-                            if np.isfinite(val):
-                                feat_dict[feat] = float(val)
-                    sym_features[sym] = feat_dict
+    print(f"  Processing {len(symbol_list)} symbols once across {len(week_pairs)} weeks...")
+    for idx, sym in enumerate(symbol_list, 1):
+        try:
+            df = _load_symbol_subset(sym)
+            if "close" not in df.columns or len(df) < 2:
+                continue
 
-                    # Extract only close prices for the week
-                    week_mask = (df.index >= ws) & (df.index < we)
-                    week_indices = np.flatnonzero(week_mask)
-                    if len(week_indices) < 2:
-                        continue
-                    
-                    if "close" in df.columns:
-                        c_s = float(df.iloc[week_indices[0]]["close"])
-                        c_e = float(df.iloc[week_indices[-1]]["close"])
-                        if c_s > 0 and np.isfinite(c_s) and np.isfinite(c_e):
-                            actual_rets[sym] = float(np.log(c_e / c_s))
-                except Exception:
-                    pass
-            
-            # Aggressively evict cache after each chunk
-            if hasattr(symbols, '_cache'):
-                # Keep only 5 most recent, evict the rest
-                while len(symbols._cache) > 5:
-                    symbols._cache.popitem(last=False)
+            close_series = df["close"].dropna()
+            if len(close_series) < 2:
+                continue
+
+            for week_idx, (ws, we) in enumerate(week_pairs):
+                pre_rows = df.loc[df.index < ws]
+                if pre_rows.empty:
+                    continue
+
+                week_close = close_series.loc[(close_series.index >= ws) & (close_series.index < we)]
+                if len(week_close) < 2:
+                    continue
+
+                c_s = float(week_close.iloc[0])
+                c_e = float(week_close.iloc[-1])
+                if not (np.isfinite(c_s) and np.isfinite(c_e)) or c_s <= 0:
+                    continue
+
+                last_row = pre_rows.iloc[-1]
+                feature_vals = []
+                ret_1w = 0.0
+                ret_3d = 0.0
+                vol_regime = 0.0
+
+                if "ret_1w" in last_row.index and np.isfinite(last_row["ret_1w"]):
+                    ret_1w = float(last_row["ret_1w"])
+                    feature_vals.append(ret_1w)
+                if "ret_3d" in last_row.index and np.isfinite(last_row["ret_3d"]):
+                    ret_3d = float(last_row["ret_3d"])
+                    feature_vals.append(ret_3d)
+                if "vol_regime" in last_row.index and np.isfinite(last_row["vol_regime"]):
+                    vol_regime = float(last_row["vol_regime"])
+                    feature_vals.append(vol_regime)
+
+                payload = weekly_payloads[week_idx]
+                payload["actual"].append(float(np.log(c_e / c_s)))
+                payload["ret_1w"].append(ret_1w)
+                payload["ret_3d"].append(ret_3d)
+                payload["vol_regime"].append(-vol_regime)
+                payload["composite"].append(float(np.mean(feature_vals)) if feature_vals else 0.0)
+        except Exception:
+            pass
+
+        if idx % 50 == 0 or idx == len(symbol_list):
+            print(f"  [{idx}/{len(symbol_list)}] symbols processed...")
             gc.collect()
 
-        common = set(sym_features.keys()) & set(actual_rets.keys())
-        if len(common) < 10:
+    results = {
+        "ret_1w": [],
+        "ret_3d": [],
+        "vol_regime": [],
+        "composite": [],
+        "random": [],
+    }
+
+    for payload in weekly_payloads:
+        ret_arr = np.array(payload["actual"], dtype=float)
+        if len(ret_arr) < 10:
             continue
 
-        ret_arr = np.array([actual_rets[s] for s in common])
-
-        # Test each baseline
-        for name, score_fn in baselines.items():
-            scores = []
-            for s in common:
-                try:
-                    scores.append(score_fn(sym_features[s]))
-                except Exception:
-                    scores.append(0.0)
-            scores = np.array(scores)
+        for name in ["ret_1w", "ret_3d", "vol_regime", "composite"]:
+            scores = np.array(payload[name], dtype=float)
             valid = np.isfinite(scores) & np.isfinite(ret_arr)
             if valid.sum() >= 10:
                 ic = float(stats.spearmanr(scores[valid], ret_arr[valid])[0])
-                results[name].append(ic)
+                if np.isfinite(ic):
+                    results[name].append(ic)
 
-        # Composite: average z-score of core features
-        composite_scores = []
-        for s in common:
-            vals = []
-            for feat in V6_CORE_FEATURES:
-                if feat in sym_features[s]:  # dict.keys() check
-                    v = sym_features[s][feat]
-                    if np.isfinite(v):
-                        vals.append(v)
-            composite_scores.append(float(np.mean(vals)) if vals else 0.0)
-        composite_scores = np.array(composite_scores)
-        valid = np.isfinite(composite_scores) & np.isfinite(ret_arr)
+        random_scores = rng.standard_normal(len(ret_arr))
+        valid = np.isfinite(ret_arr)
         if valid.sum() >= 10:
-            ic = float(stats.spearmanr(composite_scores[valid], ret_arr[valid])[0])
-            results["composite"].append(ic)
+            ic = float(stats.spearmanr(random_scores[valid], ret_arr[valid])[0])
+            if np.isfinite(ic):
+                results["random"].append(ic)
 
     # Print results
     print(f"  {'Baseline':<20} {'Mean IC':>10} {'Std IC':>10} {'ICIR':>10} {'IC>0%':>10}")
@@ -862,8 +875,8 @@ def run_falsification(symbols, test_weeks, active_features: List[str],
             continue
         mean_ic = float(np.mean(ics))
         std_ic = float(np.std(ics))
-        icir = mean_ic / (std_ic + 1e-8)
-        pct_pos = float(np.mean([1 for ic in ics if ic > 0])) * 100
+        icir = mean_ic / std_ic if std_ic > 1e-8 else 0.0
+        pct_pos = float(np.mean(np.array(ics) > 0)) * 100
         print(f"  {name:<20} {mean_ic:>+10.4f} {std_ic:>10.4f} {icir:>+10.4f} {pct_pos:>9.1f}%")
         summary[name] = {"mean_ic": mean_ic, "icir": icir, "pct_pos": pct_pos}
 
