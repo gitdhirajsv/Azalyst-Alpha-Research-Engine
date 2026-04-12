@@ -223,6 +223,8 @@ set "CACHE_DIR_ARG=%~dp0feature_cache"
 set "OUT_DIR_ARG=%~dp0results"
 set "PIN_COINS_ARG="
 set "TOP_N_ARG="
+set "NO_RESUME_FLAG="
+set "NO_FALSIFY_FLAG="
 
 if "!GPU_FOUND!"=="1" goto :ASK_COMPUTE
 echo  Compute: CPU only (no GPU found)
@@ -277,6 +279,55 @@ set "CACHE_DIR_ARG=%~dp0feature_cache"
 set "OUT_DIR_ARG=%~dp0results_v6"
 set "TOP_N_ARG=5"
 echo  [OK] V6 Consensus Rebuild  (Elastic Net, beta-neutral, regime-gated, top-5)
+goto :Q_RESUME
+
+rem -- Fresh run vs resume ----------------------------------------------------
+:Q_RESUME
+echo.
+if exist "%~dp0results_v6\checkpoint_v6_latest.json" (
+    echo  Checkpoint found in results_v6\
+    echo    [1] Fresh run   - ignore saved checkpoint
+    echo    [2] Resume run  - continue from saved checkpoint
+    echo.
+    choice /N /C:12 /M "  Choice 1 or 2: "
+    if errorlevel 2 goto :SET_RESUME
+    goto :SET_FRESH
+) else (
+    set "NO_RESUME_FLAG=--no-resume"
+    echo  [OK] No checkpoint found - starting fresh
+)
+goto :Q_FALSIFY
+
+:SET_FRESH
+set "NO_RESUME_FLAG=--no-resume"
+echo  [OK] Fresh run selected
+goto :Q_FALSIFY
+
+:SET_RESUME
+set "NO_RESUME_FLAG="
+echo  [OK] Resume selected
+goto :Q_FALSIFY
+
+rem -- Falsification toggle ---------------------------------------------------
+:Q_FALSIFY
+echo.
+echo  Falsification campaign:
+echo    [1] Enabled  - baseline sanity check ^(slower^)
+echo    [2] Skip     - faster launch / debugging
+echo.
+choice /N /C:12 /M "  Choice 1 or 2: "
+if errorlevel 2 goto :SET_NO_FALSIFY
+goto :SET_FALSIFY
+
+:SET_FALSIFY
+set "NO_FALSIFY_FLAG="
+echo  [OK] Falsification enabled
+goto :CONFIRM
+
+:SET_NO_FALSIFY
+set "NO_FALSIFY_FLAG=--no-falsify"
+echo  [OK] Falsification skipped
+goto :CONFIRM
 
 :CONFIRM
 echo.
@@ -289,6 +340,8 @@ echo    Monitor  : !LAUNCH_MONITOR!  (0=terminal only, 1=terminal+spyder)
 echo    Data     : !DATA_DIR_ARG!
 echo    Cache    : !CACHE_DIR_ARG!
 echo    Results  : !OUT_DIR_ARG!
+if defined NO_RESUME_FLAG (echo    Resume   : fresh run) else (echo    Resume   : checkpoint resume)
+if defined NO_FALSIFY_FLAG (echo    Falsify  : skipped) else (echo    Falsify  : enabled)
 echo  ============================================================
 echo.
 choice /N /C:YN /M "  Start? Y or N: "
@@ -336,7 +389,7 @@ if "!COMPUTE_CHOICE!"=="gpu" set "GPU_FLAG=--gpu"
 set "SHAP_FLAG="
 if "!SKIP_SHAP!"=="1" set "SHAP_FLAG=--no-shap"
 
-call :RUN_PYTHON -u "%~dp0azalyst_v6_engine.py" --data-dir "!DATA_DIR_ARG!" --feature-dir "!CACHE_DIR_ARG!" --out-dir "!OUT_DIR_ARG!" --top-n !TOP_N_ARG! --leverage 1.0 !GPU_FLAG! !SHAP_FLAG!
+call :RUN_PYTHON -u "%~dp0azalyst_v6_engine.py" --data-dir "!DATA_DIR_ARG!" --feature-dir "!CACHE_DIR_ARG!" --out-dir "!OUT_DIR_ARG!" --top-n !TOP_N_ARG! --leverage 1.0 !GPU_FLAG! !SHAP_FLAG! !NO_RESUME_FLAG! !NO_FALSIFY_FLAG!
 
 :POST_RUN
 set "EXIT_CODE=!errorlevel!"
@@ -377,7 +430,7 @@ if "!EXIT_CODE!"=="0" (
     echo  Common fixes:
     echo    GPU OOM       - re-run and choose CPU
     echo    Bad timestamp - delete feature_cache\ and retry
-    echo    Import error  - check the exact error message above
+    echo    Import error  - check results_v6\run_log_v6.txt
     echo.
     if exist "%~dp0results_v6\checkpoint_v6_latest.json" (
         echo  Checkpoint saved ^(results_v6^). Run again to resume from where it stopped.
