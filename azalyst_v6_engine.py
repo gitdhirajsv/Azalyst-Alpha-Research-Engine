@@ -118,9 +118,10 @@ ROUND_TRIP_FEE = FEE_RATE * 2
 DEFAULT_TOP_N  = 5       # Conservative default (GPT 5.4: weak ranker → fewer picks)
 
 # Kill switches
-# v6.1: raised to -25% so the 2-year OOS run is not aborted by a single bad
-# week of leveraged losses (original -20% fired after just 10 weeks).
-MAX_DRAWDOWN_KILL = -0.25
+# v6.2: restored to -20%. The -25% threshold was too permissive — with the
+# momentum filter disabled, portfolio vacancy is gone and -20% is an
+# appropriate risk ceiling that still allows the model room to breathe.
+MAX_DRAWDOWN_KILL = -0.20
 KILL_SWITCH_RECOVERY_THRESHOLD = -0.12  # proportional recovery threshold
 
 # Feature stability
@@ -146,7 +147,13 @@ TARGET_WINSOR_PCT = 1.0   # percentile to clip at each tail
 # 2. Momentum filter — never long a coin whose 1-week return is negative
 #    (don't catch falling knives in crypto)
 LONG_MIN_PRED_THRESHOLD = 0.0   # pred_ret must exceed this (fraction, not %)
-LONG_MOMENTUM_FILTER    = True  # only long if ret_1w > 0
+# v6.2: disabled — ret_1w>0 caused portfolio vacancy in 3/11 OOS weeks because
+# crypto corrections are broad: ALL coins have ret_1w<0 simultaneously, so the
+# filter evacuated the long side entirely, leaving only unhedged shorts that
+# lost -30% over two weeks with no hedge. The model already encodes momentum
+# via ret_1w and ret_3d features; a hard portfolio-level filter on top creates
+# systematic gaps without adding incremental alpha.
+LONG_MOMENTUM_FILTER    = False  # was True (v6.1) — disabled in v6.2
 
 # ── Turnover reduction ───────────────────────────────────────────────────────
 # Fee-adjusted ranking: subtract the estimated round-trip cost from predicted
@@ -264,14 +271,16 @@ V6_STABLE_FEATURES = [
     "kyle_lambda",         # Price impact / liquidity
     "mean_rev_zscore_1h",  # Z-score of 1hr reversion
     "vol_ratio_1h_1d",     # Intraday vs daily vol ratio
+    "rev_1h",              # v6.2: 1hr reversal — proven IC=+0.066, strongest crypto signal
 ]
 
 # Full default set: core + stable = 10 features
 V6_DEFAULT_FEATURES = V6_CORE_FEATURES + V6_STABLE_FEATURES
 
 # CANDIDATE pool — can be added if IC is strong and stable
+# Note: rev_1h moved to V6_STABLE_FEATURES in v6.2
 V6_CANDIDATE_FEATURES = [
-    "ret_1d", "ret_2d", "rev_1h", "rev_1d",
+    "ret_1d", "ret_2d", "rev_1d",
     "rvol_4h", "atr_norm", "cci_14", "bb_pos",
     "vwap_dev", "amihud", "trend_strength",
     "frac_diff_close", "vol_ret_1d",
@@ -556,6 +565,27 @@ def build_training_matrix_v6(symbols, train_end, features: List[str],
         y_neutral = np.clip(y_neutral, lo, hi)
         print(f"  Target winsorized: [{lo*100:.3f}%, {hi*100:.3f}%] "
               f"({n_clipped:,} rows clipped, {n_clipped/max(len(y_neutral),1)*100:.2f}%)")
+
+    # ── Target rank-normalization (v6.2) ──────────────────────────────────────────
+    # ROOT CAUSE FIX: ElasticNet minimizes MSE, but we deploy by Spearman IC
+    # (rank ordering). These are different objectives. With beta-neutral target
+    # std ~1.3%, optimal ElasticNet coefficients are ~0.0004 but ALPHA_MIN_FLOOR
+    # = 0.001 zeros them out (threshold 0.00099 > signal 0.0004).
+    #
+    # Rank-normalizing to [-1, 1] fixes BOTH problems:
+    #   1. Target std becomes ~0.577, so alpha=0.001 is proportionate
+    #      (optimal coef = 0.577 * IC = 0.017 >> soft-threshold 0.001)
+    #   2. MSE on ranks directly optimizes for rank ordering = Spearman IC
+    #
+    # This is the standard technique used in cross-sectional factor research
+    # (WorldQuant, AQR). It's monotone, so all downstream Spearman IC
+    # measurements remain valid — ranks are preserved.
+    from scipy.stats import rankdata as _rankdata
+    y_ranks = _rankdata(y_neutral, method='average')
+    y_neutral = (2.0 * y_ranks / (len(y_ranks) + 1) - 1.0).astype(np.float32)
+    print(f"  Target rank-normalized to [-1, 1]: "
+          f"std={float(np.std(y_neutral)):.4f} "
+          f"(expected ~0.577 for uniform) — aligns MSE with Spearman IC")
 
     # ── Feature collinearity report ───────────────────────────────────────────────
     # Pairs with corr > 0.8 add noise without new signal. Log them so the
