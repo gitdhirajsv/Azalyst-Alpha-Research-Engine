@@ -636,9 +636,11 @@ def train_elastic_net(X, y, features: List[str],
 
         # Windows safety: serial CV avoids repeated OpenMP / BLAS access violations
         # seen during large monthly retrains on 2M-row matrices.
+        # n_alphas=20 (down from 50) to avoid MemoryError on large datasets:
+        # sklearn allocates (n_samples, 1, n_alphas) for MSE paths.
         cv_model = ElasticNetCV(
             l1_ratio=L1_RATIO_GRID,
-            n_alphas=50,
+            n_alphas=20,
             cv=5,
             max_iter=10000,
             random_state=42,
