@@ -525,11 +525,12 @@ def build_training_matrix_v6(symbols, train_end, features: List[str],
         print("  ERROR: fewer than 50 valid rows")
         return None, None, None, None
 
-    # VRAM guard
+    # VRAM guard — use permutation slicing instead of rng.choice to avoid
+    # allocating a 3.6M+ index array (causes MemoryError on Windows).
     if len(feat_arr) > MAX_TRAIN_ROWS:
-        idx = rng.choice(len(feat_arr), MAX_TRAIN_ROWS, replace=False)
-        idx.sort()
-        feat_arr, ret_arr, ts_arr = feat_arr[idx], ret_arr[idx], ts_arr[idx]
+        perm = rng.permutation(len(feat_arr))[:MAX_TRAIN_ROWS]
+        perm.sort()
+        feat_arr, ret_arr, ts_arr = feat_arr[perm], ret_arr[perm], ts_arr[perm]
 
     # Beta-neutral target: subtract daily cross-sectional mean
     y_neutral = ret_arr.copy()
