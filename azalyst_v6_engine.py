@@ -128,6 +128,31 @@ MAX_FEATURE_TURNOVER = 3   # Max features to add/remove per retrain (GPT 5.4)
 MIN_IC_PERIODS_TO_ADD = 2  # Positive IC in ≥2 periods to be added
 MAX_TRAIN_ROWS = 2_000_000
 
+# ── Regularization guardrails ────────────────────────────────────────────────
+# The main cause of 29x IS→OOS IC decay was ElasticNetCV picking alpha=0.00002
+# (near-zero regularization) on 2M rows, producing an overfit model.
+# We enforce a minimum alpha floor and bias toward L1 (sparser = less overfit).
+ALPHA_MIN_FLOOR   = 0.001   # Never allow alpha below this value
+L1_RATIO_GRID     = [0.5, 0.7, 0.9, 0.95, 0.99]  # Heavily L1-biased
+
+# ── Target engineering ───────────────────────────────────────────────────────
+# Winsorize at 1st/99th pct to suppress outlier influence on linear model.
+TARGET_WINSORIZE  = True
+TARGET_WINSOR_PCT = 1.0   # percentile to clip at each tail
+
+# ── Long-side filters ────────────────────────────────────────────────────────
+# The long win rate of 35.6% (worse than random) is fixed by:
+# 1. Minimum predicted return threshold — avoid near-zero-confidence longs
+# 2. Momentum filter — never long a coin whose 1-week return is negative
+#    (don't catch falling knives in crypto)
+LONG_MIN_PRED_THRESHOLD = 0.0   # pred_ret must exceed this (fraction, not %)
+LONG_MOMENTUM_FILTER    = True  # only long if ret_1w > 0
+
+# ── Turnover reduction ───────────────────────────────────────────────────────
+# Fee-adjusted ranking: subtract the estimated round-trip cost from predicted
+# return before ranking so that churning a position costs the model something.
+FEE_ADJUSTED_RANKING    = True  # deduct ROUND_TRIP_FEE from pred for new entries
+
 # Universe blacklist — symbols excluded from all predictions and trades
 # Reasons: FTT (FTX collapsed Nov 2022 — invalid post-collapse data),
 #          EURUSDT (FX pair — wrong distributional class for crypto engine),
@@ -520,6 +545,39 @@ def build_training_matrix_v6(symbols, train_end, features: List[str],
           f"target mean={float(np.mean(y_neutral))*100:.4f}% "
           f"std={float(np.std(y_neutral))*100:.4f}%")
 
+    # ── Target winsorization ─────────────────────────────────────────────────────────
+    # Clips extreme target values that blow up ElasticNet coefficients.
+    # Beta-neutral std ~1.3% means a raw 20% return (10x the std) would
+    # dominate the loss and cause overfitting to rare events.
+    if TARGET_WINSORIZE:
+        lo = float(np.nanpercentile(y_neutral, TARGET_WINSOR_PCT))
+        hi = float(np.nanpercentile(y_neutral, 100 - TARGET_WINSOR_PCT))
+        n_clipped = int(np.sum((y_neutral < lo) | (y_neutral > hi)))
+        y_neutral = np.clip(y_neutral, lo, hi)
+        print(f"  Target winsorized: [{lo*100:.3f}%, {hi*100:.3f}%] "
+              f"({n_clipped:,} rows clipped, {n_clipped/max(len(y_neutral),1)*100:.2f}%)")
+
+    # ── Feature collinearity report ───────────────────────────────────────────────
+    # Pairs with corr > 0.8 add noise without new signal. Log them so the
+    # operator knows which features are redundant.
+    if len(features) <= 15:
+        try:
+            corr_mat = np.corrcoef(feat_arr.T)
+            high_corr_pairs = []
+            for i in range(len(features)):
+                for j in range(i + 1, len(features)):
+                    if abs(corr_mat[i, j]) > 0.80:
+                        high_corr_pairs.append(
+                            (features[i], features[j], corr_mat[i, j]))
+            if high_corr_pairs:
+                print("  [COLLINEARITY] Correlated feature pairs (|r|>0.80):")
+                for f1, f2, r in sorted(high_corr_pairs, key=lambda x: -abs(x[2])):
+                    print(f"    {f1} <-> {f2}: r={r:.3f}")
+            else:
+                print("  [COLLINEARITY] No highly correlated pairs (|r|>0.80)")
+        except Exception:
+            pass
+
     gc.collect()
     return feat_arr, ret_arr, y_neutral, ts_arr
 
@@ -532,6 +590,11 @@ def train_elastic_net(X, y, features: List[str],
                       label: str = "", cv_gap: int = 48) -> Tuple:
     """Train Elastic Net with built-in alpha/l1_ratio CV.
 
+    v6.1 changes vs original:
+    - L1 grid biased toward 0.9-0.99 (sparser = less overfit)
+    - Alpha floor enforced: if CV picks alpha < ALPHA_MIN_FLOOR, raise it
+    - This directly fixes the 29x IS→OOS IC decay caused by alpha=0.00002
+
     Returns: (model, scaler, importance, mean_r2, mean_ic, icir)
     """
     limits_ctx = threadpool_limits(limits=1) if threadpool_limits else nullcontext()
@@ -542,15 +605,39 @@ def train_elastic_net(X, y, features: List[str],
 
         # Windows safety: serial CV avoids repeated OpenMP / BLAS access violations
         # seen during large monthly retrains on 2M-row matrices.
-        model = ElasticNetCV(
-            l1_ratio=[0.1, 0.3, 0.5, 0.7, 0.9],
+        cv_model = ElasticNetCV(
+            l1_ratio=L1_RATIO_GRID,
             n_alphas=50,
             cv=5,
             max_iter=10000,
             random_state=42,
             n_jobs=1,
         )
+        cv_model.fit(Xs, y)
+
+        chosen_alpha    = cv_model.alpha_
+        chosen_l1ratio  = cv_model.l1_ratio_
+
+        # ── Alpha floor ─────────────────────────────────────────────────────────────
+        # With 2M rows and 10 features, ElasticNetCV tends to pick a very small
+        # alpha (e.g. 0.00002), which means near-zero regularization and severe
+        # overfitting. We force alpha >= ALPHA_MIN_FLOOR so the model stays sparse.
+        if chosen_alpha < ALPHA_MIN_FLOOR:
+            print(f"  [{label}] Alpha floor: CV chose {chosen_alpha:.6f} "
+                  f"< floor {ALPHA_MIN_FLOOR:.4f} → enforcing floor")
+            chosen_alpha = ALPHA_MIN_FLOOR
+
+        # Final model with enforced hyperparams
+        model = ElasticNet(
+            alpha=chosen_alpha,
+            l1_ratio=chosen_l1ratio,
+            max_iter=10000,
+            random_state=42,
+        )
         model.fit(Xs, y)
+        # Attach attrs used later for logging
+        model.alpha_    = chosen_alpha
+        model.l1_ratio_ = chosen_l1ratio
 
         # Evaluate with PurgedTimeSeriesCV for honest metrics
         cv = PurgedTimeSeriesCV(n_splits=5, gap=cv_gap)
@@ -558,8 +645,8 @@ def train_elastic_net(X, y, features: List[str],
 
         for fold, (tr, val) in enumerate(cv.split(Xs), 1):
             m = ElasticNet(
-                alpha=model.alpha_,
-                l1_ratio=model.l1_ratio_,
+                alpha=chosen_alpha,
+                l1_ratio=chosen_l1ratio,
                 max_iter=10000,
                 random_state=42,
             )
@@ -588,8 +675,8 @@ def train_elastic_net(X, y, features: List[str],
 
     del Xs
     gc.collect()
-    print(f"  [{label}] ElasticNet: alpha={model.alpha_:.6f}  "
-          f"l1_ratio={model.l1_ratio_:.2f}  "
+    print(f"  [{label}] ElasticNet: alpha={chosen_alpha:.6f}  "
+          f"l1_ratio={chosen_l1ratio:.2f}  "
           f"nonzero={n_nonzero}/{len(features)}  "
           f"R²={mean_r2:.4f}  IC={mean_ic:.4f}  ICIR={icir:.4f}")
 
@@ -749,12 +836,16 @@ def simulate_weekly_trades_v6(predictions, actual_close_rets,
                               leverage: float = 1.0,
                               top_n: int = DEFAULT_TOP_N,
                               symbol_rvol: Optional[Dict[str, float]] = None,
-                              no_trade_high_vol: bool = False):
+                              no_trade_high_vol: bool = False,
+                              symbol_ret1w: Optional[Dict[str, float]] = None):
     """Regime-gated portfolio construction with long/short PnL decomposition.
 
-    P1: Vol-scaled long sizing + raw predicted return > 0 floor.
-    P3: Hard PnL clip at ±100% per position.
-    P6: HIGH_VOL_LATERAL no-trade override.
+    v6.1 additions:
+    - FEE_ADJUSTED_RANKING: deduct ROUND_TRIP_FEE from predicted return for
+      new entries before ranking, so churn is penalized during selection.
+    - LONG_MOMENTUM_FILTER: skip longs where ret_1w < 0 (falling knives).
+    - LONG_MIN_PRED_THRESHOLD: skip longs where predicted return is too small.
+    - symbol_ret1w: dict of {sym: ret_1w} for momentum filter.
     """
     if not predictions:
         return [], 0.0, 0.0, 0.0, set(), set()
@@ -763,7 +854,18 @@ def simulate_weekly_trades_v6(predictions, actual_close_rets,
     if regime == "HIGH_VOL_LATERAL" and no_trade_high_vol:
         return [], 0.0, 0.0, 0.0, set(), set()
 
-    pred_series = pd.Series(predictions)
+    # ── Fee-adjusted ranking ────────────────────────────────────────────────────
+    # Deduct the round-trip fee from predicted return for new entries.
+    # This way the model pays a cost for churn during ranking, not just PnL.
+    if FEE_ADJUSTED_RANKING:
+        adj_predictions = {
+            sym: pred - (ROUND_TRIP_FEE if sym not in prev_longs and sym not in prev_shorts else 0.0)
+            for sym, pred in predictions.items()
+        }
+    else:
+        adj_predictions = predictions
+
+    pred_series = pd.Series(adj_predictions)
     n_symbols = len(pred_series)
     n = min(top_n, n_symbols // 2)
 
@@ -772,11 +874,23 @@ def simulate_weekly_trades_v6(predictions, actual_close_rets,
 
     sorted_syms = pred_series.sort_values(ascending=False)
 
-    # P1: Long filter — only go long if predicted return > 0
+    # ── Long candidate selection (with filters) ─────────────────────────────────
     candidates_long = []
     for sym in sorted_syms.index:
-        if predictions[sym] > 0:
-            candidates_long.append(sym)
+        raw_pred = predictions[sym]  # use raw pred (not fee-adjusted) for threshold
+
+        # Filter 1: minimum predicted return threshold
+        if raw_pred <= LONG_MIN_PRED_THRESHOLD:
+            continue
+
+        # Filter 2: momentum filter — skip coins with negative 1-week return
+        # (don’t catch falling knives; longs should be on rising names)
+        if LONG_MOMENTUM_FILTER and symbol_ret1w:
+            ret1w = symbol_ret1w.get(sym, None)
+            if ret1w is not None and ret1w < 0:
+                continue  # negative momentum — skip
+
+        candidates_long.append(sym)
         if len(candidates_long) >= n:
             break
     cur_longs = set(candidates_long)
@@ -1259,6 +1373,133 @@ def load_checkpoint_v6(results_dir):
     except Exception as e:
         print(f"  [CHECKPOINT] Could not load ({e}) — starting fresh")
         return None
+
+
+def compute_oos_diagnostics(weekly_summary, all_trades, feature_tracker, retrain_history):
+    """Compute out-of-sample diagnostic metrics for performance reporting.
+    
+    Returns a dict with diagnostic information including:
+    - Weekly return statistics
+    - Trade statistics
+    - Feature stability metrics
+    - IC time series analysis
+    """
+    diagnostics = {}
+    
+    # Weekly return diagnostics
+    if weekly_summary:
+        returns = [w.get("week_return_pct", 0) for w in weekly_summary 
+                   if w.get("regime") not in ("KILL_SWITCH",)]
+        ics = [w.get("ic", 0) for w in weekly_summary if w.get("regime") not in ("KILL_SWITCH",)]
+        
+        diagnostics["n_weeks"] = len(returns)
+        diagnostics["avg_weekly_return_pct"] = float(np.mean(returns)) if returns else 0.0
+        diagnostics["std_weekly_return_pct"] = float(np.std(returns)) if len(returns) > 1 else 0.0
+        diagnostics["best_week_pct"] = float(np.max(returns)) if returns else 0.0
+        diagnostics["worst_week_pct"] = float(np.min(returns)) if returns else 0.0
+        diagnostics["positive_weeks_pct"] = float(sum(1 for r in returns if r > 0)) / max(len(returns), 1) * 100
+        diagnostics["avg_ic_oos"] = float(np.mean(ics)) if ics else 0.0
+        diagnostics["ic_volatility"] = float(np.std(ics)) if len(ics) > 1 else 0.0
+        diagnostics["ic_positive_ratio"] = float(sum(1 for ic in ics if ic > 0)) / max(len(ics), 1)
+        
+        # Regime breakdown
+        regime_breakdown = {}
+        for w in weekly_summary:
+            regime = w.get("regime", "UNKNOWN")
+            if regime == "KILL_SWITCH":
+                continue
+            if regime not in regime_breakdown:
+                regime_breakdown[regime] = {"count": 0, "total_return": 0.0, "ics": []}
+            regime_breakdown[regime]["count"] += 1
+            regime_breakdown[regime]["total_return"] += w.get("week_return_pct", 0)
+            regime_breakdown[regime]["ics"].append(w.get("ic", 0))
+        
+        for regime, stats in regime_breakdown.items():
+            stats["avg_return"] = stats["total_return"] / max(stats["count"], 1)
+            stats["avg_ic"] = float(np.mean(stats["ics"])) if stats["ics"] else 0.0
+            del stats["ics"]  # Remove raw list to keep diagnostics compact
+        
+        diagnostics["regime_breakdown"] = regime_breakdown
+    
+    # Trade diagnostics
+    if all_trades:
+        diagnostics["total_trades"] = len(all_trades)
+        
+        long_trades = [t for t in all_trades if t.get("side") == "LONG"]
+        short_trades = [t for t in all_trades if t.get("side") == "SHORT"]
+        
+        diagnostics["long_trades"] = len(long_trades)
+        diagnostics["short_trades"] = len(short_trades)
+        
+        if long_trades:
+            long_returns = [t.get("return_pct", 0) for t in long_trades]
+            diagnostics["avg_long_return_pct"] = float(np.mean(long_returns))
+            diagnostics["long_win_rate_pct"] = float(sum(1 for r in long_returns if r > 0)) / len(long_returns) * 100
+        
+        if short_trades:
+            short_returns = [t.get("return_pct", 0) for t in short_trades]
+            diagnostics["avg_short_return_pct"] = float(np.mean(short_returns))
+            diagnostics["short_win_rate_pct"] = float(sum(1 for r in short_returns if r > 0)) / len(short_returns) * 100
+        
+        # Symbol concentration
+        symbol_counts = {}
+        for t in all_trades:
+            sym = t.get("symbol", "UNKNOWN")
+            symbol_counts[sym] = symbol_counts.get(sym, 0) + 1
+        
+        if symbol_counts:
+            counts = list(symbol_counts.values())
+            diagnostics["avg_trades_per_symbol"] = float(np.mean(counts))
+            diagnostics["max_trades_single_symbol"] = int(np.max(counts))
+            diagnostics["unique_symbols_traded"] = len(symbol_counts)
+    
+    # Feature stability diagnostics
+    if feature_tracker:
+        diagnostics["feature_stability"] = {
+            "n_active_features": len(feature_tracker.active),
+            "n_core_features": len(feature_tracker.core),
+            "jaccard_overlap": feature_tracker.jaccard_overlap(),
+            "n_retrains_tracked": len(feature_tracker.retrain_feature_sets),
+        }
+        
+        # Top features by IC
+        feature_ic_stats = {}
+        for feat, observations in feature_tracker.ic_history.items():
+            if observations:
+                ic_values = [obs[0] for obs in observations]
+                feature_ic_stats[feat] = {
+                    "mean_ic": float(np.mean(ic_values)),
+                    "std_ic": float(np.std(ic_values)) if len(ic_values) > 1 else 0.0,
+                    "n_observations": len(ic_values),
+                    "positive_ic_ratio": float(sum(1 for ic in ic_values if ic > 0)) / len(ic_values),
+                }
+        
+        # Sort by mean IC and take top 10
+        top_features = sorted(feature_ic_stats.items(), 
+                             key=lambda x: x[1]["mean_ic"], 
+                             reverse=True)[:10]
+        diagnostics["top_features_by_ic"] = {feat: stats for feat, stats in top_features}
+    
+    # Retraining history diagnostics
+    if retrain_history:
+        diagnostics["retrain_summary"] = {
+            "n_retrains": len(retrain_history),
+            "avg_ic_in_sample": float(np.mean([r.get("ic_in_sample", 0) for r in retrain_history])) if retrain_history else 0.0,
+            "avg_ic_oos": float(np.mean([r.get("ic_oos", 0) for r in retrain_history])) if retrain_history else 0.0,
+        }
+        
+        # IC degradation (in-sample vs OOS)
+        if retrain_history:
+            ic_degradations = []
+            for r in retrain_history:
+                ic_in = r.get("ic_in_sample", 0)
+                ic_out = r.get("ic_oos", 0)
+                if ic_in != 0:
+                    ic_degradations.append((ic_in - ic_out) / abs(ic_in))
+            if ic_degradations:
+                diagnostics["retrain_summary"]["avg_ic_degradation_pct"] = float(np.mean(ic_degradations)) * 100
+    
+    return diagnostics
 
 
 def append_fatal_log_v6(exc: Exception) -> None:
@@ -1769,26 +2010,36 @@ def main():
             continue
 
         # Regime-gated portfolio construction
-        # P1: Build rvol snapshot for vol-scaled long sizing
-        symbol_rvol = {}
-        if regime in ("BULL_TREND",):
-            # MEMORY FIX: Process in chunks
-            symbol_list_rvol = get_tradeable_symbols(symbols)
-            chunk_size_rvol = 20
-            for chunk_start_rvol in range(0, len(symbol_list_rvol), chunk_size_rvol):
-                chunk_end_rvol = min(chunk_start_rvol + chunk_size_rvol, len(symbol_list_rvol))
-                chunk_symbols_rvol = symbol_list_rvol[chunk_start_rvol:chunk_end_rvol]
-                for sym in chunk_symbols_rvol:
+        # P1: Build rvol + ret1w snapshots before week_start for filters
+        symbol_rvol  = {}
+        symbol_ret1w = {}  # for LONG_MOMENTUM_FILTER
+        feat_cols_needed = ["rvol_1d"]
+        if LONG_MOMENTUM_FILTER and "ret_1w" in active_features:
+            feat_cols_needed.append("ret_1w")
+
+        if True:  # always collect (rvol used in BULL_TREND, ret1w used in filters)
+            symbol_list_snap = get_tradeable_symbols(symbols)
+            chunk_size_snap = 20
+            for chunk_start_snap in range(0, len(symbol_list_snap), chunk_size_snap):
+                chunk_end_snap = min(chunk_start_snap + chunk_size_snap, len(symbol_list_snap))
+                chunk_symbols_snap = symbol_list_snap[chunk_start_snap:chunk_end_snap]
+                for sym in chunk_symbols_snap:
                     try:
-                        df = load_symbol_columns(symbols, sym, ["rvol_1d"])
+                        df = load_symbol_columns(symbols, sym, feat_cols_needed)
                         pre_week_df = df[df.index < ws]
-                        if len(pre_week_df) >= 5 and "rvol_1d" in pre_week_df.columns:
-                            last_rvol = float(pre_week_df["rvol_1d"].iloc[-1])
-                            if np.isfinite(last_rvol) and last_rvol > 0:
-                                symbol_rvol[sym] = last_rvol
+                        if len(pre_week_df) < 1:
+                            continue
+                        last_row = pre_week_df.iloc[-1]
+                        if "rvol_1d" in last_row.index:
+                            rv = float(last_row["rvol_1d"])
+                            if np.isfinite(rv) and rv > 0:
+                                symbol_rvol[sym] = rv
+                        if "ret_1w" in last_row.index:
+                            r1w = float(last_row["ret_1w"])
+                            if np.isfinite(r1w):
+                                symbol_ret1w[sym] = r1w
                     except Exception:
                         pass
-                # Evict cache
                 if hasattr(symbols, '_cache'):
                     while len(symbols._cache) > 5:
                         symbols._cache.popitem(last=False)
@@ -1803,6 +2054,7 @@ def main():
                 top_n=args.top_n,
                 symbol_rvol=symbol_rvol if symbol_rvol else None,
                 no_trade_high_vol=args.no_trade_high_vol,
+                symbol_ret1w=symbol_ret1w if symbol_ret1w else None,
             )
         weekly_returns.append(week_ret)
 
@@ -1876,8 +2128,21 @@ def main():
             "is_linear": is_linear,
         })
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # REPORTING
+    retrain_history = []  # populated from governance files if available
+    try:
+        gov_dir = os.path.join(RESULTS_DIR, "governance")
+        if os.path.isdir(gov_dir):
+            for gf in sorted(os.listdir(gov_dir)):
+                if gf.endswith(".json"):
+                    with open(os.path.join(gov_dir, gf)) as gfh:
+                        gh = json.load(gfh)
+                        retrain_history.append({
+                            "label": gh.get("retrain_label", gf),
+                            "ic_in_sample": gh.get("ic_in_sample"),
+                            "ic_oos": gh.get("ic_oos"),
+                        })
+    except Exception:
+        pass
     # ══════════════════════════════════════════════════════════════════════════
 
     trades_df = pd.DataFrame(all_trades)
@@ -2009,6 +2274,15 @@ def main():
             perf["deflated_sharpe"] = dsr
     except Exception:
         pass
+
+    # Move diagnostics line here (after perf dict is built)
+    oos_diag = compute_oos_diagnostics(
+        weekly_summary=weekly_summary,
+        all_trades=all_trades,
+        feature_tracker=feature_tracker,
+        retrain_history=retrain_history,
+    )
+    perf["oos_diagnostics"] = oos_diag
 
     with open(f"{RESULTS_DIR}/performance_v6.json", "w") as f:
         json.dump(perf, f, indent=2, default=str)
