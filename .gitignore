@@ -20,7 +20,6 @@ env/
 data/
 data_top6/
 results/
-results_v6/
 results_top6/
 results_full3y_aggr/
 feature_cache/
@@ -28,10 +27,16 @@ cache_top6/
 test_50_cache/
 test_50_data/
 test_50_results*/
-models/
 pipeline_checkpoints/
 azalyst_output/
 .azalyst_locks/
+
+# ── Generated output (kept locally by default) ──
+# To version-control results for reproducibility, use:
+#   git add -f results_v6/
+# Or remove results_v6/ from this list to track permanently.
+results_v6/
+models/
 
 # ── Jupyter checkpoints ──
 .ipynb_checkpoints/

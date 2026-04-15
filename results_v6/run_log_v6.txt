@@ -1,0 +1,27 @@
+STEP 0: Feature cache
+
+  Found 443 valid cache files
+
+STEP 1: Load feature cache
+
+  Loaded 443 valid symbols (428 tradeable, 15 excluded)
+
+STEP 2: Date splits (v6.1 — adaptive split, up to 2-year train)
+
+
+STEP 3: Falsification campaign
+
+
+STEP 4: Initial training on Y1 (rolling window)
+
+
+  Training XGBoost on 2,000,000 rows...
+
+[LEAK TEST] Running pre-training sanity checks...
+  shuffled_mean_abs_ic: 0.00040892975126611387
+  shuffled_test_pass: True
+  leaked_feature_ic: 0.999961307553751
+  leaked_test_pass: True
+  past_feature_ic: -6.89843307918027e-05
+[LEAK TEST] Passed.
+

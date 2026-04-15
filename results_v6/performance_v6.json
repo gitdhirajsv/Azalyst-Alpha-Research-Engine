@@ -1,0 +1,198 @@
+{
+  "label": "v6_Consensus_WalkForward",
+  "run_id": "v6_20260415_123817",
+  "total_weeks": 77,
+  "total_trades": 597,
+  "retrains": 19,
+  "total_return_pct": 564.75,
+  "annualised_pct": 259.39,
+  "sharpe": 3.2949,
+  "max_drawdown_pct": -13.46,
+  "ic_mean": 0.0166,
+  "icir": 0.1108,
+  "kill_switch_hit": false,
+  "long_total_pnl_pct": 18.19,
+  "short_total_pnl_pct": 212.82,
+  "model_type": "XGBoost_challenger",
+  "features_used": 10,
+  "feature_jaccard": 0.764,
+  "rolling_window_weeks": 104,
+  "top_n": 5,
+  "beta_neutral": true,
+  "regime_gated": true,
+  "gates": {
+    "oos_ic_positive": true,
+    "oos_ic_detail": "mean=+0.0166, pos=100%",
+    "feature_stable": true,
+    "feature_detail": "jaccard=0.764",
+    "regime_survival": true,
+    "regime_detail": "LOW_VOL_GRIND=+0.51%, BULL_TREND=+5.32%, BEAR_TREND=+5.54%, HIGH_VOL_LATERAL=+4.30%",
+    "ml_beats_baseline": true,
+    "ml_vs_baseline": "no falsification data",
+    "ALL_PASS": true
+  },
+  "avg_weekly_turnover_pct": 98.7,
+  "liquidity_stress_sharpe_proxy": 2.0231,
+  "top_traded_symbols": [
+    [
+      "DEXEUSDT",
+      11
+    ],
+    [
+      "FUNUSDT",
+      9
+    ],
+    [
+      "PROMUSDT",
+      9
+    ],
+    [
+      "RAYUSDT",
+      8
+    ],
+    [
+      "OGUSDT",
+      7
+    ],
+    [
+      "ZECUSDT",
+      6
+    ],
+    [
+      "ARDRUSDT",
+      6
+    ],
+    [
+      "DEGOUSDT",
+      6
+    ],
+    [
+      "AIXBTUSDT",
+      6
+    ],
+    [
+      "RESOLVUSDT",
+      6
+    ]
+  ],
+  "deflated_sharpe": {
+    "sharpe_observed": 3.2948710514085713,
+    "expected_max_sharpe_null": 2.6881497531706415,
+    "deflated_sharpe_ratio": 0.9999055898345655,
+    "p_value": 9.441016543454417e-05,
+    "significant_at_95": true,
+    "n_returns": 77,
+    "n_trials": 100
+  },
+  "oos_diagnostics": {
+    "n_weeks": 77,
+    "avg_weekly_return_pct": 2.648012987012987,
+    "std_weekly_return_pct": 5.795400164536016,
+    "best_week_pct": 27.2669,
+    "worst_week_pct": -7.4043,
+    "positive_weeks_pct": 61.038961038961034,
+    "avg_ic_oos": 0.016596363636363638,
+    "ic_volatility": 0.14885790227560558,
+    "ic_positive_ratio": 0.5194805194805194,
+    "regime_breakdown": {
+      "LOW_VOL_GRIND": {
+        "count": 43,
+        "total_return": 22.137100000000004,
+        "avg_return": 0.5148162790697676,
+        "avg_ic": 0.000924418604651163
+      },
+      "BULL_TREND": {
+        "count": 13,
+        "total_return": 69.1917,
+        "avg_return": 5.322438461538462,
+        "avg_ic": -0.015483076923076915
+      },
+      "BEAR_TREND": {
+        "count": 18,
+        "total_return": 99.66529999999999,
+        "avg_return": 5.53696111111111,
+        "avg_ic": 0.03682166666666667
+      },
+      "HIGH_VOL_LATERAL": {
+        "count": 3,
+        "total_return": 12.902899999999999,
+        "avg_return": 4.300966666666667,
+        "avg_ic": 0.25888666666666665
+      }
+    },
+    "total_trades": 597,
+    "long_trades": 0,
+    "short_trades": 0,
+    "avg_trades_per_symbol": 2.037542662116041,
+    "max_trades_single_symbol": 11,
+    "unique_symbols_traded": 293,
+    "feature_stability": {
+      "n_active_features": 10,
+      "n_core_features": 2,
+      "jaccard_overlap": 0.7644926502069359,
+      "n_retrains_tracked": 8
+    },
+    "top_features_by_ic": {
+      "kyle_lambda": {
+        "mean_ic": 0.11205323371927821,
+        "std_ic": 0.13693636903259054,
+        "n_observations": 38,
+        "positive_ic_ratio": 0.7894736842105263
+      },
+      "amihud": {
+        "mean_ic": 0.10850464744809056,
+        "std_ic": 0.11887267587848283,
+        "n_observations": 38,
+        "positive_ic_ratio": 0.7894736842105263
+      },
+      "frac_diff_close": {
+        "mean_ic": 0.0497701511652163,
+        "std_ic": 0.12186846591895825,
+        "n_observations": 38,
+        "positive_ic_ratio": 0.6578947368421053
+      },
+      "rev_1d": {
+        "mean_ic": 0.018662280128982273,
+        "std_ic": 0.15838456947715354,
+        "n_observations": 38,
+        "positive_ic_ratio": 0.47368421052631576
+      },
+      "rsi_14": {
+        "mean_ic": 0.017669830746595533,
+        "std_ic": 0.10189066126776446,
+        "n_observations": 20,
+        "positive_ic_ratio": 0.65
+      },
+      "ret_2d": {
+        "mean_ic": 0.017431168754497805,
+        "std_ic": 0.1473933993850326,
+        "n_observations": 38,
+        "positive_ic_ratio": 0.6052631578947368
+      },
+      "ret_3d": {
+        "mean_ic": 0.01347799382148099,
+        "std_ic": 0.17541104810414518,
+        "n_observations": 38,
+        "positive_ic_ratio": 0.5526315789473685
+      },
+      "vwap_dev": {
+        "mean_ic": 0.010234210619878175,
+        "std_ic": 0.16599544362452834,
+        "n_observations": 38,
+        "positive_ic_ratio": 0.5789473684210527
+      },
+      "cci_14": {
+        "mean_ic": 0.0018218203198069286,
+        "std_ic": 0.09083524994482335,
+        "n_observations": 38,
+        "positive_ic_ratio": 0.5526315789473685
+      },
+      "bb_pos": {
+        "mean_ic": 0.0008239722597452176,
+        "std_ic": 0.0915828722083755,
+        "n_observations": 38,
+        "positive_ic_ratio": 0.5263157894736842
+      }
+    }
+  }
+}

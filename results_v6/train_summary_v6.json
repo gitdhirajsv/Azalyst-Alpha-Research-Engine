@@ -1,0 +1,10 @@
+{
+  "mean_r2": 0.01052,
+  "mean_ic": 0.09711,
+  "icir": 47.7894,
+  "n_rows": 2000000,
+  "n_features": 5,
+  "model_type": "XGBoost",
+  "beta_neutral": true,
+  "rolling_window_weeks": 104
+}
