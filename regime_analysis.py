@@ -3,12 +3,12 @@ import csv
 from collections import defaultdict
 
 # Load performance JSON
-with open(r"D:\Azalyst Alpha Research Engine\results_v6\performance_v6.json") as f:
+with open(r"D:\Azalyst Alpha Research Engine\results_v7\performance_v7.json") as f:
     perf = json.load(f)
 
 # Load weekly CSV
 weeks = []
-with open(r"D:\Azalyst Alpha Research Engine\results_v6\weekly_summary_v6.csv") as f:
+with open(r"D:\Azalyst Alpha Research Engine\results_v7\weekly_summary_v7.csv") as f:
     reader = csv.DictReader(f)
     for row in reader:
         weeks.append(row)

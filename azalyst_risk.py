@@ -21,7 +21,7 @@ class RiskManager:
 
     def __init__(self, entry_fee: float = 0.001, exit_fee: float = 0.001):
         # NOTE: These values are stored for reference only. Fees are applied
-        # in azalyst_v6_engine.py at position entry/exit time, not here.
+        # in azalyst_v7_engine.py at position entry/exit time, not here.
         self.entry_fee = entry_fee
         self.exit_fee = exit_fee
 

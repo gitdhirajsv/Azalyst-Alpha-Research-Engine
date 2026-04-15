@@ -1,7 +1,7 @@
 """
 Leakage smoke test for pre-training checks.
 
-V6 FIX: The leak test now accepts an optional `timestamps` parameter to handle
+V7 FIX: The leak test now accepts an optional `timestamps` parameter to handle
 beta-neutral targets correctly. When training on beta-neutral targets (daily 
 demeaned returns), the roll-based leak test would fail because the daily 
 demeaning structure gets broken when rolling across day boundaries.

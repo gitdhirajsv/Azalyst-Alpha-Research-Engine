@@ -33,9 +33,9 @@ azalyst_output/
 
 # ── Generated output (kept locally by default) ──
 # To version-control results for reproducibility, use:
-#   git add -f results_v6/
-# Or remove results_v6/ from this list to track permanently.
-results_v6/
+#   git add -f results_v7/
+# Or remove results_v7/ from this list to track permanently.
+results_v7/
 models/
 
 # ── Jupyter checkpoints ──

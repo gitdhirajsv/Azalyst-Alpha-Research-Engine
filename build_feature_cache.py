@@ -5,7 +5,7 @@
 ╚══════════════════════════════════════════════════════════════════════════════╝
 
 FIXES vs original:
-  - Renamed future_ret_4h → future_ret  (aligns with the current v6 workflow)
+  - Renamed future_ret_4h → future_ret  (aligns with the current V7 workflow)
   - Removed per-symbol alpha_label computation — WRONG to compute per symbol.
     Cross-sectional labels require ALL symbols pooled together at the same
     timestamp, so they are handled inside the training pipeline, not the cache.
@@ -86,7 +86,7 @@ def _process_symbol(args: Tuple) -> Tuple[str, bool, str]:
         feats["close"] = df["close"].astype(np.float32)
 
         # ── FIX: column is now 'future_ret' (not 'future_ret_4h') ─────────────
-        # This aligns with the current v6 engine and notebook.
+        # This aligns with the current V7 engine and notebook.
         feats["future_ret"] = np.log(df["close"].shift(-hor) / df["close"])
 
         # Horizon-in-bars for each forward-return target.
@@ -112,7 +112,7 @@ def _process_symbol(args: Tuple) -> Tuple[str, bool, str]:
         # ── FIX: do NOT compute alpha_label here ──────────────────────────────
         # Cross-sectional labels require all symbols at the same timestamp.
         # Per-symbol labels would just answer "did this coin go up?" which is
-        # not the current v6 relative-return objective.
+        # not the current V7 relative-return objective.
 
         # ── Save: keep only valid feature rows ───────────────────────────────
         min_non_nan = int(0.80 * len(FEATURE_COLS))

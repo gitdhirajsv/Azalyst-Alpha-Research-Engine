@@ -37,7 +37,7 @@ for %%d in (
 
 echo.
 echo  ============================================================
-echo    AZALYST ALPHA RESEARCH ENGINE  v6.0
+echo    AZALYST ALPHA RESEARCH ENGINE  v7.0
 echo  ============================================================
 echo.
 
@@ -169,7 +169,7 @@ if "!GPU_FOUND!"=="1" (
 rem -- Local module check -----------------------------------------------------
 echo  [Setup] Checking local modules...
 set "MOD_OK=1"
-if not exist "%~dp0azalyst_v6_engine.py"  ( echo  [ERROR] Missing: azalyst_v6_engine.py & set "MOD_OK=0" )
+if not exist "%~dp0azalyst_v7_engine.py"  ( echo  [ERROR] Missing: azalyst_v7_engine.py & set "MOD_OK=0" )
 if not exist "%~dp0azalyst_factors_v2.py" ( echo  [ERROR] Missing: azalyst_factors_v2.py & set "MOD_OK=0" )
 if not exist "%~dp0azalyst_risk.py"       ( echo  [ERROR] Missing: azalyst_risk.py & set "MOD_OK=0" )
 if not exist "%~dp0azalyst_db.py"         ( echo  [ERROR] Missing: azalyst_db.py & set "MOD_OK=0" )
@@ -276,16 +276,16 @@ rem -- Universe mode ----------------------------------------------------------
 set "UNIVERSE_MODE=v6"
 set "DATA_DIR_ARG=%~dp0data"
 set "CACHE_DIR_ARG=%~dp0feature_cache"
-set "OUT_DIR_ARG=%~dp0results_v6"
+set "OUT_DIR_ARG=%~dp0results_v7"
 set "TOP_N_ARG=5"
-echo  [OK] V6 Consensus Rebuild  (Elastic Net, beta-neutral, regime-gated, top-5)
+echo  [OK] V7 Consensus Rebuild  (Elastic Net, beta-neutral, regime-gated, top-5)
 goto :Q_RESUME
 
 rem -- Fresh run vs resume ----------------------------------------------------
 :Q_RESUME
 echo.
-if exist "%~dp0results_v6\checkpoint_v6_latest.json" (
-    echo  Checkpoint found in results_v6\
+if exist "%~dp0results_v7\checkpoint_v7_latest.json" (
+    echo  Checkpoint found in results_v7\
     echo    [1] Fresh run   - ignore saved checkpoint
     echo    [2] Resume run  - continue from saved checkpoint
     echo.
@@ -389,7 +389,7 @@ if "!COMPUTE_CHOICE!"=="gpu" set "GPU_FLAG=--gpu"
 set "SHAP_FLAG="
 if "!SKIP_SHAP!"=="1" set "SHAP_FLAG=--no-shap"
 
-call :RUN_PYTHON -u "%~dp0azalyst_v6_engine.py" --data-dir "!DATA_DIR_ARG!" --feature-dir "!CACHE_DIR_ARG!" --out-dir "!OUT_DIR_ARG!" --top-n !TOP_N_ARG! --rolling-window 104 --leverage 1.0 !GPU_FLAG! !SHAP_FLAG! !NO_RESUME_FLAG! !NO_FALSIFY_FLAG!
+call :RUN_PYTHON -u "%~dp0azalyst_v7_engine.py" --data-dir "!DATA_DIR_ARG!" --feature-dir "!CACHE_DIR_ARG!" --out-dir "!OUT_DIR_ARG!" --top-n !TOP_N_ARG! --rolling-window 104 --leverage 1.0 !GPU_FLAG! !SHAP_FLAG! !NO_RESUME_FLAG! !NO_FALSIFY_FLAG!
 
 :POST_RUN
 set "EXIT_CODE=!errorlevel!"
@@ -403,7 +403,7 @@ echo  ============================================================
 echo.
 
 if "!EXIT_CODE!"=="0" (
-    if not exist "%~dp0results_v6\weekly_summary_v6.csv" (
+    if not exist "%~dp0results_v7\weekly_summary_v7.csv" (
         color 0E
         echo  [WARN] Pipeline exited cleanly but produced no results.
         echo.
@@ -418,10 +418,10 @@ if "!EXIT_CODE!"=="0" (
         color 0A
         echo  Pipeline completed successfully.
         echo.
-        echo    results_v6\weekly_summary_v6.csv
-        echo    results_v6\all_trades_v6.csv
-        echo    results_v6\performance_v6.json
-        echo    results_v6\azalyst_v6.db
+        echo    results_v7\weekly_summary_v7.csv
+        echo    results_v7\all_trades_v7.csv
+        echo    results_v7\performance_v7.json
+        echo    results_v7\azalyst_v7.db
     )
 ) else (
     color 0C
@@ -430,10 +430,10 @@ if "!EXIT_CODE!"=="0" (
     echo  Common fixes:
     echo    GPU OOM       - re-run and choose CPU
     echo    Bad timestamp - delete feature_cache\ and retry
-    echo    Import error  - check results_v6\run_log_v6.txt
+    echo    Import error  - check results_v7\run_log_v7.txt
     echo.
-    if exist "%~dp0results_v6\checkpoint_v6_latest.json" (
-        echo  Checkpoint saved ^(results_v6^). Run again to resume from where it stopped.
+    if exist "%~dp0results_v7\checkpoint_v7_latest.json" (
+        echo  Checkpoint saved ^(results_v7^). Run again to resume from where it stopped.
     )
 )
 

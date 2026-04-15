@@ -30,20 +30,20 @@ Double-click **`RUN_AZALYST.bat`** — auto-detects GPU, installs dependencies, 
 ### CLI
 ```bash
 # Default — XGBoost primary, CPU, top-5 per side
-python azalyst_v6_engine.py --no-gpu --top-n 5
+python azalyst_v7_engine.py --no-gpu --top-n 5
 
 # With GPU
-python azalyst_v6_engine.py --gpu --top-n 5
+python azalyst_v7_engine.py --gpu --top-n 5
 
 # Custom leverage
-python azalyst_v6_engine.py --no-gpu --top-n 5 --leverage 0.5
+python azalyst_v7_engine.py --no-gpu --top-n 5 --leverage 0.5
 ```
 
 ---
 
 ## Verified Results
 
-### v6.3 — Regime-Specific XGBoost (Final Configuration)
+### v7.0 — Regime-Specific XGBoost (Final Verified Configuration)
 
 | Metric | Value |
 |---|---|
@@ -59,9 +59,9 @@ python azalyst_v6_engine.py --no-gpu --top-n 5 --leverage 0.5
 | **Short PnL** | +212.82% |
 | **4-Gate Verdict** | ALL PASS — CONTINUE |
 
-**Run ID:** `v6_20260415_123817` | **Commit:** `6c2bccb` | **Date:** April 15-16, 2026
+**Run ID:** `v7_20260416` | **Commit:** `483aa5c` | **Date:** April 16, 2026
 
-All results are stored in `results_v6/` — trades, models, logs, performance JSON, SQLite database.
+All results are stored in `results_v7/` — trades, models, logs, performance JSON, SQLite database.
 
 ---
 
@@ -83,7 +83,7 @@ All results are stored in `results_v6/` — trades, models, logs, performance JS
  HIGH_VOL_LATERAL → skip option  1× leverage max    19 retrains total
 
   RISK                  KILL CRITERIA             PERSISTENCE
- 0.2% round-trip fee   4-gate evaluation          SQLite (azalyst_v6.db)
+ 0.2% round-trip fee   4-gate evaluation          SQLite (azalyst_v7.db)
  -20% max DD kill      OOS IC positive             Feature stability log
  0.12 recovery thresh  Feature Jaccard >0.5        Long/short PnL decomp
  PnL clip ±100%        Regime survival ≥2          Full run history
@@ -92,7 +92,7 @@ All results are stored in `results_v6/` — trades, models, logs, performance JS
 
 ---
 
-## What Changed from v6 → v7
+## What Changed from v1 → v7
 
 v7 is the final stable release that incorporates all learnings from 4 runs across 77 weeks of out-of-sample testing. Here's the evolution:
 
@@ -129,7 +129,7 @@ v7 is the final stable release that incorporates all learnings from 4 runs acros
 
 ### What Was Removed/Fixed from Earlier Versions
 
-| Issue (v6.0-v6.2) | Fix (v7) |
+| Issue (v1-v6) | Fix (v7) |
 |---|---|
 | ElasticNet alpha too small (0.00002) → overfit | XGBoost primary + alpha floor 0.001 |
 | Long win rate 35.6% (worse than random) | BEAR_TREND short-only rule, momentum filter disabled |
@@ -280,23 +280,23 @@ These features are tracked and rotated in if IC proves strong over 4+ periods:
 
 | File | Description |
 |---|---|
-| `results_v6/performance_v6.json` | Full performance metrics + 4-gate evaluation + diagnostics |
-| `results_v6/weekly_summary_v6.csv` | Weekly returns, IC, regime, drawdown |
-| `results_v6/all_trades_v6.csv` | All 597 trades with PnL, position scale, predictions |
-| `results_v6/run_log_v6.txt` | Full pipeline execution log |
-| `results_v6/run_output.txt` | Console output from run |
-| `results_v6/train_summary_v6.json` | Training metrics (model type, IC, R², rows) |
-| `results_v6/feature_importance_v6_*.csv` | Feature importances per retrain (20 files) |
-| `results_v6/azalyst_v6.db` | SQLite database (trades, metrics, model artifacts) |
-| `results_v6/models/` | XGBoost models (base + 19 weekly retrains) + scalers |
-| `results_v6/checkpoint_v6_latest.json` | Live checkpoint (cleared on completion) |
+| `results_v7/performance_v7.json` | Full performance metrics + 4-gate evaluation + diagnostics |
+| `results_v7/weekly_summary_v7.csv` | Weekly returns, IC, regime, drawdown |
+| `results_v7/all_trades_v7.csv` | All 597 trades with PnL, position scale, predictions |
+| `results_v7/run_log_v7.txt` | Full pipeline execution log |
+| `results_v7/run_output.txt` | Console output from run |
+| `results_v7/train_summary_v7.json` | Training metrics (model type, IC, R², rows) |
+| `results_v7/feature_importance_v7_*.csv` | Feature importances per retrain (20 files) |
+| `results_v7/azalyst_v7.db` | SQLite database (trades, metrics, model artifacts) |
+| `results_v7/models/` | XGBoost models (base + 19 weekly retrains) + scalers |
+| `results_v7/checkpoint_v7_latest.json` | Live checkpoint (cleared on completion) |
 
-**Note:** `results_v6/` is gitignored by default. To version-control results for reproducibility:
+**Note:** `results_v7/` is gitignored by default. To version-control results for reproducibility:
 ```bash
-git add -f results_v6/performance_v6.json
-git add -f results_v6/weekly_summary_v6.csv
-git add -f results_v6/all_trades_v6.csv
-git add -f results_v6/run_output.txt
+git add -f results_v7/performance_v7.json
+git add -f results_v7/weekly_summary_v7.csv
+git add -f results_v7/all_trades_v7.csv
+git add -f results_v7/run_output.txt
 ```
 
 ---
@@ -313,34 +313,34 @@ pip install -r requirements.txt
 
 ```bash
 # Basic run — XGBoost, CPU, top-5 per side, 0.5x leverage
-python azalyst_v6_engine.py --no-gpu --top-n 5 --leverage 0.5
+python azalyst_v7_engine.py --no-gpu --top-n 5 --leverage 0.5
 
 # With GPU (CUDA)
-python azalyst_v6_engine.py --gpu --top-n 5 --leverage 0.5
+python azalyst_v7_engine.py --gpu --top-n 5 --leverage 0.5
 
 # XGBoost challenger mode (trains both, picks winner)
-python azalyst_v6_engine.py --gpu --xgb-challenger --top-n 5
+python azalyst_v7_engine.py --gpu --xgb-challenger --top-n 5
 
 # Custom rolling window (default 104 weeks = 2 years)
-python azalyst_v6_engine.py --no-gpu --rolling-window 52
+python azalyst_v7_engine.py --no-gpu --rolling-window 52
 
 # Skip falsification campaign (saves ~13 weeks of runtime)
-python azalyst_v6_engine.py --no-gpu --no-falsify
+python azalyst_v7_engine.py --no-gpu --no-falsify
 
 # Restrict to specific coins
-python azalyst_v6_engine.py --no-gpu --pin-coins BTCUSDT,ETHUSDT,SOLUSDT
+python azalyst_v7_engine.py --no-gpu --pin-coins BTCUSDT,ETHUSDT,SOLUSDT
 
 # Skip HIGH_VOL_LATERAL regime entirely
-python azalyst_v6_engine.py --no-gpu --no-trade-high-vol
+python azalyst_v7_engine.py --no-gpu --no-trade-high-vol
 
 # Rebuild feature cache (only when factors change)
-python azalyst_v6_engine.py --no-gpu --rebuild-cache
+python azalyst_v7_engine.py --no-gpu --rebuild-cache
 
 # Resume from checkpoint
-python azalyst_v6_engine.py --no-gpu
+python azalyst_v7_engine.py --no-gpu
 
 # Fresh run (ignore checkpoint)
-python azalyst_v6_engine.py --no-gpu --no-resume
+python azalyst_v7_engine.py --no-gpu --no-resume
 ```
 
 ### Live Dashboard
@@ -356,10 +356,10 @@ python VIEW_TRAINING.py
 
 ```bash
 # Summary view
-python VIEW_RESULTS_V6.py
+python VIEW_RESULTS_V7.py
 
-# Or check performance_v6.json directly
-cat results_v6/performance_v6.json
+# Or check performance_v7.json directly
+cat results_v7/performance_v7.json
 ```
 
 ---

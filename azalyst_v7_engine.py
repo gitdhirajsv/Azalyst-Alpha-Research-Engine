@@ -1,6 +1,6 @@
 """
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║         AZALYST ALPHA RESEARCH ENGINE  v6.3  —  REGIME+XGB REBUILD         ║
+║         AZALYST ALPHA RESEARCH ENGINE  v7.0  —  REGIME+XGB REBUILD         ║
 ║                                                                            ║
 ║  BUILT FROM 4 RUNS OF EVIDENCE:                                            ║
 ║    Run 1 (orig):     +48.9%  10 wks  IC=0.055  killed                      ║
@@ -15,7 +15,7 @@
 ║    4. 5 features have real signal, 8 are noise                             ║
 ║    5. Skipping BEAR_TREND: +29% vs +3.8% — regime gating is key            ║
 ║                                                                            ║
-║  V6.3 CHANGES:                                                             ║
+║  v7.0 CHANGES:                                                             ║
 ║   1. 5 PROVEN FEATURES only: kyle_lambda, amihud, ret_3d, vol_regime, rsi  ║
 ║   2. REGIME-SPECIFIC PORTFOLIO: SHORT-ONLY in BEAR_TREND (no longs)        ║
 ║   3. XGBOOST PRIMARY: non-linear, captures feature interactions            ║
@@ -88,11 +88,11 @@ except Exception:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 1: V6 CONFIG
+# SECTION 1: V7 CONFIG
 # ══════════════════════════════════════════════════════════════════════════════
 
 DATA_DIR    = "./data"
-RESULTS_DIR = "./results_v6"
+RESULTS_DIR = "./results_v7"
 CACHE_DIR   = "./feature_cache"
 
 # Horizons
@@ -103,7 +103,7 @@ HORIZON_BARS     = 12
 TARGET_COL          = "future_ret_1h"
 TARGET_COL_FALLBACK = "future_ret"
 
-# Rolling window (not expanding) — v6.1: extended to 104 weeks (2 years) so
+# Rolling window (not expanding) — v7.1: extended to 104 weeks (2 years) so
 # the model has seen at least one full bull+bear cycle before going OOS.
 # The safe_end embargo (1 hr before train_end) prevents any forward leakage.
 ROLLING_WINDOW_WEEKS = 104   # 2 years of training history
@@ -118,7 +118,7 @@ ROUND_TRIP_FEE = FEE_RATE * 2
 DEFAULT_TOP_N  = 5       # Conservative default (GPT 5.4: weak ranker → fewer picks)
 
 # Kill switches
-# v6.2: restored to -20%. The -25% threshold was too permissive — with the
+# v7.2: restored to -20%. The -25% threshold was too permissive — with the
 # momentum filter disabled, portfolio vacancy is gone and -20% is an
 # appropriate risk ceiling that still allows the model room to breathe.
 MAX_DRAWDOWN_KILL = -0.20
@@ -147,13 +147,13 @@ TARGET_WINSOR_PCT = 1.0   # percentile to clip at each tail
 # 2. Momentum filter — never long a coin whose 1-week return is negative
 #    (don't catch falling knives in crypto)
 LONG_MIN_PRED_THRESHOLD = 0.0   # pred_ret must exceed this (fraction, not %)
-# v6.2: disabled — ret_1w>0 caused portfolio vacancy in 3/11 OOS weeks because
+# v7.2: disabled — ret_1w>0 caused portfolio vacancy in 3/11 OOS weeks because
 # crypto corrections are broad: ALL coins have ret_1w<0 simultaneously, so the
 # filter evacuated the long side entirely, leaving only unhedged shorts that
 # lost -30% over two weeks with no hedge. The model already encodes momentum
 # via ret_1w and ret_3d features; a hard portfolio-level filter on top creates
 # systematic gaps without adding incremental alpha.
-LONG_MOMENTUM_FILTER    = False  # was True (v6.1) — disabled in v6.2
+LONG_MOMENTUM_FILTER    = False  # was True (v7.1) — disabled in v7.2
 
 # ── Turnover reduction ───────────────────────────────────────────────────────
 # Fee-adjusted ranking: subtract the estimated round-trip cost from predicted
@@ -174,14 +174,14 @@ SYMBOL_BLACKLIST: Set[str] = {
     "BUSDUSDT",    # Stablecoin — ~0 return
 }
 
-# Position scale hard cap — v6.1: reduced from 3.0 to 1.0.
+# Position scale hard cap — v7.1: reduced from 3.0 to 1.0.
 # The original 3x cap caused a -34% single-week loss in week 10 that triggered
 # the kill switch. At 1.0 the maximum notional exposure is 1× per position.
 # Vol-scaling (0.5 / rvol) still adjusts within [0, 1.0].
 MAX_POSITION_SCALE = 1.0
 
 # Fiat / stablecoin-like bases to exclude from the crypto cross-section.
-# v6.1 bugfix: AEURUSDT/EURIUSDT still slipped through the original blacklist,
+# v7.1 bugfix: AEURUSDT/EURIUSDT still slipped through the original blacklist,
 # which polluted picks with fiat-pegged instruments and wasted retrain time.
 FIAT_STABLE_BASES: Set[str] = {
     "AEUR",
@@ -252,7 +252,7 @@ def retrain_cadence_label(weeks: int) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 2: V6.3 PROVEN FEATURE SET (data-driven selection)
+# SECTION 2: v7.0 PROVEN FEATURE SET (data-driven selection)
 # ══════════════════════════════════════════════════════════════════════════════
 #
 # After 4 runs (77 weeks OOS), only 5 features showed consistent signal:
@@ -267,23 +267,23 @@ def retrain_cadence_label(weeks: int) -> str:
 #   and caused IS→OOS decay.
 #
 # CORE features — NEVER dropped
-V6_CORE_FEATURES = [
+v7_CORE_FEATURES = [
     "ret_3d",              # 3-day return — short-term momentum (IC=0.072)
     "vol_regime",          # Volatility regime — state variable
 ]
 
 # PROVEN features — consistent IC across all 4 runs
-V6_PROVEN_FEATURES = [
+v7_PROVEN_FEATURES = [
     "kyle_lambda",         # Price impact / liquidity (IC=0.158, 86% pos)
     "amihud",              # Illiquidity ratio (IC=0.107, 71% pos)
     "rsi_14",              # Mean reversion indicator (IC=0.025, 71% pos)
 ]
 
 # Full default set: core + proven = 5 features (minimal overfit risk)
-V6_DEFAULT_FEATURES = V6_CORE_FEATURES + V6_PROVEN_FEATURES
+v7_DEFAULT_FEATURES = v7_CORE_FEATURES + v7_PROVEN_FEATURES
 
 # CANDIDATE pool — only add if IC proves strong AND stable over 4+ periods
-V6_CANDIDATE_FEATURES = [
+v7_CANDIDATE_FEATURES = [
     "ret_1w", "ret_1d", "ret_2d", "rev_1h", "rev_1d",
     "rvol_1d", "rvol_4h", "skew_1d", "atr_norm", "cci_14", "bb_pos",
     "vwap_dev", "mean_rev_zscore_1h", "vol_ratio_1h_1d",
@@ -424,7 +424,7 @@ def build_training_matrix_v6(symbols, train_end, features: List[str],
     - Beta-neutral: subtracts daily cross-sectional mean from targets
     - Returns (X, y_raw, y_neutral, timestamps) — timestamps for diagnostics
 
-    LEAKAGE AUDIT (v6.1):
+    LEAKAGE AUDIT (v7.1):
     - safe_end = train_end - 1 hr (5 min × 12 bars embargo)
       → the last bar allowed into training is at train_end-60min
       → future_ret_1h at that bar looks forward to train_end — excluded ✓
@@ -438,7 +438,7 @@ def build_training_matrix_v6(symbols, train_end, features: List[str],
     safe_end = train_end - pd.Timedelta(minutes=5 * HORIZON_BARS_1H)
 
     embargo_minutes = 5 * HORIZON_BARS_1H
-    print(f"  Building v6 training matrix [{rolling_start.date()} → {safe_end.date()}]"
+    print(f"  Building V7 training matrix [{rolling_start.date()} → {safe_end.date()}]"
           f" ({len(features)} features, rolling={rolling_weeks}wk, embargo={embargo_minutes}min)")
     print(f"  Leakage audit: train_end={pd.Timestamp(train_end).date()} "
           f"safe_end={safe_end.date()} "
@@ -571,7 +571,7 @@ def build_training_matrix_v6(symbols, train_end, features: List[str],
         print(f"  Target winsorized: [{lo*100:.3f}%, {hi*100:.3f}%] "
               f"({n_clipped:,} rows clipped, {n_clipped/max(len(y_neutral),1)*100:.2f}%)")
 
-    # ── Target rank-normalization (v6.2) ──────────────────────────────────────────
+    # ── Target rank-normalization (v7.2) ──────────────────────────────────────────
     # ROOT CAUSE FIX: ElasticNet minimizes MSE, but we deploy by Spearman IC
     # (rank ordering). These are different objectives. With beta-neutral target
     # std ~1.3%, optimal ElasticNet coefficients are ~0.0004 but ALPHA_MIN_FLOOR
@@ -623,7 +623,7 @@ def build_training_matrix_v6(symbols, train_end, features: List[str],
 
 def train_xgb_primary(X, y, features: List[str], cuda_api,
                       label: str = "", cv_gap: int = 48) -> Tuple:
-    """Train XGBoost as PRIMARY model (v6.3).
+    """Train XGBoost as PRIMARY model (v7.0).
 
     XGBoost chosen because:
     - Non-linear: captures feature interactions (e.g., kyle_lambda * vol_regime)
@@ -720,7 +720,7 @@ def train_elastic_net(X, y, features: List[str],
                       label: str = "", cv_gap: int = 48) -> Tuple:
     """Train Elastic Net with built-in alpha/l1_ratio CV.
 
-    v6.1 changes vs original:
+    v7.1 changes vs original:
     - L1 grid biased toward 0.9-0.99 (sparser = less overfit)
     - Alpha floor enforced: if CV picks alpha < ALPHA_MIN_FLOOR, raise it
     - This directly fixes the 29x IS→OOS IC decay caused by alpha=0.00002
@@ -970,7 +970,7 @@ def simulate_weekly_trades_v6(predictions, actual_close_rets,
                               symbol_rvol: Optional[Dict[str, float]] = None,
                               no_trade_high_vol: bool = False,
                               symbol_ret1w: Optional[Dict[str, float]] = None):
-    """Regime-specific portfolio construction (v6.3).
+    """Regime-specific portfolio construction (v7.0).
 
     EVIDENCE-BASED REGIME RULES (from 4 runs, 77 weeks OOS):
     - BULL_TREND:      Long-only (IC=+0.058, no shorts needed)
@@ -1003,7 +1003,7 @@ def simulate_weekly_trades_v6(predictions, actual_close_rets,
 
     sorted_syms = pred_series.sort_values(ascending=False)
 
-    # ── REGIME-SPECIFIC PORTFOLIO (v6.3 — evidence-based) ──────────────────
+    # ── REGIME-SPECIFIC PORTFOLIO (v7.0 — evidence-based) ──────────────────
     # BEAR_TREND: SHORT-ONLY — longs lost -92% in bear markets across all runs
     # The model picks coins it thinks will outperform, but in a crash everything
     # goes down. The "less bad" coins still lose money. Shorts are safer.
@@ -1137,14 +1137,14 @@ def run_falsification(symbols, test_weeks, active_features: List[str],
     Returns: dict of {baseline_name: avg_weekly_ic}
     """
     print(f"\n{'='*72}")
-    print(f"  V6 FALSIFICATION CAMPAIGN — Prove Signal Exists")
+    print(f"  V7 FALSIFICATION CAMPAIGN — Prove Signal Exists")
     print(f"  Testing {len(test_weeks)-1} weeks with top-{top_n} per side")
     print(f"{'='*72}\n")
     week_pairs = list(zip(test_weeks[:-1], test_weeks[1:]))
     if not week_pairs:
         return {}
 
-    needed_cols = list(dict.fromkeys(V6_CORE_FEATURES + ["close"]))
+    needed_cols = list(dict.fromkeys(v7_CORE_FEATURES + ["close"]))
     all_symbols = list(symbols.keys())
     symbol_list = [sym for sym in all_symbols if not is_excluded_symbol(sym)]
     rng = np.random.default_rng(42)
@@ -1425,11 +1425,11 @@ def compute_feature_ic_v6(symbols, week_start, week_end,
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 10b: DATE SPLITS — v6.1 adaptive split (up to 2-year training)
+# SECTION 10b: DATE SPLITS — v7.1 adaptive split (up to 2-year training)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def get_date_splits_v6(symbols) -> tuple:
-    """V6.1 date splitter: targets up to a 2-year training window when possible.
+    """v7.1 date splitter: targets up to a 2-year training window when possible.
 
     Leakage-safe split rules:
     - Y1 (training):  global_min  →  y1_end   (model never sees past y1_end)
@@ -1441,7 +1441,7 @@ def get_date_splits_v6(symbols) -> tuple:
     - Total data 2-4 yr  → Y1 = 50 %, OOS = 50 %
     - Total data < 2 yr  → Y1 = 33 % (legacy fallback, warn user)
 
-    The 1-hour embargo inside build_training_matrix_v6 (safe_end) is an
+    The 1-hour embargo inside build_training_matrix_V7 (safe_end) is an
     additional per-call guard on top of this structural split.
     """
     if hasattr(symbols, "_metadata") and symbols._metadata:
@@ -1490,14 +1490,14 @@ def get_date_splits_v6(symbols) -> tuple:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SECTION 11: CHECKPOINT (v6 paths)
+# SECTION 11: CHECKPOINT (V7 paths)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _ckpt_path_v6(results_dir):
-    return os.path.join(results_dir, "checkpoint_v6_latest.json")
+    return os.path.join(results_dir, "checkpoint_v7_latest.json")
 
 
-def save_checkpoint_v6(results_dir, state):
+def save_checkpoint_v7(results_dir, state):
     path = _ckpt_path_v6(results_dir)
     os.makedirs(results_dir, exist_ok=True)
     tmp = path + ".tmp"
@@ -1506,14 +1506,14 @@ def save_checkpoint_v6(results_dir, state):
     os.replace(tmp, path)
 
 
-def load_checkpoint_v6(results_dir):
+def load_checkpoint_v7(results_dir):
     path = _ckpt_path_v6(results_dir)
     if not os.path.exists(path):
         return None
     try:
         with open(path) as f:
             ckpt = json.load(f)
-        print(f"  [CHECKPOINT] Found v6  run_id={ckpt.get('run_id')}  "
+        print(f"  [CHECKPOINT] Found V7  run_id={ckpt.get('run_id')}  "
               f"last_week={ckpt.get('last_week')}  ts={ckpt.get('ts', '?')}")
         return ckpt
     except Exception as e:
@@ -1652,7 +1652,7 @@ def append_fatal_log_v6(exc: Exception) -> None:
     """Best-effort fatal logging for batch launches."""
     try:
         os.makedirs(RESULTS_DIR, exist_ok=True)
-        log_path = os.path.join(RESULTS_DIR, "run_log_v6.txt")
+        log_path = os.path.join(RESULTS_DIR, "run_log_v7.txt")
         with open(log_path, "a", encoding="utf-8") as fh:
             fh.write(f"\n[FATAL] {type(exc).__name__}: {exc}\n")
             fh.write("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)))
@@ -1666,7 +1666,7 @@ def append_fatal_log_v6(exc: Exception) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def main():
-    parser = argparse.ArgumentParser(description="Azalyst v6 — Consensus Rebuild")
+    parser = argparse.ArgumentParser(description="Azalyst V7 — Consensus Rebuild")
     parser.add_argument("--gpu", action="store_true")
     parser.add_argument("--no-gpu", action="store_true")
     parser.add_argument("--data-dir", default=None)
@@ -1719,7 +1719,7 @@ def main():
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
     print("\n" + "=" * 72)
-    print("  AZALYST v6.3  —  Regime + XGBoost Rebuild")
+    print("  AZALYST v7.0  —  Regime + XGBoost Rebuild")
     print("=" * 72)
     print(f"  Model        : XGBoost (non-linear)"
           f" + ElasticNet fallback")
@@ -1727,7 +1727,7 @@ def main():
     print(f"  Window       : Rolling {args.rolling_window} weeks")
     print(f"  Retrain      : every {RETRAIN_WEEKS} weeks "
           f"({retrain_cadence_label(RETRAIN_WEEKS)})")
-    print(f"  Features     : {len(V6_DEFAULT_FEATURES)} proven"
+    print(f"  Features     : {len(v7_DEFAULT_FEATURES)} proven"
           f" + turnover cap {MAX_FEATURE_TURNOVER}")
     print(f"  Portfolio    : top-{args.top_n} per side, regime-specific")
     print(f"  Regime rules: BULL=long-only, BEAR=short-only, LOW_GRIND=long+short")
@@ -1741,8 +1741,8 @@ def main():
 
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
-    _log_path = os.path.join(RESULTS_DIR, "run_log_v6.txt")
-    ckpt = None if args.no_resume else load_checkpoint_v6(RESULTS_DIR)
+    _log_path = os.path.join(RESULTS_DIR, "run_log_v7.txt")
+    ckpt = None if args.no_resume else load_checkpoint_v7(RESULTS_DIR)
     resuming = ckpt is not None
     _log_mode = "a" if resuming else "w"
     try:
@@ -1765,17 +1765,17 @@ def main():
             for subline in line.rstrip().splitlines():
                 _log(f"    {subline}")
 
-    db = AzalystDB(f"{RESULTS_DIR}/azalyst_v6.db")
+    db = AzalystDB(f"{RESULTS_DIR}/azalyst_v7.db")
 
     if resuming:
         run_id = ckpt["run_id"]
         _log(f"\n  [CHECKPOINT] Resuming run_id={run_id}  "
              f"from week {ckpt['last_week'] + 1}\n")
     else:
-        run_id = args.run_id or f"v6_{time.strftime('%Y%m%d_%H%M%S')}"
+        run_id = args.run_id or f"v7_{time.strftime('%Y%m%d_%H%M%S')}"
         db.start_run(run_id, {
-            "version": "v6_consensus", "gpu": use_gpu,
-            "features": len(V6_DEFAULT_FEATURES),
+            "version": "v7_consensus", "gpu": use_gpu,
+            "features": len(v7_DEFAULT_FEATURES),
             "max_dd_kill": dd_kill, "retrain_weeks": RETRAIN_WEEKS,
             "rolling_window_weeks": args.rolling_window,
             "horizon_bars": HORIZON_BARS,
@@ -1818,15 +1818,15 @@ def main():
          f"{len(symbols) - tradeable_symbol_count} excluded)")
 
     # ── STEP 2: Date splits ───────────────────────────────────────────────────
-    _log("\nSTEP 2: Date splits (v6.1 — adaptive split, up to 2-year train)\n")
+    _log("\nSTEP 2: Date splits (v7.1 — adaptive split, up to 2-year train)\n")
     global_min, global_max, y1_end, y2_end = get_date_splits_v6(symbols)
 
     os.makedirs(f"{RESULTS_DIR}/models", exist_ok=True)
 
     # ── Initialize feature stability tracker ──────────────────────────────────
-    active_features = list(V6_DEFAULT_FEATURES)
+    active_features = list(v7_DEFAULT_FEATURES)
     feature_tracker = FeatureStabilityTracker(
-        core=V6_CORE_FEATURES,
+        core=v7_CORE_FEATURES,
         initial_set=active_features,
         max_turnover=MAX_FEATURE_TURNOVER,
     )
@@ -1866,7 +1866,7 @@ def main():
 
         is_linear = ckpt.get("is_linear", True)
         feature_tracker = FeatureStabilityTracker(
-            core=V6_CORE_FEATURES, initial_set=active_features)
+            core=v7_CORE_FEATURES, initial_set=active_features)
         # Restore IC history (stored as [ic_value, regime] lists in JSON)
         for k, v in ckpt.get("feature_ic_history", {}).items():
             feature_tracker.ic_history[k] = [(x[0], x[1]) for x in v]
@@ -1905,7 +1905,7 @@ def main():
         _log("[LEAK TEST] Passed.\n")
         t0 = time.time()
 
-        # v6.3: XGBoost primary with conservative params
+        # v7.0: XGBoost primary with conservative params
         current_model, current_scaler, importance, mean_r2, mean_ic, icir = \
             train_xgb_primary(
                 X_train, y_neutral, active_features, cuda_api,
@@ -1915,13 +1915,13 @@ def main():
         _log(f"  Time: {time.time()-t0:.1f}s")
 
         # Save model
-        model_path = f"{RESULTS_DIR}/models/model_v6_base.pkl"
-        scaler_path = f"{RESULTS_DIR}/models/scaler_v6_base.pkl"
+        model_path = f"{RESULTS_DIR}/models/model_v7_base.pkl"
+        scaler_path = f"{RESULTS_DIR}/models/scaler_v7_base.pkl"
         with open(model_path, "wb") as f:
             pickle.dump(current_model, f)
         with open(scaler_path, "wb") as f:
             pickle.dump(current_scaler, f)
-        importance.to_csv(f"{RESULTS_DIR}/feature_importance_v6_base.csv")
+        importance.to_csv(f"{RESULTS_DIR}/feature_importance_v7_base.csv")
 
         # ElasticNet fallback — only adopted if it beats XGBoost
         _log(f"\n  Training ElasticNet fallback...")
@@ -1951,7 +1951,7 @@ def main():
         db.insert_model_artifact(run_id, "base_y1", 0, model_path, scaler_path,
                                  mean_r2, mean_ic, icir, len(active_features))
 
-        with open(f"{RESULTS_DIR}/train_summary_v6.json", "w") as f:
+        with open(f"{RESULTS_DIR}/train_summary_v7.json", "w") as f:
             json.dump({
                 "mean_r2": round(mean_r2, 5), "mean_ic": round(mean_ic, 5),
                 "icir": round(icir, 5), "n_rows": int(len(X_train)),
@@ -2040,7 +2040,7 @@ def main():
         # Feature IC computation every 2 weeks
         if week_num > 1 and week_num % 2 == 0:
             # Compute IC for ALL features (active + candidates)
-            all_feats_to_check = list(set(active_features + V6_CANDIDATE_FEATURES))
+            all_feats_to_check = list(set(active_features + v7_CANDIDATE_FEATURES))
             fic = compute_feature_ic_v6(symbols, ws, we, all_feats_to_check)
             # P4: Tag IC with current regime
             feature_tracker.record_ic(fic, regime=regime)
@@ -2060,7 +2060,7 @@ def main():
 
             # P4: Feature stability with regime-conditional IC
             new_features = feature_tracker.propose_update(
-                V6_CANDIDATE_FEATURES, current_regime=regime)
+                v7_CANDIDATE_FEATURES, current_regime=regime)
             jaccard = feature_tracker.jaccard_overlap()
             _log(f"    Features: {len(active_features)} → {len(new_features)} "
                  f"(Jaccard={jaccard:.3f})")
@@ -2075,20 +2075,20 @@ def main():
             if X_rt is not None and len(X_rt) > 200:
                 t0 = time.time()
 
-                # v6.3: XGBoost primary retrain
+                # v7.0: XGBoost primary retrain
                 m_new, s_new, imp_new, r2_n, ic_n, icir_n = train_xgb_primary(
                     X_rt, y_neutral_rt, active_features, cuda_api,
-                    label=f"v6_w{week_num:03d}", cv_gap=cv_gap)
+                    label=f"v7_w{week_num:03d}", cv_gap=cv_gap)
                 is_linear = False
 
                 # IC-gated retraining: only adopt if OOS IC > 0
-                # v6.3.1: Skip ElasticNet fallback — Gram matrix errors with >10
+                # v7.0.1: Skip ElasticNet fallback — Gram matrix errors with >10
                 # features, and XGBoost always wins anyway.
                 if ic_n > 0:
                     current_model, current_scaler = m_new, s_new
 
-                    model_path_new = f"{RESULTS_DIR}/models/model_v6_week{week_num:03d}.pkl"
-                    scaler_path_new = f"{RESULTS_DIR}/models/scaler_v6_week{week_num:03d}.pkl"
+                    model_path_new = f"{RESULTS_DIR}/models/model_v7_week{week_num:03d}.pkl"
+                    scaler_path_new = f"{RESULTS_DIR}/models/scaler_v7_week{week_num:03d}.pkl"
                     with open(model_path_new, "wb") as f:
                         pickle.dump(m_new, f)
                     with open(scaler_path_new, "wb") as f:
@@ -2096,7 +2096,7 @@ def main():
                     current_model_path = model_path_new
                     current_scaler_path = scaler_path_new
                     imp_new.to_csv(
-                        f"{RESULTS_DIR}/feature_importance_v6_week{week_num:03d}.csv")
+                        f"{RESULTS_DIR}/feature_importance_v7_week{week_num:03d}.csv")
                     _log(f"    Adopted new model (IC={ic_n:+.4f} > 0)  "
                          f"({time.time()-t0:.1f}s)")
 
@@ -2225,7 +2225,7 @@ def main():
              f"DD={max_dd*100:.1f}% | {regime}")
 
         # Save checkpoint
-        save_checkpoint_v6(RESULTS_DIR, {
+        save_checkpoint_v7(RESULTS_DIR, {
             "run_id": run_id,
             "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
             "last_week": week_num,
@@ -2266,9 +2266,9 @@ def main():
     summary_df = pd.DataFrame(weekly_summary)
 
     if len(trades_df) > 0:
-        trades_df.to_csv(f"{RESULTS_DIR}/all_trades_v6.csv", index=False)
+        trades_df.to_csv(f"{RESULTS_DIR}/all_trades_v7.csv", index=False)
     if len(summary_df) > 0:
-        summary_df.to_csv(f"{RESULTS_DIR}/weekly_summary_v6.csv", index=False)
+        summary_df.to_csv(f"{RESULTS_DIR}/weekly_summary_v7.csv", index=False)
 
     n_wks = len(weekly_returns)
     cum_ret = float(np.prod([1 + r for r in weekly_returns]) - 1) if n_wks else 0.0
@@ -2349,7 +2349,7 @@ def main():
 
     # Performance report
     perf = {
-        "label": "v6_Consensus_WalkForward",
+        "label": "v7_Consensus_WalkForward",
         "run_id": run_id,
         "total_weeks": n_wks,
         "total_trades": len(trades_df),
@@ -2401,14 +2401,14 @@ def main():
     )
     perf["oos_diagnostics"] = oos_diag
 
-    with open(f"{RESULTS_DIR}/performance_v6.json", "w") as f:
+    with open(f"{RESULTS_DIR}/performance_v7.json", "w") as f:
         json.dump(perf, f, indent=2, default=str)
 
     db.insert_performance_summary(run_id, perf)
     db.finish_run(run_id)
 
     _log(f"\n{'='*72}")
-    _log(f"  AZALYST v6  —  RUN COMPLETE  [{run_id}]")
+    _log(f"  AZALYST V7  —  RUN COMPLETE  [{run_id}]")
     _log(f"{'='*72}")
     _log(f"  total_weeks       : {n_wks}")
     _log(f"  total_trades      : {len(trades_df)}")
@@ -2442,10 +2442,10 @@ def main():
     _log(f"  {'─'*68}")
     _log(f"  KILL CRITERIA     : {'ALL PASS' if gates['ALL_PASS'] else 'FAILED — review strategy'}")
     _log(f"{'='*72}")
-    _log(f"\n  Trades   → {RESULTS_DIR}/all_trades_v6.csv")
-    _log(f"  Summary  → {RESULTS_DIR}/weekly_summary_v6.csv")
-    _log(f"  Perf     → {RESULTS_DIR}/performance_v6.json")
-    _log(f"  Database → {RESULTS_DIR}/azalyst_v6.db")
+    _log(f"\n  Trades   → {RESULTS_DIR}/all_trades_v7.csv")
+    _log(f"  Summary  → {RESULTS_DIR}/weekly_summary_v7.csv")
+    _log(f"  Perf     → {RESULTS_DIR}/performance_v7.json")
+    _log(f"  Database → {RESULTS_DIR}/azalyst_v7.db")
 
     # Clear checkpoint on completion
     db.close()

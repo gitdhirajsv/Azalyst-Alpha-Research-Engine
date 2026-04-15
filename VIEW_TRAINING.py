@@ -1,10 +1,10 @@
-﻿"""
+"""
 Azalyst Alpha Research Engine -- Spyder Monitor (Live)
 
 Auto-launched by RUN_AZALYST.bat when you choose Terminal + Spyder mode.
 Can also be run manually:  python VIEW_TRAINING.py  or F5 in Spyder.
 
-Reads results_v6/checkpoint_v6_latest.json and results_v6/run_log_v6.txt every 5 s
+Reads results_v7/checkpoint_v7_latest.json and results_v7/run_log_v7.txt every 5 s
 and renders a 4-panel live dashboard:
   - Training Quality by Week  (win rate + rolling Sharpe)
   - PnL and Drawdown          (cumulative return + max drawdown curve)
@@ -35,9 +35,9 @@ if matplotlib.get_backend().lower() == "agg":
 
 # -- Paths ------------------------------------------------------------------
 ROOT = Path(__file__).resolve().parent
-RES  = ROOT / "results_v6"
-CKPT = RES  / "checkpoint_v6_latest.json"
-LOG  = RES  / "run_log_v6.txt"
+RES  = ROOT / "results_v7"
+CKPT = RES  / "checkpoint_v7_latest.json"
+LOG  = RES  / "run_log_v7.txt"
 
 REFRESH = 5   # seconds between refreshes
 LOG_TAIL = 18  # log lines to show
@@ -56,9 +56,9 @@ TITLE_FG = "#e7f5ee"  # light text for suptitle on dark bg
 
 
 # -- Data helpers ------------------------------------------------------------
-# Fallback: also look for the completed weekly_summary_v6.csv when no live
+# Fallback: also look for the completed weekly_summary_v7.csv when no live
 # checkpoint exists (i.e. after a completed run).
-SUMMARY_CSV = RES / "weekly_summary_v6.csv"
+SUMMARY_CSV = RES / "weekly_summary_v7.csv"
 
 
 def _load_ckpt() -> dict:
@@ -294,7 +294,7 @@ def _render(fig: plt.Figure, axes: list, ckpt: dict, log_lines: list[str]) -> No
     ax_log.set_title("Recent Log Tail")
 
     fig.suptitle(
-        "Azalyst v6  --  Live Training Monitor",
+        "Azalyst V7  --  Live Training Monitor",
         fontsize=15, fontweight="bold", color=TITLE_FG, y=0.984,
         fontfamily="Segoe UI",
     )
@@ -322,7 +322,7 @@ def run_dashboard(refresh: int = REFRESH) -> None:
     print(f"[Azalyst Monitor] Backend    : {matplotlib.get_backend()}")
     print(f"[Azalyst Monitor] Checkpoint : {CKPT}")
     print(f"[Azalyst Monitor] Log file   : {LOG}")
-    print("[Azalyst Monitor] Watching: checkpoint_v6_latest.json + run_log_v6.txt")
+    print("[Azalyst Monitor] Watching: checkpoint_v7_latest.json + run_log_v7.txt")
     print("[Azalyst Monitor] Close the window or Ctrl+C to exit.\n")
 
     try:

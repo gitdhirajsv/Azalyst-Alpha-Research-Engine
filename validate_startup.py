@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Azalyst v6 startup validation.
+Azalyst V7 startup validation.
 
 Checks the directories, Python dependencies, local modules, and the current
-v6 runtime configuration before launching the engine.
+V7 runtime configuration before launching the engine.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ def _print_header(title: str) -> None:
 
 def check_directories() -> bool:
     _print_header("CHECKING DIRECTORIES")
-    required_dirs = ["data", "feature_cache", "results_v6"]
+    required_dirs = ["data", "feature_cache", "results_v7"]
     all_ok = True
 
     for name in required_dirs:
@@ -74,7 +74,7 @@ def check_imports() -> bool:
 def check_local_modules() -> bool:
     _print_header("CHECKING LOCAL MODULES")
     required_files = [
-        "azalyst_v6_engine.py",
+        "azalyst_v7_engine.py",
         "azalyst_v5_engine.py",
         "azalyst_factors_v2.py",
         "azalyst_train.py",
@@ -115,15 +115,15 @@ def check_local_modules() -> bool:
 
 
 def check_config() -> bool:
-    _print_header("CHECKING V6 CONFIGURATION")
-    engine_path = ROOT / "azalyst_v6_engine.py"
+    _print_header("CHECKING V7 CONFIGURATION")
+    engine_path = ROOT / "azalyst_v7_engine.py"
     if not engine_path.exists():
-        print("  FAIL azalyst_v6_engine.py missing")
+        print("  FAIL azalyst_v7_engine.py missing")
         return False
 
     content = engine_path.read_text(encoding="utf-8", errors="replace")
     checks = {
-        'RESULTS_DIR = "./results_v6"': "results directory is results_v6",
+        'RESULTS_DIR = "./results_v7"': "results directory is results_v7",
         'CACHE_DIR   = "./feature_cache"': "feature cache directory is feature_cache",
         "ROLLING_WINDOW_WEEKS = 13": "rolling window is 13 weeks",
         "RETRAIN_WEEKS = 13": "retrain cadence is 13 weeks",
@@ -144,14 +144,14 @@ def check_config() -> bool:
 
 def main() -> int:
     print("\n" + "=" * 70)
-    print("AZALYST ALPHA RESEARCH ENGINE - V6 STARTUP VALIDATION")
+    print("AZALYST ALPHA RESEARCH ENGINE - V7 STARTUP VALIDATION")
     print("=" * 70)
 
     checks = [
         ("Directories", check_directories),
         ("Python Modules", check_imports),
         ("Local Modules", check_local_modules),
-        ("V6 Configuration", check_config),
+        ("V7 Configuration", check_config),
     ]
 
     results = {}
@@ -170,7 +170,7 @@ def main() -> int:
     all_passed = all(results.values())
     if all_passed:
         print("\nAll checks passed. Suggested launch:")
-        print("  python azalyst_v6_engine.py --no-gpu --top-n 5")
+        print("  python azalyst_v7_engine.py --no-gpu --top-n 5")
         return 0
 
     print("\nSome checks need attention before launch.")

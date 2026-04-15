@@ -1,5 +1,5 @@
 """
-IC-based feature filtering utilities for the current v6 training flow.
+IC-based feature filtering utilities for the current V7 training flow.
 """
 
 from __future__ import annotations

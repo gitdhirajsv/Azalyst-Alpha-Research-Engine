@@ -1,8 +1,8 @@
 """
-Azalyst v6 Results Overview for Spyder.
+Azalyst V7 Results Overview for Spyder.
 
 Run this file with F5 in Spyder to:
-  1. Print a compact summary of the latest files in results_v6/
+  1. Print a compact summary of the latest files in results_v7/
   2. Open a 2x2 matplotlib overview of returns, trades, and features
 """
 
@@ -17,7 +17,7 @@ import pandas as pd
 
 
 ROOT = Path(__file__).resolve().parent
-RESULTS_DIR = ROOT / "results_v6"
+RESULTS_DIR = ROOT / "results_v7"
 
 
 def _read_json(path: Path) -> dict:
@@ -49,7 +49,7 @@ def _to_float(value) -> float | None:
 
 
 def _pick_feature_file(results_dir: Path) -> Path | None:
-    files = sorted(results_dir.glob("feature_importance_v6*.csv"))
+    files = sorted(results_dir.glob("feature_importance_v7*.csv"))
     if not files:
         return None
     week_files = [p for p in files if "week" in p.stem.lower()]
@@ -83,10 +83,10 @@ def load_results(results_dir: Path = RESULTS_DIR) -> dict:
     feature_file = _pick_feature_file(results_dir)
     feature_df = _read_csv(feature_file) if feature_file else pd.DataFrame()
 
-    weekly = _read_csv(results_dir / "weekly_summary_v6.csv")
-    trades = _read_csv(results_dir / "all_trades_v6.csv")
-    performance = _read_json(results_dir / "performance_v6.json")
-    train_summary = _read_json(results_dir / "train_summary_v6.json")
+    weekly = _read_csv(results_dir / "weekly_summary_v7.csv")
+    trades = _read_csv(results_dir / "all_trades_v7.csv")
+    performance = _read_json(results_dir / "performance_v7.json")
+    train_summary = _read_json(results_dir / "train_summary_v7.json")
 
     if not weekly.empty and "week_start" in weekly.columns:
         weekly["week_start"] = pd.to_datetime(weekly["week_start"], errors="coerce")
@@ -141,7 +141,7 @@ def print_overview(data: dict, results_dir: Path = RESULTS_DIR) -> None:
     overall_return_pct = resolve_overall_return_pct(performance, weekly)
 
     print("\n" + "=" * 78)
-    print("AZALYST v6 RESULTS OVERVIEW")
+    print("AZALYST V7 RESULTS OVERVIEW")
     print("=" * 78)
     print(f"Results folder : {results_dir}")
 
@@ -222,7 +222,7 @@ def plot_overview(data: dict) -> None:
     overall_return_pct = resolve_overall_return_pct(performance, weekly)
 
     fig, axes = plt.subplots(2, 2, figsize=(16, 10))
-    fig.canvas.manager.set_window_title("Azalyst v6 Results Overview")
+    fig.canvas.manager.set_window_title("Azalyst V7 Results Overview")
 
     # Panel 1: cumulative return + drawdown
     ax = axes[0, 0]
@@ -249,7 +249,7 @@ def plot_overview(data: dict) -> None:
         ax2.plot(x, weekly["max_drawdown_pct"], color="#d62728", linewidth=1.8, label="Drawdown %")
         ax2.set_ylabel("Drawdown %")
     else:
-        ax.text(0.5, 0.5, "weekly_summary_v6.csv not found", ha="center", va="center")
+        ax.text(0.5, 0.5, "weekly_summary_v7.csv not found", ha="center", va="center")
         ax.set_axis_off()
 
     # Panel 2: weekly returns
@@ -298,7 +298,7 @@ def plot_overview(data: dict) -> None:
         ax.set_title("Flags")
         ax.set_axis_off()
 
-    title_parts = ["Azalyst v6 Results Overview"]
+    title_parts = ["Azalyst V7 Results Overview"]
     if performance:
         title_parts.append(f"run_id={performance.get('run_id', 'N/A')}")
         if overall_return_pct is not None:
