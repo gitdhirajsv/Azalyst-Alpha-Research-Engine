@@ -598,7 +598,7 @@ This is a research and educational project. **Not financial advice.** Past perfo
 
 <div align="center">
 
-**v7.0 — Final Release** | Built by [Azalyst](https://github.com/gitdhirajsv) | Azalyst Quant Research
+**v7.0 — Final Release** | Built by [Azalyst](https://github.com/gitdhirajsv) | Azalyst Alpha Quant Research
 
 *"Evidence over claims. Always."*
 
