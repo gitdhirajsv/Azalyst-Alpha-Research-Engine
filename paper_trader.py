@@ -463,6 +463,32 @@ class PaperTrader:
         balance        = self._get("balance") or self.initial_balance
         cycle_count    = self._get("cycle_count") or 0
         open_positions = self._get("open_positions") or []
+        
+        # --- Fetch live prices for real-time tracking ---
+        live_equity = balance
+        updated_positions = []
+        if open_positions:
+            symbols = [p["symbol"] for p in open_positions]
+            try:
+                current_prices = get_current_prices(symbols)
+                for pos in open_positions:
+                    p = dict(pos)
+                    curr = current_prices.get(p["symbol"])
+                    if curr:
+                        p["current_price"] = curr
+                        entry = p["entry_price"]
+                        ret = (curr - entry) / entry
+                        if p["side"] == "SHORT":
+                            ret = -ret
+                        p["unrealized_pnl_usd"] = p["size_usd"] * ret
+                        p["unrealized_pnl_pct"] = ret * 100
+                        live_equity += p["unrealized_pnl_usd"]
+                    updated_positions.append(p)
+            except Exception as e:
+                print(f"  Live tracking error: {e}")
+                updated_positions = open_positions
+        else:
+            updated_positions = []
 
         with self._conn() as db:
             cycles = [
@@ -482,20 +508,22 @@ class PaperTrader:
                 "SELECT COUNT(*) FROM trades WHERE status='closed' AND pnl_pct>0"
             ).fetchone()[0]
 
-        cum_return    = (balance / self.initial_balance - 1) * 100
+        cum_return    = (live_equity / self.initial_balance - 1) * 100
         max_dd        = self._compute_drawdown()
         win_rate      = (win_trades / total_closed_trades * 100) if total_closed_trades > 0 else 0.0
 
         return {
             "balance":              round(balance, 2),
+            "live_equity":          round(live_equity, 2),
             "initial_balance":      self.initial_balance,
             "cum_return_pct":       round(cum_return, 2),
             "max_drawdown_pct":     round(max_dd * 100, 2),
             "cycle_count":          cycle_count,
             "win_rate_pct":         round(win_rate, 1),
             "total_closed_trades":  total_closed_trades,
-            "open_positions":       open_positions,
+            "open_positions":       updated_positions,
             "recent_cycles":        cycles,
             "recent_trades":        trades,
             "timestamp":            datetime.now(timezone.utc).isoformat(),
         }
+

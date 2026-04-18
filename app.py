@@ -28,16 +28,30 @@ trader = PaperTrader(
 )
 
 # ── Background scheduler ──────────────────────────────────────────────────────
+MODE      = os.environ.get("MODE", "WEEKLY")
 scheduler = BackgroundScheduler(timezone="UTC")
-scheduler.add_job(
-    trader.run_weekly_cycle,
-    trigger    = "cron",
-    day_of_week = "mon",
-    hour        = 0,
-    minute      = 15,
-    id          = "weekly_cycle",
-    misfire_grace_time = 3600,
-)
+
+if MODE == "DAILY":
+    # Daily cycle at 00:15 UTC
+    scheduler.add_job(
+        trader.run_weekly_cycle,
+        trigger    = "cron",
+        hour        = 0,
+        minute      = 15,
+        id          = "daily_cycle",
+        misfire_grace_time = 3600,
+    )
+else:
+    # Weekly cycle on Monday at 00:15 UTC
+    scheduler.add_job(
+        trader.run_weekly_cycle,
+        trigger    = "cron",
+        day_of_week = "mon",
+        hour        = 0,
+        minute      = 15,
+        id          = "weekly_cycle",
+        misfire_grace_time = 3600,
+    )
 scheduler.start()
 
 
@@ -66,6 +80,8 @@ def build_dashboard(stats: dict) -> str:
     recent_c    = stats["recent_cycles"]
     recent_t    = stats["recent_trades"]
     ts          = stats["timestamp"][:16].replace("T", " ") + " UTC"
+    mode        = os.environ.get("MODE", "WEEKLY")
+    cycle_label = "weekly" if mode == "WEEKLY" else "daily"
 
     ret_color  = "#27a060" if cum_ret >= 0 else "#d94040"
     dd_color   = "#d94040" if max_dd < -5 else "#e8a020"
@@ -92,7 +108,7 @@ def build_dashboard(stats: dict) -> str:
         </tr>"""
 
     if not pos_rows:
-        pos_rows = '<tr><td colspan="4" style="color:#6b7a99">No open positions</td></tr>'
+        pos_rows = '<tr><td colspan="5" style="color:#888">No open positions</td></tr>'
 
     # Recent cycles table
     cycle_rows = ""
@@ -114,7 +130,7 @@ def build_dashboard(stats: dict) -> str:
         </tr>"""
 
     if not cycle_rows:
-        cycle_rows = '<tr><td colspan="5" style="color:#6b7a99">No cycles yet — first cycle runs Monday 00:15 UTC</td></tr>'
+        cycle_rows = f'<tr><td colspan="5" style="color:#888">No cycles yet — first cycle runs {mode} 00:15 UTC</td></tr>'
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -140,14 +156,14 @@ canvas{{width:100%;height:80px}}
 <script>setTimeout(()=>location.reload(),60000)</script>
 </head>
 <body>
-<h1>🔬 Azalyst Paper Trader — 30-Day Live Test</h1>
-<div class="sub">Last updated: {ts} &nbsp;·&nbsp; {cycles} weekly cycles completed &nbsp;·&nbsp; {len(open_pos)} open positions</div>
+<h1>🔬 Azalyst Paper Trader — {mode} Cycle</h1>
+<div class="sub">Last updated: {ts} &nbsp;·&nbsp; {cycles} {cycle_label} cycles completed &nbsp;·&nbsp; {len(open_pos)} open positions</div>
 
 <div class="grid">
   <div class="card">
-    <h2>Balance</h2>
-    <div class="val">${bal:.2f}</div>
-    <div style="color:#6b7a99;font-size:11px;margin-top:4px">started ${init_bal:.0f}</div>
+    <h2>Live Equity</h2>
+    <div class="val">${stats.get("live_equity", bal):.2f}</div>
+    <div style="color:#888;font-size:11px;margin-top:4px">balance ${bal:.2f}</div>
   </div>
   <div class="card">
     <h2>Total return</h2>
@@ -172,15 +188,15 @@ canvas{{width:100%;height:80px}}
 <div class="card" style="margin-bottom:16px">
   <h2>Open positions</h2>
   <table>
-    <tr><th>Symbol</th><th>Side</th><th>Entry</th><th>Size USD</th></tr>
+    <tr><th>Symbol</th><th>Side</th><th>Entry</th><th>Current</th><th>PnL (Unrealized)</th></tr>
     {pos_rows}
   </table>
 </div>
 
 <div class="card" style="margin-bottom:16px">
-  <h2>Weekly cycles</h2>
+  <h2>Cycle History ({mode})</h2>
   <table>
-    <tr><th>Week start</th><th>Return</th><th>IC</th><th>Regime</th><th>Balance</th></tr>
+    <tr><th>Start Date</th><th>Return</th><th>IC</th><th>Regime</th><th>Balance</th></tr>
     {cycle_rows}
   </table>
 </div>
