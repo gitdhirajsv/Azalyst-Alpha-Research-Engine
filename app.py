@@ -124,17 +124,17 @@ def build_dashboard(stats: dict) -> str:
 <title>Azalyst Paper Trader</title>
 <style>
 *{{box-sizing:border-box;margin:0;padding:0}}
-body{{font-family:monospace;background:#0d1422;color:#c8d4e8;padding:20px;font-size:13px}}
-h1{{color:#27a060;font-size:18px;margin-bottom:4px}}
-.sub{{color:#6b7a99;font-size:11px;margin-bottom:20px}}
+body{{font-family:monospace;background:#ffffff;color:#2d3f55;padding:20px;font-size:13px}}
+h1{{color:#ff7f0e;font-size:18px;margin-bottom:4px}}
+.sub{{color:#888;font-size:11px;margin-bottom:20px}}
 .grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:20px}}
-.card{{background:#1a2332;border:1px solid #2d3f55;border-radius:8px;padding:14px}}
-.card h2{{color:#6b7a99;font-size:11px;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px}}
+.card{{background:#ffffff;border:1px solid #e0e0e0;border-radius:8px;padding:14px;box-shadow:0 2px 4px rgba(0,0,0,0.05)}}
+.card h2{{color:#ff7f0e;font-size:11px;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px}}
 .card .val{{font-size:22px;font-weight:600}}
 table{{width:100%;border-collapse:collapse;margin-top:8px}}
-th{{color:#6b7a99;text-align:left;padding:6px 8px;border-bottom:1px solid #2d3f55;font-size:11px;text-transform:uppercase;letter-spacing:.5px}}
-td{{padding:5px 8px;border-bottom:1px solid #1e2b3a;font-size:12px}}
-tr:hover td{{background:#1e2b3a}}
+th{{color:#888;text-align:left;padding:6px 8px;border-bottom:1px solid #eee;font-size:11px;text-transform:uppercase;letter-spacing:.5px}}
+td{{padding:5px 8px;border-bottom:1px solid #f5f5f5;font-size:12px}}
+tr:hover td{{background:#fafafa}}
 canvas{{width:100%;height:80px}}
 </style>
 <script>setTimeout(()=>location.reload(),60000)</script>
@@ -199,7 +199,7 @@ if(canvas && vals.length > 1){{
   const range = mx - mn || 1;
   const x = i => (i / (vals.length - 1)) * W;
   const y = v => H - 10 - ((v - mn) / range) * (H - 20);
-  ctx.strokeStyle = vals[vals.length-1] >= 0 ? '#27a060' : '#d94040';
+  ctx.strokeStyle = '#ff7f0e';
   ctx.lineWidth = 1.5;
   ctx.beginPath();
   vals.forEach((v,i) => i===0 ? ctx.moveTo(x(i),y(v)) : ctx.lineTo(x(i),y(v)));
