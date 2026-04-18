@@ -8,8 +8,14 @@ import numpy as np
 import pandas as pd
 from typing import List, Dict, Optional
 
-BINANCE_BASE = "https://api.binance.com"
-REQUEST_SLEEP = 0.25   # seconds between requests (well under rate limit)
+BINANCE_BASES = [
+    "https://api.binance.com",
+    "https://api.binance.us",      # Often works from US-based cloud IPs like Render
+    "https://api1.binance.com",
+    "https://api2.binance.com",
+    "https://api3.binance.com",
+]
+REQUEST_SLEEP = 0.25   # seconds between requests
 MAX_RETRIES   = 3
 
 # Stablecoins and non-crypto to exclude from universe
@@ -19,23 +25,31 @@ STABLE_BASES = {
     "USDE", "RLUSD", "BFUSD", "PYUSD",
 }
 
-
 def _get(endpoint: str, params: dict = None) -> list | dict:
-    url = f"{BINANCE_BASE}{endpoint}"
-    for attempt in range(MAX_RETRIES):
-        try:
-            r = requests.get(url, params=params, timeout=15)
-            if r.status_code == 429:
-                print("  Rate limited — sleeping 60s")
-                time.sleep(60)
-                continue
-            r.raise_for_status()
-            return r.json()
-        except Exception as e:
-            if attempt == MAX_RETRIES - 1:
-                raise
-            time.sleep(2 ** attempt)
-    return []
+    # Try different base URLs if we hit a 451 (IP block)
+    for base in BINANCE_BASES:
+        url = f"{base}{endpoint}"
+        for attempt in range(MAX_RETRIES):
+            try:
+                r = requests.get(url, params=params, timeout=15)
+                if r.status_code == 429:
+                    print(f"  Rate limited on {base} — sleeping 60s")
+                    time.sleep(60)
+                    continue
+                if r.status_code == 451:
+                    print(f"  IP Restricted on {base} — trying next base URL")
+                    break # Try next base URL
+                r.raise_for_status()
+                return r.json()
+            except Exception as e:
+                if attempt == MAX_RETRIES - 1:
+                    print(f"  Failed on {base} after {MAX_RETRIES} attempts: {e}")
+                    break # Try next base URL
+                time.sleep(1.5 ** attempt)
+    
+    # If all bases fail, raise the last error or return empty
+    raise Exception("All Binance API endpoints failed or are restricted from this IP.")
+
 
 
 def get_top_symbols(n: int = 55) -> List[str]:
