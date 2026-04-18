@@ -1,0 +1,7 @@
+flask==3.0.3
+gunicorn==22.0.0
+apscheduler==3.10.4
+numpy==1.26.4
+pandas==2.2.2
+scipy==1.13.0
+requests==2.32.3

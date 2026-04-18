@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: azalyst-paper-trader
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --worker-class gthread --workers 1 --threads 2 --timeout 180 --bind 0.0.0.0:$PORT
+    plan: free
+    envVars:
+      - key: INITIAL_BALANCE
+        value: "1000.0"
+      - key: TOP_N
+        value: "5"
+      - key: N_SYMBOLS
+        value: "50"
+      - key: ADMIN_KEY
+        generateValue: true
+      - key: PYTHONUNBUFFERED
+        value: "1"
