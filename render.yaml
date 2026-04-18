@@ -6,6 +6,8 @@ services:
     startCommand: gunicorn app:app --worker-class gthread --workers 1 --threads 2 --timeout 180 --bind 0.0.0.0:$PORT
     plan: free
     envVars:
+      - key: MODE
+        value: "WEEKLY"
       - key: INITIAL_BALANCE
         value: "1000.0"
       - key: TOP_N
@@ -16,3 +18,4 @@ services:
         generateValue: true
       - key: PYTHONUNBUFFERED
         value: "1"
+
