@@ -4,13 +4,13 @@ This branch contains the live paper-trading version of the Azalyst Alpha Researc
 
 ## Live Dashboard
 Track the performance in real-time here:
-**[https://azalyst-paper-trader.onrender.com](https://azalyst-paper-trader.onrender.com)**
+**[https://azalyst-paper-trader-daily.onrender.com](https://azalyst-paper-trader-daily.onrender.com)**
 
 ## Deployment Overview
-- **Branch**: `render-paper-trader`
+- **Branch**: `render-daily`
 - **Environment**: Render.com (Web Service)
 - **Monitoring**: UptimeRobot (ping every 5 minutes)
-- **Execution**: Automated weekly cycles (Monday 00:15 UTC)
+- **Execution**: Automated daily cycles (Daily 00:15 UTC)
 
 ---
 *Built for the 30-day live alpha validation test.*

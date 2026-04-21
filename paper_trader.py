@@ -20,6 +20,7 @@ Regime rules (same as backtest):
 
 import gc
 import json
+import os
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -278,9 +279,9 @@ class PaperTrader:
 
     # ── Weekly cycle ──────────────────────────────────────────────────────────
 
-    def run_weekly_cycle(self) -> dict:
+    def run_trading_cycle(self) -> dict:
         """
-        Full weekly cycle:
+        Full trading cycle:
           1. Close open positions at current prices
           2. Fetch fresh universe data
           3. Compute signals
@@ -289,7 +290,8 @@ class PaperTrader:
           6. Record everything
         """
         now = datetime.now(timezone.utc)
-        print(f"\n[{now.isoformat()}] === Weekly cycle started ===")
+        mode = os.environ.get("MODE", "WEEKLY")
+        print(f"\n[{now.isoformat()}] === {mode} cycle started ===")
 
         balance     = self._get("balance")
         cycle_count = self._get("cycle_count")
