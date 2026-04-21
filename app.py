@@ -20,6 +20,23 @@ from paper_trader import PaperTrader
 app     = Flask(__name__)
 DB_PATH = os.environ.get("DB_PATH", "/tmp/azalyst_paper.db")
 
+# ── Smart Mode Detection ──────────────────────────────────────────────────────
+def detect_mode():
+    """Detect mode from env var or Render metadata."""
+    mode = os.environ.get("MODE")
+    if mode:
+        return mode.upper()
+    
+    # Fallback: check Render service name or URL
+    svc_name = os.environ.get("RENDER_SERVICE_NAME", "").lower()
+    ext_url  = os.environ.get("RENDER_EXTERNAL_URL", "").lower()
+    if "daily" in svc_name or "daily" in ext_url:
+        return "DAILY"
+    return "WEEKLY"
+
+MODE = detect_mode()
+print(f"[*] Starting Azalyst Paper Trader in {MODE} mode (Service: {os.environ.get('RENDER_SERVICE_NAME', 'local')})")
+
 trader = PaperTrader(
     db_path         = DB_PATH,
     initial_balance = float(os.environ.get("INITIAL_BALANCE", "1000.0")),
@@ -28,13 +45,12 @@ trader = PaperTrader(
 )
 
 # ── Background scheduler ──────────────────────────────────────────────────────
-MODE      = os.environ.get("MODE", "WEEKLY")
 scheduler = BackgroundScheduler(timezone="UTC")
 
 if MODE == "DAILY":
     # Daily cycle at 00:15 UTC
     scheduler.add_job(
-        trader.run_weekly_cycle,
+        trader.run_trading_cycle,
         trigger    = "cron",
         hour        = 0,
         minute      = 15,
@@ -44,7 +60,7 @@ if MODE == "DAILY":
 else:
     # Weekly cycle on Monday at 00:15 UTC
     scheduler.add_job(
-        trader.run_weekly_cycle,
+        trader.run_trading_cycle,
         trigger    = "cron",
         day_of_week = "mon",
         hour        = 0,
@@ -97,14 +113,18 @@ def build_dashboard(stats: dict) -> str:
         sym   = p["symbol"]
         side  = p["side"]
         entry = p.get("entry_price", 0)
+        curr  = p.get("current_price", 0)
+        pnl   = p.get("unrealized_pnl_pct", 0)
         size  = p.get("size_usd", 0)
         sc    = "#27a060" if side == "LONG" else "#d94040"
+        pc    = "#27a060" if pnl >= 0 else "#d94040"
         pos_rows += f"""
         <tr>
           <td><strong>{sym}</strong></td>
           <td style="color:{sc}">{side}</td>
           <td>${entry:.4f}</td>
-          <td>${size:.2f}</td>
+          <td>${curr:.4f}</td>
+          <td style="color:{pc}">{pnl:+.2f}%</td>
         </tr>"""
 
     if not pos_rows:
@@ -158,6 +178,8 @@ canvas{{width:100%;height:80px}}
 <body>
 <h1>🔬 Azalyst Paper Trader — {mode} Cycle</h1>
 <div class="sub">Last updated: {ts} &nbsp;·&nbsp; {cycles} {cycle_label} cycles completed &nbsp;·&nbsp; {len(open_pos)} open positions</div>
+
+{"<div style='background:#fff0f0;border:1px solid #ffcccc;color:#d94040;padding:10px;border-radius:8px;margin-bottom:20px;font-size:12px'><strong>⚠️ Persistence Warning:</strong> Database is in /tmp, which is ephemeral on Render. Data will be lost on restarts. Use a persistent disk or external DB for production.</div>" if "/tmp" in DB_PATH else ""}
 
 <div class="grid">
   <div class="card">
@@ -256,7 +278,7 @@ def run_now():
     key = request.args.get("key", "")
     if key != os.environ.get("ADMIN_KEY", ""):
         return jsonify({"error": "unauthorized"}), 401
-    result = trader.run_weekly_cycle()
+    result = trader.run_trading_cycle()
     return jsonify(result)
 
 
