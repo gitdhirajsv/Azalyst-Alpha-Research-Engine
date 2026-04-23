@@ -1,0 +1,14 @@
+,importance
+vwap_dev,0.36915666
+ret_1d,0.20682326
+rev_1d,0.08201953
+rev_1h,0.061045766
+mean_rev_zscore_1h,0.044893667
+vol_ratio_1h_1d,0.03887179
+vol_regime,0.037741188
+kyle_lambda,0.03572311
+ret_3d,0.03330328
+ret_2d,0.032871634
+vol_ret_1d,0.02552244
+amihud,0.017136998
+frac_diff_close,0.014890695

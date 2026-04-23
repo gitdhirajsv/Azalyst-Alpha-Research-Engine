@@ -112,6 +112,9 @@ learning_log.csv
 paper_trades.csv
 performance_metrics.csv
 team_log.txt
+
+# ── Paper-trade runtime state (positions, equity curve, logs) ──
+paper_trade_state/
 _b64_*.txt
 survivorship_audit.csv
 cache_symbols_list.txt

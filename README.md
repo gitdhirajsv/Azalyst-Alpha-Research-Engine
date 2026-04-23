@@ -352,6 +352,68 @@ python VIEW_TRAINING.py
 # Or select Monitor=1 in RUN_AZALYST.bat
 ```
 
+---
+
+## Paper Trading (Live Binance Data, Simulated Fills)
+
+The `azalyst_paper_trade.py` runner takes the trained v7 model and runs it against **live Binance market data** without placing real orders. Use this to validate that live predictions, regime detection, and portfolio construction match backtest expectations before wiring real execution.
+
+### What it does each cycle
+
+1. Fetches ~7 days of 5-min klines for the training universe via Binance public REST API (no API key required)
+2. Rebuilds the v7 features using the exact same `build_features()` code as the backtest
+3. Loads the **latest weekly-retrained model** (e.g. `model_v7_week072.pkl`) plus its matching scaler and feature list
+4. Detects current regime from BTC/ETH
+5. Produces top-N per side with the same regime-gated rules as the backtest
+6. Simulates fills at last close + 5 bps slippage, tracks positions and PnL
+7. Marks open positions to market; rebalances every 7 days (matches backtest cadence)
+
+### Run it
+
+**Windows one-click:**
+```bash
+RUN_PAPER_TRADE.bat
+```
+Prompts for mode, top-N, and leverage. Mode 1 = single cycle (recommended for first run), mode 4 = force an immediate rebalance.
+
+**CLI:**
+```bash
+# Single cycle, default top-5 per side, 0.5x leverage
+python azalyst_paper_trade.py --once
+
+# Continuous loop, refresh every hour
+python azalyst_paper_trade.py --loop 3600
+
+# Force rebalance now, ignore the 7-day interval
+python azalyst_paper_trade.py --once --force-rebalance
+
+# Custom sizing
+python azalyst_paper_trade.py --once --top-n 5 --leverage 0.5
+```
+
+### View status
+
+```bash
+python VIEW_PAPER_TRADE.py
+```
+Shows equity, open positions, drawdown, recent trades.
+
+### State files (gitignored — runtime only)
+
+| File | Purpose |
+|---|---|
+| `paper_trade_state/positions.json` | Current equity, open positions, regime, pause state |
+| `paper_trade_state/equity_curve.csv` | Equity + drawdown per cycle |
+| `paper_trade_state/trade_log.csv` | Every OPEN / CLOSE event with PnL attribution |
+| `paper_trade_state/run_log.txt` | Full runner log |
+
+### Caveats
+
+- **Paper only.** No API keys, no real orders.
+- **Spot simulation only.** The backtest's 88% short-side PnL contribution requires Binance **Futures** for real execution — funding costs are not modeled in paper mode.
+- **Slippage modeled flat at 5 bps.** Real fills on illiquid `kyle_lambda`/`amihud`-driven picks will likely be worse.
+- **Run ≥2 weeks** before comparing live IC to backtest IC. One cycle proves nothing.
+
 ### View Results
 
 ```bash
@@ -424,7 +486,7 @@ cat results_v7/performance_v7.json
 ```
 Azalyst-Alpha-Research-Engine/
 │
-├── azalyst_v6_engine.py          # Main engine (v7 final)
+├── azalyst_v7_engine.py          # Main engine (v7 final)
 ├── azalyst_v5_engine.py          # Shared infrastructure (helpers)
 ├── azalyst_factors_v2.py         # 72 cross-sectional features
 ├── azalyst_train.py              # Training utilities (CV, IC)
@@ -440,9 +502,13 @@ Azalyst-Alpha-Research-Engine/
 ├── validate_startup.py           # Pre-flight checks
 ├── regime_analysis.py            # Regime analysis utilities
 │
-├── RUN_AZALYST.bat               # Windows one-click launcher
+├── azalyst_paper_trade.py        # Paper-trade runner (live Binance data, simulated fills)
+│
+├── RUN_AZALYST.bat               # Windows one-click launcher — training/backtest
+├── RUN_PAPER_TRADE.bat           # Windows one-click launcher — paper trading
 ├── VIEW_TRAINING.py              # Live 4-panel Spyder monitor
-├── VIEW_RESULTS_V6.py            # Results viewer
+├── VIEW_RESULTS_V7.py            # Results viewer
+├── VIEW_PAPER_TRADE.py           # Paper-trade status viewer
 ├── PUSH_TO_GITHUB.bat            # Git push helper
 │
 ├── requirements.txt              # Python dependencies
@@ -451,12 +517,12 @@ Azalyst-Alpha-Research-Engine/
 │
 ├── data/                         # Raw parquet (443 files, ~4.8 GB) [GITIGNORED]
 ├── feature_cache/                # Precomputed features (443 files, ~33 GB) [GITIGNORED]
-├── results_v6/                   # Run output (trades, models, logs) [GITIGNORED]
-│   ├── performance_v6.json       #   Performance report
-│   ├── weekly_summary_v6.csv     #   Weekly metrics
-│   ├── all_trades_v6.csv         #   All trades
+├── results_v7/                   # Run output (trades, models, logs) [GITIGNORED]
+│   ├── performance_v7.json       #   Performance report
+│   ├── weekly_summary_v7.csv     #   Weekly metrics
+│   ├── all_trades_v7.csv         #   All trades
 │   ├── run_output.txt            #   Console log
-│   ├── azalyst_v6.db             #   SQLite database
+│   ├── azalyst_v7.db             #   SQLite database
 │   └── models/                   #   XGBoost models (20 files)
 │
 └── .qwen/                        # Qwen Code settings
@@ -482,13 +548,13 @@ Training Matrix → XGBoost → Predictions → Portfolio → Trade Signals
 - Engine runs weekly (Monday pre-market)
 - Models retrained monthly with rolling window
 
-### 3. Execution Layer (To Build)
+### 3. Execution Layer (Paper Trading — DONE, Live — To Build)
 ```
 Trade Signals → Order Router → Binance API → Position Tracking → PnL Reporting
 ```
-- Integrate with `python-binance` for live execution
-- Add position management, stop-loss, take-profit
-- Paper trading mode for validation
+- ✅ **Paper trading mode:** `azalyst_paper_trade.py` runs live Binance data through the trained model and simulates fills — see the *Paper Trading* section above
+- To build: swap the simulated fill layer in `azalyst_paper_trade.py` for `python-binance` real order calls (Binance Futures recommended so shorts are tradeable)
+- To build: stop-loss, take-profit, funding-cost accounting for futures
 
 ### 4. Infrastructure (To Build)
 ```
@@ -512,22 +578,22 @@ All artifacts needed to restart from scratch are preserved in this repo:
 
 | Artifact | Location | Purpose |
 |---|---|---|
-| Engine code | `azalyst_v6_engine.py` | Full pipeline logic |
+| Engine code | `azalyst_v7_engine.py` | Full pipeline logic |
 | Feature logic | `azalyst_factors_v2.py` | 72-feature computation |
 | Cache builder | `build_feature_cache.py` | Parquet cache generation |
-| Models | `results_v6/models/` | Trained XGBoost models |
-| Feature importance | `results_v6/feature_importance_*.csv` | Signal attribution |
-| Performance | `results_v6/performance_v6.json` | Historical validation |
-| Trade log | `results_v6/all_trades_v6.csv` | Execution record |
-| Database | `results_v6/azalyst_v6.db` | Full run history |
+| Models | `results_v7/models/` | Trained XGBoost models |
+| Feature importance | `results_v7/feature_importance_*.csv` | Signal attribution |
+| Performance | `results_v7/performance_v7.json` | Historical validation |
+| Trade log | `results_v7/all_trades_v7.csv` | Execution record |
+| Database | `results_v7/azalyst_v7.db` | Full run history |
 | Dependencies | `requirements.txt` | Python environment |
 
 To restart on a new machine:
 1. Clone this repo
 2. Download Binance data to `data/`
 3. Run `build_feature_cache.py`
-4. Run `azalyst_v6_engine.py`
-5. Results appear in `results_v6/`
+4. Run `azalyst_v7_engine.py`
+5. Results appear in `results_v7/`
 
 ---
 
@@ -570,7 +636,7 @@ To restart on a new machine:
 | Feature cache stale | Rebuild only if factors, cache-builder logic, raw `data/`, or timeframe assumptions changed |
 | OOM / freeze | Reduce `MAX_TRAIN_ROWS` in config (2M for RTX 2050, 4M for T4) |
 | Pipeline closes immediately | Confirm Python path has no spaces; use `RUN_AZALYST.bat` |
-| No results after run | Check `results_v6/` for output files. If empty, check data folder has `.parquet` files |
+| No results after run | Check `results_v7/` for output files. If empty, check data folder has `.parquet` files |
 | Dashboard shows "IDLE" | Engine hasn't started yet — launch `VIEW_TRAINING.py` after starting the engine |
 | MemoryError on large datasets | Chunked processing is enabled by default — 20 symbols per chunk |
 | Kill switch triggered | Check regime — may be in drawdown pause. Recovers at -12% threshold |
